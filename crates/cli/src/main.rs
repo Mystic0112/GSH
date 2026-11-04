@@ -1,44 +1,54 @@
-//! Placeholder da CLI `gsh`. A porta real vem no card "[F0] Portar o crate cli/".
-//! Saída em inglês: quem lê é agente e script.
+//! `gsh`: CLI interna do GSH, e o helper de hook dos harnesses.
+//!
+//! Fica visível só dentro dos terminais que o app spawna e fala com ele por um
+//! socket (`GSH_STATUS_SOCK` no POSIX; `GSH_STATUS_PORT` + `GSH_STATUS_TOKEN` no
+//! Windows). A unidade que a CLI endereça é uma **tab** (sessão de
+//! terminal/agente); `GSH_PANE_ID` e `list-panes` ficam como aliases legados.
+//!
+//! Saída em inglês e estável: quem lê é agente e script.
+//!
+//! Divisão: `gsh-core` tem a lógica de protocolo sem I/O (montar requisição,
+//! ler resposta, status do hook, formatar listagem); este crate tem o parse de
+//! argumentos, o socket, o stdin e os arquivos.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )
+)]
+
+mod args;
+mod commands;
+mod env;
+mod error;
+mod hook;
+mod transport;
+
+use std::io::Write;
 use std::process::ExitCode;
 
-fn run(args: &[String]) -> Result<String, String> {
-    match args.first().map(String::as_str) {
-        None => Err("missing verb; usage: gsh <verb> [args] (try `gsh --version`)".to_string()),
-        Some("--version" | "-V" | "version") => Ok(format!("gsh {}", gsh_core::VERSION)),
-        Some(other) => Err(format!("unknown verb: {other}")),
-    }
-}
-
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match run(&args) {
+    // Lossy: um argumento fora de UTF-8 não pode derrubar a CLI com panic.
+    let argv: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+
+    match args::parse(&argv).and_then(commands::run) {
         Ok(out) => {
-            println!("{out}");
+            if let Some(out) = out {
+                // Pipe fechado pelo leitor não é erro nosso.
+                let _ = std::io::stdout().write_all(out.as_bytes());
+            }
             ExitCode::SUCCESS
         }
-        Err(msg) => {
-            eprintln!("gsh: {msg}");
-            ExitCode::from(2)
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(e.exit_code())
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_verb_is_an_error() {
-        assert!(run(&[]).is_err());
-    }
-
-    #[test]
-    fn version_verb_prints_version() {
-        assert_eq!(
-            run(&["--version".to_string()]),
-            Ok(format!("gsh {}", gsh_core::VERSION))
-        );
     }
 }

@@ -1,0 +1,71 @@
+gsh — GSH's internal CLI (visible only inside the app's terminals)
+
+A **tab** is a terminal/agent session (what this CLI addresses). A **pane** is
+the split leaf that groups tabs — not addressed here. `list-panes` is a legacy
+alias of `list-tabs`.
+
+USAGE:
+  gsh msg --to <label|tab-id> <text>       message another agent's tab
+                                               (typed + Enter, signed with your tab)
+  gsh deliver --to <Name/agent> <file> [note]  hand a file to a teammate's
+                                               agent on the office network
+  gsh list-tabs       [--json]             list active tabs (alias: list-panes)
+  gsh new-tab [--cwd <dir>] [--title <name>] [--split h|v]
+                                               open a new terminal tab (prints its id)
+  gsh close-tab [<label|tab-id>]           close a tab (default: the current
+                                               one) — prints the closed tab id
+  gsh hook [--harness <name>]              lifecycle hook helper (reads the
+                                               harness event JSON on stdin)
+  gsh --help | --version
+
+MSG:
+  gsh msg --to Reviewer "diff ready in feat/x, please review"
+  The target receives `[from: <your label or title> · <your harness>] <text>`
+  and Enter. Sender = $GSH_TAB_ID (required). `list-tabs --json` shows each
+  tab's detected `harness` (claudeCode, codex, antigravity, …) or null.
+
+TEAM (office network):
+  gsh msg --to "Bianca/financeiro" "I changed the payments table, check your side"
+  gsh deliver --to "Bianca/financeiro" report.pdf "weekly report"
+  With the team farm on (same team name and password on both GSHs), a
+  teammate's agent is addressed as `Name/agent`. The message knocks on
+  their door: their agent receives it as information from a teammate (not an
+  order from their user) and decides what to do; deliveries land in
+  `.gsh/inbox/<your name>/` in their agent's folder. When a teammate knocks
+  on yours, reply with the `gsh msg --to ...` line shown in the message.
+
+IDS:
+  Workspace ids are opaque UUIDs — use `workspacePath` (list-tabs) when you
+  need the folder on disk.
+
+FLAGS:
+  --focused       target the tab you are LOOKING AT, whatever it is. Resolved by
+                  the app, so no id to copy. Works from outside a GSH
+                  terminal too (dictation tools, scripts): with no env inherited
+                  the CLI finds the app through ~/.gsh/status.sock.
+
+TARGET:
+  --tab-id <id>   target tab (--focused wins over it). Default = $GSH_TAB_ID
+                  (the current tab;
+                  legacy fallback $GSH_PANE_ID). Ids (t0, t1…) reset on every
+                  app boot → find them with `gsh list-tabs` before targeting
+                  another tab (cross-tab).
+
+NEW-TAB:
+  --cwd <dir>     working directory (default: current directory)
+  --title <name>  stable tab label (send/read-tab can target it by name)
+  --split h|v     h (or right) = side by side; v (or down) = stacked.
+                  Omit to open as a new tab in the same pane.
+  Anchored at the emitting tab's pane/workspace. Prints the new tab id.
+
+CLOSE-TAB:
+  gsh close-tab [<label|tab-id>]
+  Without a target it closes the CURRENT tab — the shell you are typing in
+  ends with it. Closing the last tab of a split removes the split; closing the
+  last tab of a workspace leaves an empty tab (same as the tab's "x" in the UI).
+
+EXAMPLES:
+  id=$(gsh new-tab --cwd ~/proj --title Worker --split h)
+  gsh msg --to "$id" "run the tests"
+  gsh close-tab "$id"                      # close it when done (or: Worker)
+  gsh list-tabs --json

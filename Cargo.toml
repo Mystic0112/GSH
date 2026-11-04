@@ -7,3 +7,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/Mystic0112/GSH"
+
+[workspace.dependencies]
+serde_json = "1"
+thiserror = "2"
