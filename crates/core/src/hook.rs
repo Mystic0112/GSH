@@ -275,6 +275,25 @@ fn patch_paths(v: &Value, out: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+
+    /// Caminho absoluto do SO da máquina (`/x` no Unix, `C:\x` no Windows),
+    /// para os testes valerem nos três sistemas.
+    fn abs(p: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{}", p.replace('/', "\\"))
+        } else {
+            p.to_string()
+        }
+    }
+
+    /// Caminho relativo ancorado no `cwd`, do mesmo jeito que o código faz.
+    fn joined(cwd: &str, rel: &str) -> String {
+        std::path::Path::new(&abs(cwd))
+            .join(rel)
+            .to_string_lossy()
+            .into_owned()
+    }
+
     use super::*;
 
     #[test]
@@ -431,49 +450,55 @@ mod tests {
 
     #[test]
     fn payload_leva_turn_id_arquivos_e_token_quando_existem() {
-        let env = json!({"session_id": "s", "turn_id": "u1", "cwd": "/r",
+        let env = json!({"session_id": "s", "turn_id": "u1", "cwd": abs("/r"),
             "tool_name": "Write", "tool_input": {"file_path": "a.rs"}});
         let p = status_payload("t3", "working", "PostToolUse", &env, "codex", Some("tk"));
         assert_eq!(p["tid"], "u1");
-        assert_eq!(p["files"], json!(["/r/a.rs"]));
+        assert_eq!(p["files"], json!([joined("/r", "a.rs")]));
         assert_eq!(p["tok"], "tk");
         assert_eq!(p["hn"], "codex");
     }
 
     #[test]
     fn touched_files_do_claude() {
-        let edit = json!({"tool_name": "Edit", "cwd": "/repo",
-            "tool_input": {"file_path": "/repo/a.rs", "old_string": "x"}});
-        assert_eq!(touched_files("PostToolUse", &edit), vec!["/repo/a.rs"]);
-        let write = json!({"tool_name": "Write", "cwd": "/repo",
+        let edit = json!({"tool_name": "Edit", "cwd": abs("/repo"),
+            "tool_input": {"file_path": abs("/repo/a.rs"), "old_string": "x"}});
+        assert_eq!(touched_files("PostToolUse", &edit), vec![abs("/repo/a.rs")]);
+        let write = json!({"tool_name": "Write", "cwd": abs("/repo"),
             "tool_input": {"file_path": "src/b.rs"}});
-        assert_eq!(touched_files("PostToolUse", &write), vec!["/repo/src/b.rs"]);
-        let multi = json!({"tool_name": "MultiEdit", "tool_input": {"file_path": "/r/c.rs"}});
-        assert_eq!(touched_files("PostToolUse", &multi), vec!["/r/c.rs"]);
-        let nb =
-            json!({"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "/r/n.ipynb"}});
-        assert_eq!(touched_files("PostToolUse", &nb), vec!["/r/n.ipynb"]);
+        assert_eq!(
+            touched_files("PostToolUse", &write),
+            vec![joined("/repo", "src/b.rs")]
+        );
+        let multi = json!({"tool_name": "MultiEdit", "tool_input": {"file_path": abs("/r/c.rs")}});
+        assert_eq!(touched_files("PostToolUse", &multi), vec![abs("/r/c.rs")]);
+        let nb = json!({"tool_name": "NotebookEdit",
+            "tool_input": {"notebook_path": abs("/r/n.ipynb")}});
+        assert_eq!(touched_files("PostToolUse", &nb), vec![abs("/r/n.ipynb")]);
         // PreToolUse não conta: o arquivo ainda não mudou.
         assert!(touched_files("PreToolUse", &edit).is_empty());
     }
 
     #[test]
     fn touched_files_do_patch_do_codex() {
-        let patch = "*** Begin Patch\n*** Add File: new.txt\n+oi\n\
+        let old = abs("/abs/old.rs");
+        let patch = format!(
+            "*** Begin Patch\n*** Add File: new.txt\n+oi\n\
             *** Update File: src/a.rs\n*** Move to: src/b.rs\n@@\n-x\n+y\n\
-            *** Delete File: /abs/old.rs\n*** End Patch\n";
-        let ev = json!({"tool_name": "apply_patch", "cwd": "/repo",
+            *** Delete File: {old}\n*** End Patch\n"
+        );
+        let ev = json!({"tool_name": "apply_patch", "cwd": abs("/repo"),
             "tool_input": {"command": patch}});
         assert_eq!(
             touched_files("PostToolUse", &ev),
             vec![
-                "/repo/new.txt",
-                "/repo/src/a.rs",
-                "/repo/src/b.rs",
-                "/abs/old.rs"
+                joined("/repo", "new.txt"),
+                joined("/repo", "src/a.rs"),
+                joined("/repo", "src/b.rs"),
+                old.clone(),
             ]
         );
-        let shell = json!({"tool_name": "shell", "cwd": "/repo",
+        let shell = json!({"tool_name": "shell", "cwd": abs("/repo"),
             "tool_input": {"command": ["apply_patch", patch]}});
         assert_eq!(touched_files("PostToolUse", &shell).len(), 4);
     }
