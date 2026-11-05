@@ -1,0 +1,19 @@
+[package]
+name = "gsh-config"
+description = "GSH user configuration file: typed TOML schema, load and reload by polling (std only, no UI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Leitura tipada do schema. `derive` gera os impls.
+serde = { version = "1", features = ["derive"] }
+# Parser TOML com posição (span) nos erros, para devolver linha e coluna. Só
+# leitura: sem `display` (o crate não grava o arquivo). Os crates de baixo
+# (`toml_parser`, `toml_datetime`) já estão no Cargo.lock pelo iced.
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
+# Home do usuário multiplataforma (no Windows via Known Folder, não `HOME`).
+dirs = "6"
+# Enum de erro tipado.
+thiserror.workspace = true
