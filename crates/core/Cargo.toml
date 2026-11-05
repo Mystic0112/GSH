@@ -9,4 +9,7 @@ repository.workspace = true
 [dependencies]
 # Valores JSON do protocolo de fio (linhas do socket, payload do hook).
 serde_json.workspace = true
+# Estado serializável (workspaces, panes, abas). `derive` gera os impls.
+serde = { version = "1", features = ["derive"] }
+# Enum de erro tipado das operações do modelo.
 thiserror.workspace = true
