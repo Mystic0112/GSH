@@ -9,3 +9,4 @@ repository.workspace = true
 [dependencies]
 # Valores JSON do protocolo de fio (linhas do socket, payload do hook).
 serde_json.workspace = true
+thiserror.workspace = true

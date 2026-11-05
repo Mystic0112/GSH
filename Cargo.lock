@@ -1091,6 +1091,7 @@ name = "gsh-cli"
 version = "0.1.0"
 dependencies = [
  "gsh-core",
+ "gsh-ipc",
  "serde_json",
  "thiserror 2.0.21",
 ]
@@ -1100,6 +1101,17 @@ name = "gsh-core"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "gsh-ipc"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "gsh-core",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -1,0 +1,15 @@
+[package]
+name = "gsh-ipc"
+description = "GSH app-side sockets: status server for the gsh hook and CLI (std only, no UI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+gsh-core = { path = "../core" }
+serde_json.workspace = true
+thiserror.workspace = true
+# Token do TCP (Windows): bytes do RNG do SO, sem implementar primitiva. É a
+# versão que já está no Cargo.lock (o iced a puxa).
+getrandom = { version = "0.3", features = ["std"] }

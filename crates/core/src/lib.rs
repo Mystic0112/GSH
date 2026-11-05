@@ -4,6 +4,9 @@
 //! - [`wire`]: nomes de env, montagem de requisição e leitura de resposta;
 //! - [`hook`]: eventos de hook dos harnesses -> status de turno, payload do socket;
 //! - [`tabs`]: formatação da listagem de abas.
+//!
+//! Lado do app do status de turno (sem socket, sem relógio):
+//! - [`status`]: linha do socket -> `StatusUpdate` tipado e máquina de turno.
 
 #![cfg_attr(
     not(test),
@@ -16,6 +19,7 @@
 )]
 
 pub mod hook;
+pub mod status;
 pub mod tabs;
 pub mod wire;
 

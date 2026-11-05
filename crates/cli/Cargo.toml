@@ -14,3 +14,7 @@ path = "src/main.rs"
 gsh-core = { path = "../core" }
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# Servidor do app: os testes de integração sobem um e falam com ele pelo `gsh hook` real.
+gsh-ipc = { path = "../ipc" }
