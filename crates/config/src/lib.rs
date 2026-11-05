@@ -9,6 +9,8 @@
 //! - [`schema`]: [`Config`] tipado, com os padrões do `AppSettings` do Flutter;
 //! - [`load`]: caminho padrão, leitura e [`ConfigStore`] (guarda a última
 //!   configuração válida);
+//! - [`migrate`]: importação única do `settings.json` do Flutter para o
+//!   `config.toml`;
 //! - [`watch`]: [`ConfigWatcher`], polling de mtime numa thread, entregando
 //!   [`ConfigEvent`] num `std::sync::mpsc`. Sem async, sem crate de watch.
 //!
@@ -27,11 +29,16 @@
 
 mod error;
 pub mod load;
+pub mod migrate;
 mod named;
 pub mod schema;
 pub mod watch;
 
-pub use error::ConfigError;
-pub use load::{default_path, load, ConfigStore};
+pub use error::{ConfigError, JsonParseCause};
+pub use load::{default_path, load, load_with_migration, ConfigStore};
+pub use migrate::{
+    default_flutter_candidates, load_flutter_json, migrate_if_needed, parse_flutter_json,
+    read_storage_root, to_toml, MigrationOutcome, MAX_KEY_DEPTH, MAX_MIGRATION_FILE_BYTES,
+};
 pub use schema::Config;
 pub use watch::{ConfigEvent, ConfigWatcher, POLL_INTERVAL};

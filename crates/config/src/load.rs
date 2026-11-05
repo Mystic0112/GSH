@@ -1,11 +1,13 @@
 //! Caminho, leitura e a última configuração válida.
 
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::error::ConfigError;
+use crate::migrate::{migrate_if_needed, MigrationOutcome};
 use crate::schema::Config;
 
 /// Pasta do GSH na home (a mesma do `status.sock` e do `storage_root`).
@@ -21,6 +23,18 @@ pub fn default_path() -> Result<PathBuf, ConfigError> {
 
 /// Lê o arquivo. Ausente = padrões (o arquivo não é criado).
 pub fn load(path: &Path) -> Result<Config, ConfigError> {
+    load_with_migration(path, None)
+}
+
+/// Lê o arquivo em `path`, rodando antes [`migrate_if_needed`] quando
+/// `flutter_candidates` é `Some`. Com `None`, não tenta migrar.
+pub fn load_with_migration(
+    path: &Path,
+    flutter_candidates: Option<&[PathBuf]>,
+) -> Result<Config, ConfigError> {
+    if let Some(candidates) = flutter_candidates {
+        migrate_if_needed(path, candidates)?;
+    }
     match fs::read_to_string(path) {
         Ok(text) => parse(path, &text),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Config::default()),
@@ -75,23 +89,53 @@ pub(crate) fn fingerprint(path: &Path) -> Fingerprint {
 
 /// Configuração corrente de um arquivo. Recarga com erro mantém a última
 /// válida.
-#[derive(Debug)]
 pub struct ConfigStore {
     path: PathBuf,
     current: Config,
     seen: Fingerprint,
 }
 
+impl fmt::Debug for ConfigStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConfigStore")
+            .field("path", &self.path)
+            .field("current", &self.current)
+            .field("seen", &self.seen)
+            .finish()
+    }
+}
+
 impl ConfigStore {
-    /// Abre o arquivo em `path`. Com arquivo inválido, o store fica com os
-    /// padrões e o erro volta junto, para a UI avisar.
+    /// Abre o arquivo em `path` sem migrar. Com arquivo inválido, o store fica
+    /// com os padrões e o erro volta junto, para a UI avisar.
     pub fn open(path: impl Into<PathBuf>) -> (Self, Result<(), ConfigError>) {
+        let (store, result) = Self::open_with_migration(path, None);
+        (store, result.map(|_| ()))
+    }
+
+    /// Abre o arquivo em `path`, rodando antes [`migrate_if_needed`] quando
+    /// `flutter_candidates` é `Some` (ou pulando a migração com `None`).
+    /// Se a migração ou a leitura falhar, o store começa nos padrões e devolve
+    /// o erro junto.
+    pub fn open_with_migration(
+        path: impl Into<PathBuf>,
+        flutter_candidates: Option<&[PathBuf]>,
+    ) -> (Self, Result<Option<MigrationOutcome>, ConfigError>) {
         let mut store = Self {
             path: path.into(),
             current: Config::default(),
             seen: None,
         };
-        let result = store.reload().map(|_| ());
+        if let Some(candidates) = flutter_candidates {
+            match migrate_if_needed(&store.path, candidates) {
+                Ok(outcome) => {
+                    let result = store.reload().map(|_| Some(outcome));
+                    return (store, result);
+                }
+                Err(err) => return (store, Err(err)),
+            }
+        }
+        let result = store.reload().map(|_| None);
         (store, result)
     }
 

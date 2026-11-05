@@ -7,13 +7,16 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-# Leitura tipada do schema. `derive` gera os impls.
+# Leitura e gravação (migração) tipada do schema. `derive` gera os impls.
 serde = { version = "1", features = ["derive"] }
-# Parser TOML com posição (span) nos erros, para devolver linha e coluna. Só
-# leitura: sem `display` (o crate não grava o arquivo). Os crates de baixo
-# (`toml_parser`, `toml_datetime`) já estão no Cargo.lock pelo iced.
-toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
-# Home do usuário multiplataforma (no Windows via Known Folder, não `HOME`).
+# Leitura do `settings.json` do Flutter na migração inicial.
+serde_json.workspace = true
+# Parser e serializer TOML com posição (span) nos erros, para devolver linha e
+# coluna. Os crates de baixo (`toml_parser`, `toml_datetime`, `toml_writer`) já
+# estão no Cargo.lock.
+toml = { version = "1", default-features = false, features = ["std", "parse", "display", "serde"] }
+# Home e pastas padrão do usuário multiplataforma (no Windows via Known Folder,
+# não `HOME`).
 dirs = "6"
 # Enum de erro tipado.
 thiserror.workspace = true

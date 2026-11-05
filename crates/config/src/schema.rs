@@ -19,8 +19,9 @@
 //! preenche o resto com o padrão. Chave desconhecida é ignorada.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::named::{self, named_enum, Named};
 
@@ -176,7 +177,7 @@ pub const DEFAULT_THEME_ID: &str = "gsh";
 
 /// Configuração do GSH. Campos `Option` = "usar o padrão do design" (fonte),
 /// "herdar" (tamanho do terminal) ou "seguir o SO" (locale), como no Flutter.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
     #[serde(deserialize_with = "named::or_default")]
@@ -184,22 +185,22 @@ pub struct Config {
     /// Id do tema ativo (built-in ou importado). Vazio = [`DEFAULT_THEME_ID`].
     pub theme_id: String,
     /// `None` = Montserrat/Hanken.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub interface_font: Option<String>,
     pub interface_size: f64,
     /// `None` = JetBrains Mono.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub code_font: Option<String>,
     pub code_size: f64,
     /// `None` = mono padrão do terminal.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_font: Option<String>,
     /// `None` = herda [`Config::code_size`]. Ver [`Config::effective_terminal_size`].
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_size: Option<f64>,
     #[serde(deserialize_with = "named::or_default")]
     pub terminal_font_weight: TerminalFontWeight,
     pub pin_user_message: bool,
-    /// Comando do language server por `languageId`. Valor em branco é descartado.
-    pub lsp_commands: BTreeMap<String, String>,
-    /// Formatador externo por `languageId` (placeholder `%FILE%`).
-    pub lsp_formatters: BTreeMap<String, String>,
     pub format_on_save: bool,
     pub close_tab_on_shell_exit: bool,
     pub notifications_enabled: bool,
@@ -208,9 +209,16 @@ pub struct Config {
     pub developer_mode: bool,
     pub launch_at_startup: bool,
     /// Código do idioma (`en`, `pt-BR`). `None` = locale do SO.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
     #[serde(deserialize_with = "named::or_default")]
     pub update_check_frequency: UpdateCheckFrequency,
+    /// Comando do language server por `languageId`. Valor em branco é descartado.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub lsp_commands: BTreeMap<String, String>,
+    /// Formatador externo por `languageId` (placeholder `%FILE%`).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub lsp_formatters: BTreeMap<String, String>,
     pub editor: Editor,
     pub terminal: Terminal,
     pub sound: Sound,
@@ -236,8 +244,6 @@ impl Default for Config {
             terminal_size: None,
             terminal_font_weight: TerminalFontWeight::default(),
             pin_user_message: true,
-            lsp_commands: BTreeMap::new(),
-            lsp_formatters: BTreeMap::new(),
             format_on_save: false,
             close_tab_on_shell_exit: false,
             notifications_enabled: true,
@@ -247,6 +253,8 @@ impl Default for Config {
             launch_at_startup: false,
             locale: None,
             update_check_frequency: UpdateCheckFrequency::default(),
+            lsp_commands: BTreeMap::new(),
+            lsp_formatters: BTreeMap::new(),
             editor: Editor::default(),
             terminal: Terminal::default(),
             sound: Sound::default(),
@@ -262,7 +270,7 @@ impl Default for Config {
 }
 
 /// `[editor]`.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Editor {
     #[serde(deserialize_with = "named::or_default")]
@@ -270,43 +278,49 @@ pub struct Editor {
 }
 
 /// `[terminal]`.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Terminal {
     /// Perfil padrão do `+`. `None` = fallback de plataforma. A chave é
     /// snake_case no Flutter (`terminal.default_profile_id`).
-    #[serde(rename = "default_profile_id")]
+    #[serde(rename = "default_profile_id", skip_serializing_if = "Option::is_none")]
     pub default_profile_id: Option<String>,
     #[serde(deserialize_with = "named::or_default")]
     pub engine: TerminalEngine,
 }
 
 /// `[sound]`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Sound {
-    /// Som por evento. Ausente = ligado.
-    #[serde(deserialize_with = "named::known_map")]
-    pub events: BTreeMap<SoundEvent, bool>,
-    /// Tocar mesmo com a aba do evento ativa. Ausente = não.
-    #[serde(deserialize_with = "named::known_map")]
-    pub on_active_tab: BTreeMap<SoundEvent, bool>,
     /// Volume em % (0–100, fora disso é limitado).
     pub volume: f64,
+    /// Som por evento. Ausente = ligado.
+    #[serde(
+        deserialize_with = "named::known_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub events: BTreeMap<SoundEvent, bool>,
+    /// Tocar mesmo com a aba do evento ativa. Ausente = não.
+    #[serde(
+        deserialize_with = "named::known_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub on_active_tab: BTreeMap<SoundEvent, bool>,
 }
 
 impl Default for Sound {
     fn default() -> Self {
         Self {
+            volume: 50.0,
             events: BTreeMap::new(),
             on_active_tab: BTreeMap::new(),
-            volume: 50.0,
         }
     }
 }
 
 /// `[sourceControl]`.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SourceControl {
     #[serde(deserialize_with = "named::or_default")]
@@ -314,13 +328,14 @@ pub struct SourceControl {
 }
 
 /// `[automation]`.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Automation {
     /// `None` = automações desligadas. Aceita os nomes antigos do Flutter.
-    #[serde(deserialize_with = "harness")]
+    #[serde(deserialize_with = "harness", skip_serializing_if = "Option::is_none")]
     pub harness_id: Option<HarnessKind>,
     /// Vazio = o harness decide. Ver [`Automation::model`].
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
 }
 
@@ -332,7 +347,7 @@ impl Automation {
 }
 
 /// `[chat]`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Chat {
     pub classify_session_states: bool,
@@ -340,6 +355,7 @@ pub struct Chat {
     #[serde(deserialize_with = "named::or_default")]
     pub transcript_view: TranscriptView,
     /// `None` = a fonte da interface.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
     #[serde(deserialize_with = "named::or_default")]
     pub transcript_width: TranscriptWidth,
@@ -358,15 +374,17 @@ impl Default for Chat {
 }
 
 /// `[code]`: paleta de syntax por modo. `None` = a do tema ativo.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Code {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub theme_light: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub theme_dark: Option<String>,
 }
 
 /// `[features]`.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Features {
     /// Recursos tirados da barra. Vazio = todos visíveis.
@@ -375,14 +393,14 @@ pub struct Features {
 }
 
 /// `[links]`.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Links {
     pub open_in_app: bool,
 }
 
 /// `[farm]`.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Farm {
     #[serde(deserialize_with = "named::or_default")]
@@ -390,8 +408,17 @@ pub struct Farm {
     pub team: FarmTeam,
 }
 
+impl fmt::Debug for Farm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Farm")
+            .field("scenery", &self.scenery)
+            .field("team", &self.team)
+            .finish()
+    }
+}
+
 /// `[farm.team]`: fazenda do time na LAN. Strings vazias = não configurado.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct FarmTeam {
     pub enabled: bool,
@@ -402,10 +429,64 @@ pub struct FarmTeam {
     pub show_titles: bool,
     /// Faixa da rede (`192.168.10.0/24`).
     pub network: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub secret: String,
     pub door_ask: bool,
     /// Quem pode bater na porta (nomes, vírgula). Vazio = todo o time.
     pub door_allow: String,
+}
+
+impl fmt::Debug for FarmTeam {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FarmTeam")
+            .field("enabled", &self.enabled)
+            .field("name", &self.name)
+            .field("me", &self.me)
+            .field("show_titles", &self.show_titles)
+            .field("network", &self.network)
+            .field("secret", &"<redacted>")
+            .field("door_ask", &self.door_ask)
+            .field("door_allow", &self.door_allow)
+            .finish()
+    }
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("theme_mode", &self.theme_mode)
+            .field("theme_id", &self.theme_id)
+            .field("interface_font", &self.interface_font)
+            .field("interface_size", &self.interface_size)
+            .field("code_font", &self.code_font)
+            .field("code_size", &self.code_size)
+            .field("terminal_font", &self.terminal_font)
+            .field("terminal_size", &self.terminal_size)
+            .field("terminal_font_weight", &self.terminal_font_weight)
+            .field("pin_user_message", &self.pin_user_message)
+            .field("format_on_save", &self.format_on_save)
+            .field("close_tab_on_shell_exit", &self.close_tab_on_shell_exit)
+            .field("notifications_enabled", &self.notifications_enabled)
+            .field("swap_side_panels", &self.swap_side_panels)
+            .field("show_gsh", &self.show_gsh)
+            .field("developer_mode", &self.developer_mode)
+            .field("launch_at_startup", &self.launch_at_startup)
+            .field("locale", &self.locale)
+            .field("update_check_frequency", &self.update_check_frequency)
+            .field("lsp_commands", &self.lsp_commands)
+            .field("lsp_formatters", &self.lsp_formatters)
+            .field("editor", &self.editor)
+            .field("terminal", &self.terminal)
+            .field("sound", &self.sound)
+            .field("source_control", &self.source_control)
+            .field("automation", &self.automation)
+            .field("chat", &self.chat)
+            .field("code", &self.code)
+            .field("features", &self.features)
+            .field("links", &self.links)
+            .field("farm", &self.farm)
+            .finish()
+    }
 }
 
 impl Config {

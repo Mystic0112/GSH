@@ -5,6 +5,7 @@
 //! dependência, e funciona igual em editor que grava por rename (vim, Zed)
 //! ou por truncate.
 
+use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -19,13 +20,21 @@ use crate::schema::Config;
 pub const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// O que a thread entrega quando o arquivo muda no disco.
-#[derive(Debug)]
 pub enum ConfigEvent {
     /// Arquivo válido com conteúdo efetivo diferente do anterior (inclui o
     /// arquivo apagado, que volta aos padrões).
     Changed(Box<Config>),
     /// Arquivo inválido: a última configuração válida continua valendo.
     Invalid(ConfigError),
+}
+
+impl fmt::Debug for ConfigEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Changed(config) => f.debug_tuple("Changed").field(config).finish(),
+            Self::Invalid(err) => f.debug_tuple("Invalid").field(err).finish(),
+        }
+    }
 }
 
 /// Dono da thread de polling. Soltar o watcher (ou o `Receiver`) encerra a
