@@ -476,8 +476,14 @@ fn accept_loop(listener: &Listener, stop: &AtomicBool, shared: &Arc<Shared>) {
 }
 
 fn handle(mut stream: Stream, shared: &Shared) {
-    if stream.set_read_timeout(READ_TIMEOUT).is_err() {
-        return;
+    // O cliente do hook escreve e fecha na hora. No macOS o setsockopt do
+    // timeout devolve EINVAL num socket Unix cujo par já fechou, mas a leitura
+    // abaixo ainda devolve os dados e o EOF, sem precisar do timeout. Só
+    // desistimos de outro erro.
+    match stream.set_read_timeout(READ_TIMEOUT) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::InvalidInput => {}
+        Err(_) => return,
     }
     let Ok(line) = read_line_capped(&mut stream, MAX_LINE_BYTES) else {
         return;
