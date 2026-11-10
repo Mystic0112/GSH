@@ -180,6 +180,7 @@ impl PaneDescriptor {
 #[derive(Clone, Debug, Default)]
 pub struct PaneAgentRecord {
     tracker: TurnTracker,
+    observed: bool,
     last_event: Option<HookEvent>,
     harness: Option<AgentHarness>,
     session_id: Option<String>,
@@ -190,6 +191,10 @@ pub struct PaneAgentRecord {
 }
 
 impl PaneAgentRecord {
+    pub fn observed(&self) -> bool {
+        self.observed
+    }
+
     pub fn status(&self) -> TurnStatus {
         self.tracker.status()
     }
@@ -234,6 +239,7 @@ impl PaneAgentRecord {
     /// Aplica um [`StatusUpdate`] ao [`TurnTracker`] deste terminal.
     /// Retorna `true` se o estado observável pela ilha mudou.
     pub fn apply_update(&mut self, update: &StatusUpdate, now_ms: u64) -> bool {
+        let first_observation = !self.observed;
         let prev_state = self.island_state();
         let prev_harness = self.harness;
 
@@ -242,6 +248,7 @@ impl PaneAgentRecord {
             return false;
         }
 
+        self.observed = true;
         if let Some(h) = update.harness {
             self.harness = Some(h);
         }
@@ -288,7 +295,7 @@ impl PaneAgentRecord {
             }
         }
 
-        self.island_state() != prev_state || self.harness != prev_harness
+        first_observation || self.island_state() != prev_state || self.harness != prev_harness
     }
 }
 

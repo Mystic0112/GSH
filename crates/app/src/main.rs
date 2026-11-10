@@ -231,6 +231,25 @@ impl Shell {
         let descriptors = self.pane_descriptors();
         let agents = self.status_runtime.island_agents(&descriptors);
         self.island.set_agents(agents);
+        let agents = descriptors
+            .iter()
+            .filter_map(|pane| {
+                let record = self.status_runtime.pane_record(&pane.pane_id)?;
+                if !record.observed() {
+                    return None;
+                }
+                let name = record
+                    .harness()
+                    .map(agent_status::harness_label)
+                    .unwrap_or(labels::DEFAULT_TAB_TITLE);
+                Some(farm::AgentInput {
+                    pane_id: pane.pane_id.clone(),
+                    name: format!("{name} · {}", pane.pane_id),
+                    state: farm::AgentState::from_status(record.status(), record.unseen_finish()),
+                })
+            })
+            .collect();
+        self.farm.sync_agents(agents);
     }
 
     fn reveal_terminal_by_pane_id(&mut self, pane_id: &str) {
@@ -562,6 +581,10 @@ impl Shell {
             }
             Msg::OpenFarm => {
                 self.pane_model.open_farm();
+                Task::none()
+            }
+            Msg::Farm(farm::Message::Focus(pane_id)) => {
+                self.reveal_terminal_by_pane_id(&pane_id);
                 Task::none()
             }
             Msg::Farm(message) => {
@@ -975,6 +998,30 @@ mod tests {
         assert!(!shell.files_open);
 
         let _ = std::fs::remove_dir_all(&picked);
+    }
+
+    #[test]
+    fn farm_recebe_status_real_e_clique_foca_terminal() {
+        let mut shell = test_shell();
+        shell.sync_island_from_status();
+        assert_eq!(shell.farm.agent_states(), Vec::new());
+        let update = StatusUpdate {
+            pane_id: "t1".into(),
+            status: TurnStatus::Idle,
+            event: None,
+            session_id: None,
+            transcript_path: None,
+            harness: Some(AgentHarness::Codex),
+            files: Vec::new(),
+        };
+        assert!(shell.status_runtime.apply_update(update, 1_000));
+        shell.sync_island_from_status();
+        assert_eq!(shell.farm.agent_states(), vec![farm::AgentState::Idle]);
+        let _ = shell.update(Msg::OpenFarm);
+        let _ = shell.update(Msg::Farm(farm::Message::Focus("t1".into())));
+        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(1)));
+        let _ = shell.update(Msg::CloseTab(0));
+        assert!(shell.farm.agent_states().is_empty());
     }
 
     #[test]

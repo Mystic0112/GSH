@@ -365,3 +365,9 @@ pub const FARM_TAB_TITLE: &str = "Cenário";
 pub const FARM_OFFICE: &str = "Escritório";
 pub const FARM_FARM: &str = "Fazenda";
 pub const FARM_CENTER: &str = "Centralizar";
+
+pub const FARM_WORKING: &str = "Trabalhando";
+pub const FARM_WAITING: &str = "Esperando";
+pub const FARM_IDLE: &str = "Ocioso";
+pub const FARM_DONE: &str = "Terminou";
+pub const FARM_ALERT: &str = "!";
