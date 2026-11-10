@@ -12,6 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 gsh-core = { path = "../core" }
+gsh-ipc = { path = "../ipc" }
 gsh-term = { path = "../term" }
 iced = { version = "0.14", features = ["canvas", "tokio"] }
 rfd.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

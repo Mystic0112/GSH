@@ -49,6 +49,8 @@ pub enum TerminalMsg {
 
 /// Estado e controlador de um pane de terminal.
 pub struct TerminalPane {
+    pane_id: String,
+    spawn_env: Vec<(String, String)>,
     session: Option<TermSession>,
     snapshot: TermSnapshot,
     selection: Option<SelectionRange>,
@@ -73,10 +75,21 @@ impl TerminalPane {
     /// Inicia um novo pane de terminal no diretório `cwd` informado (ou no
     /// diretório atual do processo quando `None`).
     pub fn new_in_dir(cwd: Option<&Path>) -> Self {
-        Self::spawn_with_dims(cwd, DEFAULT_COLS, DEFAULT_ROWS)
+        Self::spawn_with_dims(String::new(), cwd, Vec::new(), DEFAULT_COLS, DEFAULT_ROWS)
     }
 
-    /// Reinicia a sessão de terminal no diretório `cwd` preservando `(cols, rows)` atuais.
+    /// Inicia um novo pane de terminal com `pane_id` estável e variáveis de ambiente
+    /// do hook (`GSH_PANE_ID`, `GSH_TAB_ID`, `GSH_STATUS_SOCK`) injetadas no processo filho.
+    pub fn new_with_env(
+        pane_id: impl Into<String>,
+        cwd: Option<&Path>,
+        spawn_env: Vec<(String, String)>,
+    ) -> Self {
+        Self::spawn_with_dims(pane_id.into(), cwd, spawn_env, DEFAULT_COLS, DEFAULT_ROWS)
+    }
+
+    /// Reinicia a sessão de terminal no diretório `cwd` preservando `(cols, rows)`,
+    /// `pane_id` e `spawn_env` atuais.
     /// Em modo estático de teste (`session.is_none()` e `!has_spawn_error`), mantém o snapshot
     /// e apenas atualiza `cwd`.
     pub fn respawn_in_dir(&mut self, cwd: Option<&Path>) {
@@ -85,22 +98,37 @@ impl TerminalPane {
             return;
         }
         let (cols, rows) = self.size();
-        *self = Self::spawn_with_dims(cwd, cols, rows);
+        let pane_id = self.pane_id.clone();
+        let spawn_env = self.spawn_env.clone();
+        *self = Self::spawn_with_dims(pane_id, cwd, spawn_env, cols, rows);
     }
 
-    fn spawn_with_dims(cwd: Option<&Path>, cols: u16, rows: u16) -> Self {
+    fn spawn_with_dims(
+        pane_id: String,
+        cwd: Option<&Path>,
+        spawn_env: Vec<(String, String)>,
+        cols: u16,
+        rows: u16,
+    ) -> Self {
         let mut cmd = ShellCommand::default();
         if let Some(dir) = cwd {
             cmd = cmd.cwd(dir);
+        }
+        for (k, v) in &spawn_env {
+            cmd = cmd.env(k, v);
         }
         let cwd_owned = cwd.map(Path::to_path_buf);
         match TermSession::spawn(cmd, cols, rows) {
             Ok(session) => {
                 let mut pane = Self::with_session(session);
+                pane.pane_id = pane_id;
+                pane.spawn_env = spawn_env;
                 pane.cwd = cwd_owned;
                 pane
             }
             Err(_) => Self {
+                pane_id,
+                spawn_env,
                 session: None,
                 snapshot: empty_snapshot(cols, rows),
                 selection: None,
@@ -116,6 +144,8 @@ impl TerminalPane {
     pub fn with_session(session: TermSession) -> Self {
         let snapshot = session.snapshot();
         Self {
+            pane_id: String::new(),
+            spawn_env: Vec::new(),
             session: Some(session),
             snapshot,
             selection: None,
@@ -134,6 +164,8 @@ impl TerminalPane {
     /// Constrói um [`TerminalPane`] estático associado a `cwd` (útil para testes).
     pub fn from_snapshot_in_dir(snapshot: TermSnapshot, cwd: Option<PathBuf>) -> Self {
         Self {
+            pane_id: String::new(),
+            spawn_env: Vec::new(),
             session: None,
             snapshot,
             selection: None,
@@ -142,6 +174,28 @@ impl TerminalPane {
             cwd,
             has_spawn_error: false,
         }
+    }
+
+    /// Define o `pane_id` estável desta aba de terminal.
+    pub fn with_pane_id(mut self, pane_id: impl Into<String>) -> Self {
+        self.pane_id = pane_id.into();
+        self
+    }
+
+    /// Define as variáveis de ambiente de hook a injetar em respawns futuros.
+    pub fn with_spawn_env(mut self, spawn_env: Vec<(String, String)>) -> Self {
+        self.spawn_env = spawn_env;
+        self
+    }
+
+    /// Identificador estável desta aba de terminal (ex.: `"t1"`).
+    pub fn pane_id(&self) -> &str {
+        &self.pane_id
+    }
+
+    /// Variáveis de ambiente injetadas no processo filho desta sessão.
+    pub fn spawn_env(&self) -> &[(String, String)] {
+        &self.spawn_env
     }
 
     /// Diretório de trabalho configurado para esta aba de terminal.
@@ -471,5 +525,44 @@ mod tests {
 
         let _ = pane.update(TerminalMsg::ClearSelection);
         assert_eq!(pane.selected_text(), None);
+    }
+
+    #[test]
+    fn spawned_shell_inherits_hook_env_variables() {
+        let env_vars = vec![
+            ("GSH_PANE_ID".to_owned(), "t42".to_owned()),
+            ("GSH_TAB_ID".to_owned(), "t42".to_owned()),
+            (
+                "GSH_STATUS_SOCK".to_owned(),
+                "/tmp/gsh-test.sock".to_owned(),
+            ),
+        ];
+        let mut pane = TerminalPane::new_with_env("t42", None, env_vars.clone());
+        assert_eq!(pane.pane_id(), "t42");
+        assert_eq!(pane.spawn_env(), env_vars.as_slice());
+
+        let _ = pane.update(TerminalMsg::ClipboardLoaded(Some(
+            "printf 'HOOK_ENV=%s|%s|%s\\n' \"$GSH_PANE_ID\" \"$GSH_TAB_ID\" \"$GSH_STATUS_SOCK\""
+                .to_owned(),
+        )));
+        let _ = pane.update(key_press_msg(
+            keyboard::Key::Named(Named::Enter),
+            keyboard::Modifiers::NONE,
+        ));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !pane
+            .snapshot()
+            .text()
+            .contains("HOOK_ENV=t42|t42|/tmp/gsh-test.sock")
+        {
+            assert!(
+                Instant::now() < deadline,
+                "timeout waiting for HOOK_ENV output; snapshot:\n{}",
+                pane.snapshot().text()
+            );
+            std::thread::sleep(Duration::from_millis(16));
+            let _ = pane.update(TerminalMsg::Tick);
+        }
     }
 }

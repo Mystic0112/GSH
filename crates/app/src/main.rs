@@ -12,6 +12,9 @@
     )
 )]
 
+pub mod agent_island_panel;
+pub mod agent_status;
+pub mod claude_hook_installer;
 pub mod file_tree;
 pub mod file_viewer;
 pub mod files_panel;
@@ -30,25 +33,34 @@ pub mod topbar;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use gsh_core::workspace::WorkspaceList;
 use iced::widget::{column, container, mouse_area, row, stack, Space};
 use iced::{Background, Element, Fill, Padding, Subscription, Task, Theme};
 
+use crate::agent_status::{
+    now_epoch_ms, pane_id_for_term, term_id_from_pane_id, PaneDescriptor, StatusRuntime,
+};
 use crate::file_tree::{FileTree, ViewerHook};
 use crate::file_viewer::FileViewerState;
 use crate::files_panel::FilesMsg;
-use crate::island::{AgentIsland, IslandMsg};
+use crate::island::{AgentIsland, IslandMsg, PermissionDecision};
 use crate::pane_chrome::ChromeCallbacks;
 use crate::pane_model::{PaneModel, PaneTab, TermId};
+use crate::terminal_input::{classify_key_press, KeyAction};
 use crate::terminal_pane::{TerminalMsg, TerminalPane};
 use crate::topbar::TopbarProps;
+
+/// Intervalo de polling do canal de status na `Subscription` do `Shell` (50 ms).
+const STATUS_POLL_INTERVAL_MS: u64 = 50;
 
 #[derive(Debug, Clone)]
 enum Msg {
     Island(IslandMsg),
     Terminal(TerminalMsg),
     Files(FilesMsg),
+    StatusTick,
     SelectTab(usize),
     CloseTab(usize),
     NewTerminalTab,
@@ -61,6 +73,7 @@ enum Msg {
 }
 
 struct Shell {
+    status_runtime: StatusRuntime,
     island: AgentIsland,
     pane_model: PaneModel,
     terminals: BTreeMap<TermId, TerminalPane>,
@@ -74,15 +87,28 @@ struct Shell {
 
 impl Default for Shell {
     fn default() -> Self {
+        let mut status_runtime = StatusRuntime::start_default();
+        let mut island = AgentIsland::default();
+        island.set_server_error(status_runtime.server_error().cloned());
+
         let workspaces = rail::default_workspace_list();
         let active_path = workspaces.active().and_then(|ws| ws.path.clone());
         let pane_model = PaneModel::new();
+
+        let initial_pane_id = pane_id_for_term(1);
+        status_runtime.register_pane(initial_pane_id.clone());
+        let initial_env = status_runtime.hook_env_for_pane(&initial_pane_id);
         let mut terminals = BTreeMap::new();
-        terminals.insert(1, TerminalPane::new_in_dir(active_path.as_deref()));
+        terminals.insert(
+            1,
+            TerminalPane::new_with_env(initial_pane_id, active_path.as_deref(), initial_env),
+        );
+
         let mut file_tree = FileTree::new();
         file_tree.set_root(active_path);
         Self {
-            island: AgentIsland::default(),
+            status_runtime,
+            island,
             pane_model,
             terminals,
             file_viewers: BTreeMap::new(),
@@ -107,7 +133,11 @@ impl Shell {
         self.workspaces.active().and_then(|ws| ws.path.as_deref())
     }
 
-    fn spawn_terminal_for_dir(&self, cwd: Option<&Path>) -> TerminalPane {
+    fn spawn_terminal_for_dir(&mut self, id: TermId, cwd: Option<&Path>) -> TerminalPane {
+        let pane_id = pane_id_for_term(id);
+        self.status_runtime.register_pane(pane_id.clone());
+        let hook_env = self.status_runtime.hook_env_for_pane(&pane_id);
+
         if self.static_test_mode {
             let snap = gsh_term::TermSnapshot {
                 cols: terminal_pane::DEFAULT_COLS,
@@ -122,9 +152,57 @@ impl Shell {
                 history_size: 0,
             };
             TerminalPane::from_snapshot_in_dir(snap, cwd.map(Path::to_path_buf))
+                .with_pane_id(pane_id)
+                .with_spawn_env(hook_env)
         } else {
-            TerminalPane::new_in_dir(cwd)
+            TerminalPane::new_with_env(pane_id, cwd, hook_env)
         }
+    }
+
+    fn pane_descriptors(&self) -> Vec<PaneDescriptor> {
+        let workspace_name = self
+            .workspaces
+            .active()
+            .map(|ws| ws.name.clone())
+            .unwrap_or_else(|| labels::WORKSPACE_GSH.to_string());
+
+        self.pane_model
+            .tabs()
+            .iter()
+            .filter_map(|tab| match tab {
+                PaneTab::Terminal(id) => Some(PaneDescriptor::new(
+                    pane_id_for_term(*id),
+                    labels::DEFAULT_TAB_TITLE,
+                    workspace_name.clone(),
+                )),
+                PaneTab::File(_) => None,
+            })
+            .collect()
+    }
+
+    fn sync_island_from_status(&mut self) {
+        let descriptors = self.pane_descriptors();
+        let agents = self.status_runtime.island_agents(&descriptors);
+        self.island.set_agents(agents);
+    }
+
+    fn reveal_terminal_by_pane_id(&mut self, pane_id: &str) {
+        let Some(target_id) = term_id_from_pane_id(pane_id) else {
+            return;
+        };
+        let tab_idx = self
+            .pane_model
+            .tabs()
+            .iter()
+            .position(|tab| matches!(tab, PaneTab::Terminal(id) if *id == target_id));
+        if let Some(idx) = tab_idx {
+            let _ = self.pane_model.activate(idx);
+            if let Some(term) = self.terminals.get_mut(&target_id) {
+                term.sync_snapshot();
+            }
+        }
+        let _ = self.status_runtime.mark_pane_seen(pane_id);
+        self.sync_island_from_status();
     }
 
     fn activate_workspace_path(&mut self, next_path: Option<PathBuf>) {
@@ -134,6 +212,7 @@ impl Shell {
                 term.respawn_in_dir(Some(dir));
             }
         }
+        self.sync_island_from_status();
     }
 
     fn active_terminal_mut(&mut self) -> Option<&mut TerminalPane> {
@@ -145,11 +224,65 @@ impl Shell {
 
     fn update(&mut self, msg: Msg) -> Task<Msg> {
         match msg {
+            Msg::StatusTick => {
+                if self.status_runtime.drain_deliveries(now_epoch_ms()) {
+                    self.sync_island_from_status();
+                }
+                Task::none()
+            }
             Msg::Island(island_msg) => {
-                self.island.update(island_msg);
+                match &island_msg {
+                    IslandMsg::RevealTab(tab_id) => {
+                        let target = tab_id.clone();
+                        self.island.update(island_msg);
+                        self.reveal_terminal_by_pane_id(&target);
+                    }
+                    IslandMsg::DecidePermission { tab_id, decision } => {
+                        let target = tab_id.clone();
+                        let chosen = *decision;
+                        self.island.update(island_msg);
+                        let _ = self.status_runtime.apply_permission_decision(
+                            &target,
+                            chosen,
+                            now_epoch_ms(),
+                        );
+                        if chosen == PermissionDecision::Pass {
+                            self.reveal_terminal_by_pane_id(&target);
+                        } else {
+                            self.sync_island_from_status();
+                        }
+                    }
+                    IslandMsg::TogglePanel | IslandMsg::ClosePanel => {
+                        self.island.update(island_msg);
+                    }
+                }
                 Task::none()
             }
             Msg::Terminal(term_msg) => {
+                if matches!(term_msg, TerminalMsg::Tick)
+                    && self.status_runtime.drain_deliveries(now_epoch_ms())
+                {
+                    self.sync_island_from_status();
+                }
+                if let TerminalMsg::Keyboard(iced::keyboard::Event::KeyPressed {
+                    ref key,
+                    ref modified_key,
+                    modifiers,
+                    ..
+                }) = term_msg
+                {
+                    if matches!(
+                        classify_key_press(key, modified_key, modifiers),
+                        Some(KeyAction::Send(ref bytes)) if bytes.as_slice() == b"\x1b"
+                    ) {
+                        if let Some(PaneTab::Terminal(id)) = self.pane_model.active_tab().cloned() {
+                            let pane_id = pane_id_for_term(id);
+                            if self.status_runtime.interrupt_pane(&pane_id, now_epoch_ms()) {
+                                self.sync_island_from_status();
+                            }
+                        }
+                    }
+                }
                 if let Some(term) = self.active_terminal_mut() {
                     term.update(term_msg).map(Msg::Terminal)
                 } else {
@@ -178,6 +311,10 @@ impl Shell {
                             if let Some(term) = self.terminals.get_mut(&id) {
                                 term.sync_snapshot();
                             }
+                            let pane_id = pane_id_for_term(id);
+                            if self.status_runtime.mark_pane_seen(&pane_id) {
+                                self.sync_island_from_status();
+                            }
                         }
                         PaneTab::File(path) => {
                             let _ = self.file_tree.select_file(path);
@@ -193,6 +330,10 @@ impl Shell {
                             if let Some(mut term) = self.terminals.remove(&id) {
                                 term.close_session();
                             }
+                            let pane_id = pane_id_for_term(id);
+                            if self.status_runtime.remove_pane(&pane_id) {
+                                self.sync_island_from_status();
+                            }
                         }
                         PaneTab::File(path) => {
                             self.file_viewers.remove(&path);
@@ -203,8 +344,8 @@ impl Shell {
             }
             Msg::NewTerminalTab => {
                 let cwd = self.active_workspace_dir().map(Path::to_path_buf);
-                let new_term = self.spawn_terminal_for_dir(cwd.as_deref());
                 let id = self.pane_model.open_terminal();
+                let new_term = self.spawn_terminal_for_dir(id, cwd.as_deref());
                 self.terminals.insert(id, new_term);
                 Task::none()
             }
@@ -239,13 +380,19 @@ impl Shell {
     }
 
     fn subscription(&self) -> Subscription<Msg> {
-        let Some(PaneTab::Terminal(id)) = self.pane_model.active_tab() else {
-            return Subscription::none();
+        let status_sub = iced::time::every(Duration::from_millis(STATUS_POLL_INTERVAL_MS))
+            .map(|_| Msg::StatusTick);
+
+        let term_sub = match self.pane_model.active_tab() {
+            Some(PaneTab::Terminal(id)) => self
+                .terminals
+                .get(id)
+                .map(|term| term.subscription().map(Msg::Terminal))
+                .unwrap_or_else(Subscription::none),
+            _ => Subscription::none(),
         };
-        let Some(term) = self.terminals.get(id) else {
-            return Subscription::none();
-        };
-        term.subscription().map(Msg::Terminal)
+
+        Subscription::batch([status_sub, term_sub])
     }
 
     fn view(&self) -> Element<'_, Msg> {
@@ -354,7 +501,11 @@ fn main() -> iced::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gsh_core::status::{AgentHarness, HookEvent, StatusUpdate, TurnStatus};
     use gsh_term::{Cell, Cursor, TermSnapshot};
+    use iced::keyboard;
+
+    use crate::island::IslandAgentState;
 
     fn test_shell() -> Shell {
         let snap = TermSnapshot {
@@ -369,11 +520,17 @@ mod tests {
             display_offset: 0,
             history_size: 0,
         };
+        let mut status_runtime = StatusRuntime::without_server(None);
+        status_runtime.register_pane("t1");
         let workspaces = rail::default_workspace_list();
         let active_path = workspaces.active().and_then(|ws| ws.path.clone());
         let mut terminals = BTreeMap::new();
-        terminals.insert(1, TerminalPane::from_snapshot_in_dir(snap, active_path));
+        terminals.insert(
+            1,
+            TerminalPane::from_snapshot_in_dir(snap, active_path).with_pane_id("t1"),
+        );
         Shell {
+            status_runtime,
             island: AgentIsland::default(),
             pane_model: PaneModel::new(),
             terminals,
@@ -454,5 +611,76 @@ mod tests {
         assert!(!shell.files_open);
 
         let _ = std::fs::remove_dir_all(&picked);
+    }
+
+    #[test]
+    fn shell_propaga_status_de_turno_dos_terminais_para_a_ilha_e_reveal_tab() {
+        let mut shell = test_shell();
+        // Abre segundo terminal (t2)
+        let _ = shell.update(Msg::NewTerminalTab);
+        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(2)));
+
+        // t1 entra em Working
+        let u1 = StatusUpdate {
+            pane_id: "t1".into(),
+            status: TurnStatus::Working,
+            event: Some(HookEvent::UserPromptSubmit),
+            session_id: None,
+            transcript_path: None,
+            harness: Some(AgentHarness::Claude),
+            files: Vec::new(),
+        };
+        assert!(shell.status_runtime.apply_update(u1, 1_000));
+        shell.sync_island_from_status();
+
+        assert_eq!(shell.island.agents().len(), 1);
+        assert_eq!(shell.island.agents()[0].tab_id, "t1");
+        assert_eq!(shell.island.agents()[0].state, IslandAgentState::Working);
+
+        // t1 termina (Stop -> Finished)
+        let u1_stop = StatusUpdate {
+            pane_id: "t1".into(),
+            status: TurnStatus::Idle,
+            event: Some(HookEvent::Stop),
+            session_id: None,
+            transcript_path: None,
+            harness: Some(AgentHarness::Claude),
+            files: Vec::new(),
+        };
+        assert!(shell.status_runtime.apply_update(u1_stop, 2_000));
+        shell.sync_island_from_status();
+
+        assert_eq!(shell.island.agents()[0].state, IslandAgentState::Finished);
+
+        // Clicar na linha do agente na ilha (RevealTab("t1")) foca o Terminal(1) e limpa o Finished
+        let _ = shell.update(Msg::Island(IslandMsg::RevealTab("t1".to_string())));
+        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(1)));
+        assert!(shell.island.agents().is_empty());
+
+        // t1 volta a trabalhar e o usuário aperta ESC cru -> interrompe para Idle sem Finished
+        let u1_work = StatusUpdate {
+            pane_id: "t1".into(),
+            status: TurnStatus::Working,
+            event: Some(HookEvent::UserPromptSubmit),
+            session_id: None,
+            transcript_path: None,
+            harness: Some(AgentHarness::Claude),
+            files: Vec::new(),
+        };
+        assert!(shell.status_runtime.apply_update(u1_work, 3_000));
+        shell.sync_island_from_status();
+        assert_eq!(shell.island.agents().len(), 1);
+
+        let esc_event = keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(keyboard::key::Named::Escape),
+            modified_key: keyboard::Key::Named(keyboard::key::Named::Escape),
+            physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Escape),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::NONE,
+            text: None,
+            repeat: false,
+        };
+        let _ = shell.update(Msg::Terminal(TerminalMsg::Keyboard(esc_event)));
+        assert!(shell.island.agents().is_empty());
     }
 }

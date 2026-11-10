@@ -68,10 +68,29 @@ pub const ICON_FILE_LOCK: &str = "⚲";
 pub const ICON_FILE_GENERIC: &str = "≡";
 
 // Ilha de agentes — seções do painel (na ordem exata de `agent_island_panel.dart`)
+pub const SECTION_STATUS_ERROR: &str = "Erro no servidor de status";
 pub const SECTION_ASKS: &str = "Pedem permissão";
 pub const SECTION_WAITING: &str = "Esperando você";
 pub const SECTION_FINISHED: &str = "Terminaram";
 pub const SECTION_WORKING: &str = "Trabalhando";
+
+// Ilha de agentes — erros tipados do servidor de status (`gsh_ipc::ServerError`)
+pub const STATUS_ERR_CREATE_DIR_PREFIX: &str = "Não foi possível criar o diretório de status (";
+pub const STATUS_ERR_STALE_SOCKET_PREFIX: &str = "Não foi possível remover o socket antigo (";
+pub const STATUS_ERR_PATH_OCCUPIED_PREFIX: &str =
+    "O caminho do socket está ocupado por outro arquivo: ";
+pub const STATUS_ERR_BIND_PREFIX: &str = "Não foi possível escutar no socket de status (";
+pub const STATUS_ERR_PERMISSIONS_PREFIX: &str =
+    "Não foi possível ajustar as permissões do socket (";
+pub const STATUS_ERR_TOKEN_PREFIX: &str = "Falha ao gerar token de autenticação do status: ";
+pub const STATUS_ERR_THREAD_PREFIX: &str = "Falha ao iniciar a thread do servidor de status: ";
+pub const STATUS_ERR_TARGET_SEP: &str = "): ";
+
+// Ilha de agentes — nomes de harness e formatação de aba
+pub const HARNESS_CLAUDE: &str = "claude";
+pub const HARNESS_CODEX: &str = "codex";
+pub const HARNESS_PI: &str = "pi";
+pub const AGENT_TAB_SEPARATOR: &str = " — ";
 
 // Ilha de agentes — botões e ações do painel
 pub const ACTION_ALLOW: &str = "Permitir";
@@ -125,6 +144,16 @@ pub fn format_tool_line(tool_name: &str, input_summary: &str) -> String {
         tool_name.to_string()
     } else {
         format!("{tool_name}{TOOL_SUMMARY_SEPARATOR}{input_summary}")
+    }
+}
+
+/// Rótulo da aba do agente exibido na ilha (ex.: `"claude — Terminal"` ou apenas `"Terminal"`).
+pub fn format_agent_tab_name(harness_label: Option<&str>, tab_title: &str) -> String {
+    match harness_label.filter(|h| !h.is_empty()) {
+        Some(h) if !tab_title.starts_with(h) => {
+            format!("{h}{AGENT_TAB_SEPARATOR}{tab_title}")
+        }
+        _ => tab_title.to_string(),
     }
 }
 

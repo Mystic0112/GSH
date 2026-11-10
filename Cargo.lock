@@ -1236,9 +1236,12 @@ name = "gsh-app"
 version = "0.1.0"
 dependencies = [
  "gsh-core",
+ "gsh-ipc",
  "gsh-term",
  "iced",
  "rfd",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
