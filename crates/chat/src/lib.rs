@@ -64,6 +64,22 @@ mod tests {
         (dir, script_path)
     }
 
+    /// Sobe o script falso, repetindo se o exec cair em `ETXTBSY`: outro teste
+    /// em paralelo pode ter herdado o fd de escrita do script durante o fork.
+    #[cfg(unix)]
+    fn spawn_fake(script: &std::path::Path) -> ChatEngine {
+        for _ in 0..50 {
+            match ChatEngine::spawn(ChatConfig::new().with_binary(script)) {
+                Ok(engine) => return engine,
+                Err(ChatError::SpawnFailed { cause, .. }) if cause.contains("Text file busy") => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(err) => panic!("spawn fake claude: {err}"),
+            }
+        }
+        panic!("spawn fake claude: ETXTBSY persistente");
+    }
+
     #[test]
     fn parse_linhas_validas_delta_texto_tool_use_tool_result_e_resultado_final() {
         // 1. system/init -> Ready
@@ -205,8 +221,7 @@ done
 "#,
         );
 
-        let mut engine =
-            ChatEngine::spawn(ChatConfig::new().with_binary(&script)).expect("spawn fake claude");
+        let mut engine = spawn_fake(&script);
         engine
             .send_user_message("oi claude")
             .expect("send user message");
@@ -269,8 +284,7 @@ done
 "#,
         );
 
-        let mut engine =
-            ChatEngine::spawn(ChatConfig::new().with_binary(&script)).expect("spawn fake claude");
+        let mut engine = spawn_fake(&script);
         engine.send_user_message("demora").expect("send");
 
         let first = engine
@@ -303,8 +317,7 @@ exit 17
 "#,
         );
 
-        let mut engine =
-            ChatEngine::spawn(ChatConfig::new().with_binary(&script)).expect("spawn fake claude");
+        let mut engine = spawn_fake(&script);
         engine.send_user_message("vai cair").expect("send");
 
         let ev = engine
