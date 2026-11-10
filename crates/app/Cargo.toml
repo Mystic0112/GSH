@@ -12,4 +12,6 @@ path = "src/main.rs"
 
 [dependencies]
 gsh-core = { path = "../core" }
+gsh-term = { path = "../term" }
 iced = { version = "0.14", features = ["canvas", "tokio"] }
+rfd.workspace = true

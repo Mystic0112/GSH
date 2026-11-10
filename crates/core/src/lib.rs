@@ -22,6 +22,7 @@ pub mod hook;
 pub mod status;
 pub mod tabs;
 pub mod wire;
+pub mod workspace;
 
 /// Versão do crate, exposta para a CLI e para diagnósticos.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

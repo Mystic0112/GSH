@@ -7,13 +7,46 @@
 
 pub const APP_TITLE: &str = "GSH";
 
-// Shell (colunas laterais e área central)
+// Shell (colunas laterais, topbar, abas e rodapés)
 pub const WORKSPACES_HEADER: &str = "Workspaces";
 pub const WORKSPACE_GSH: &str = "GSH";
+pub const WORKSPACE_GSH_INITIAL: &str = "G";
+pub const WORKSPACE_GSH_BRANCH: &str = "main";
 pub const WORKSPACE_EXAMPLE: &str = "Projeto de exemplo";
+pub const WORKSPACE_EXAMPLE_INITIAL: &str = "P";
+pub const WORKSPACE_EXAMPLE_BRANCH: &str = "feat/ui";
+pub const DEFAULT_REALM: &str = "Padrão";
+
+pub const DEFAULT_TAB_TITLE: &str = "Terminal";
 pub const PANES_PLACEHOLDER: &str = "Terminal (spike de PTY ainda não ligado)";
+pub const TERMINAL_SPAWN_ERROR: &str = "Não foi possível iniciar a sessão do terminal.";
+
 pub const FILES_HEADER: &str = "Arquivos";
+pub const FILES_SECTION_UPPER: &str = "ARQUIVOS";
 pub const FILES_PLACEHOLDER: &str = "(árvore entra depois)";
+pub const FILES_NO_FOLDER: &str = "Nenhuma pasta — abra um workspace.";
+pub const FILES_EMPTY_FOLDER: &str = "Pasta vazia.";
+pub const FILES_ERR_NOT_FOUND: &str = "Pasta não encontrada.";
+pub const FILES_ERR_PERMISSION: &str = "Permissão negada ao ler a pasta.";
+pub const FILES_ERR_IO_PREFIX: &str = "Erro ao ler pasta: ";
+pub const NO_LSP_AVAILABLE: &str = "Nenhum LSP disponível";
+
+// Ícones tipográficos dos controles de chrome
+pub const ICON_SIDEBAR_LEFT: &str = "◧";
+pub const ICON_SIDEBAR_RIGHT: &str = "◨";
+pub const ICON_LAYERS: &str = "◈";
+pub const ICON_PLUS: &str = "+";
+pub const ICON_CLOSE: &str = "×";
+pub const ICON_TERMINAL: &str = ">_";
+pub const ICON_SPLIT_H: &str = "◫";
+pub const ICON_SPLIT_V: &str = "⬒";
+pub const ICON_FOLDER: &str = "◰";
+pub const ICON_REFRESH: &str = "↻";
+pub const ICON_COLLAPSE: &str = "▴";
+pub const ICON_SETTINGS: &str = "⚙";
+pub const ICON_CHEVRON_DOWN: &str = "▾";
+pub const ICON_CHEVRON_RIGHT: &str = "▸";
+pub const ICON_FILE_ITEM: &str = "◦";
 
 // Ilha de agentes — seções do painel (na ordem exata de `agent_island_panel.dart`)
 pub const SECTION_ASKS: &str = "Pedem permissão";

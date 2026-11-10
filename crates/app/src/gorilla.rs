@@ -151,7 +151,7 @@ pub fn frame_spec(mood: GorillaMood, tick: u64) -> GorillaFrameSpec {
         },
         GorillaMood::Cheer => {
             let phase = ((tick % 100) as f32) * std::f32::consts::PI / 5.0;
-            let jump = -(phase.sin().abs() * 5.0).round();
+            let jump = -(phase.sin().abs() * 3.0).round();
             GorillaFrameSpec {
                 look: 0,
                 legs: 0,
@@ -427,23 +427,23 @@ pub fn draw_gorilla(
 
     if spec.sleeping_zed {
         let zed = zed_sprite();
-        let zed_origin = Point::new(origin.x + GORILLA_WIDTH - 5.0, origin.y - 3.0 + spec.dy);
+        let zed_origin = Point::new(origin.x + GORILLA_WIDTH - 6.0, origin.y + 1.0 + spec.dy);
         draw_pix_cropped(frame, &zed, 0, zed_origin);
     }
 
     if spec.show_alert {
-        let ax = origin.x + GORILLA_WIDTH - 2.0;
-        let ay = origin.y + 1.0 + spec.dy;
-        let badge = Path::circle(Point::new(ax, ay), 5.0);
+        let ax = origin.x + GORILLA_WIDTH - 4.5;
+        let ay = origin.y + 4.5 + spec.dy;
+        let badge = Path::circle(Point::new(ax, ay), 4.5);
         frame.fill(&badge, warn_color);
         frame.fill_rectangle(
-            Point::new(ax - 0.75, ay - 3.5),
-            Size::new(1.5, 4.5),
+            Point::new(ax - 0.75, ay - 3.0),
+            Size::new(1.5, 3.8),
             bg_color,
         );
         frame.fill_rectangle(
-            Point::new(ax - 0.75, ay + 2.0),
-            Size::new(1.5, 1.5),
+            Point::new(ax - 0.75, ay + 1.6),
+            Size::new(1.5, 1.4),
             bg_color,
         );
     }

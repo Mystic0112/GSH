@@ -15,27 +15,28 @@ use iced::time::{Duration, Instant};
 use iced::widget::canvas::{self, Action, Event, Path, Stroke};
 use iced::widget::{button, column, container, mouse_area, row, scrollable, text, Space};
 use iced::{
-    alignment, border, mouse, window, Alignment, Background, Border, Color, Element, Fill, Font,
-    Length, Point, Rectangle, Renderer, Shadow, Shrink, Size, Theme, Vector,
+    alignment, border, mouse, window, Alignment, Background, Border, Color, Element, Fill, Length,
+    Point, Rectangle, Renderer, Shadow, Shrink, Size, Theme, Vector,
 };
 
 use crate::gorilla::{draw_gorilla, GorillaMood, GORILLA_HEIGHT, GORILLA_WIDTH};
 use crate::labels;
+use crate::theme;
 
-// Paleta da ilha e do painel (espelha `AppColors.dark` de `app_colors.dart`).
-pub const COLOR_BG: Color = Color::from_rgb8(0x0D, 0x0D, 0x0F);
-pub const COLOR_PANEL: Color = Color::from_rgb8(0x18, 0x18, 0x1B);
-pub const COLOR_PANEL2: Color = Color::from_rgb8(0x1F, 0x1F, 0x23);
-pub const COLOR_PANEL3: Color = Color::from_rgb8(0x27, 0x27, 0x2C);
-pub const COLOR_BORDER: Color = Color::from_rgb8(0x26, 0x26, 0x2A);
-pub const COLOR_BORDER2: Color = Color::from_rgb8(0x32, 0x32, 0x38);
-pub const COLOR_TEXT: Color = Color::from_rgb8(0xEC, 0xEC, 0xEF);
-pub const COLOR_TEXT2: Color = Color::from_rgb8(0x9B, 0x9B, 0xA4);
-pub const COLOR_TEXT3: Color = Color::from_rgb8(0x6A, 0x6A, 0x73);
-pub const COLOR_ACCENT: Color = Color::from_rgb8(0x2F, 0x6F, 0xF0);
-pub const COLOR_WARN: Color = Color::from_rgb8(0xE0, 0xA3, 0x3A);
-pub const COLOR_ONLINE: Color = Color::from_rgb8(0x3F, 0xB8, 0x68);
-pub const COLOR_SHADOW: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.33);
+// Paleta da ilha e do painel (reexportada de `crate::theme` — fonte única de tokens).
+pub const COLOR_BG: Color = theme::BG;
+pub const COLOR_PANEL: Color = theme::PANEL;
+pub const COLOR_PANEL2: Color = theme::PANEL2;
+pub const COLOR_PANEL3: Color = theme::PANEL3;
+pub const COLOR_BORDER: Color = theme::BORDER;
+pub const COLOR_BORDER2: Color = theme::BORDER2;
+pub const COLOR_TEXT: Color = theme::TEXT;
+pub const COLOR_TEXT2: Color = theme::TEXT2;
+pub const COLOR_TEXT3: Color = theme::TEXT3;
+pub const COLOR_ACCENT: Color = theme::ACCENT;
+pub const COLOR_WARN: Color = theme::WARN;
+pub const COLOR_ONLINE: Color = theme::ONLINE;
+pub const COLOR_SHADOW: Color = theme::SHADOW;
 
 /// Altura da pílula (`SizedBox(height: 30)` em `agent_island.dart`).
 pub const PILL_HEIGHT: f32 = 30.0;
@@ -821,52 +822,66 @@ impl canvas::Program<IslandMsg> for IslandPillProgram {
             border::Radius::from(PILL_RADIUS),
         );
         frame.fill(&pill_path, bg_color);
-        frame.stroke(
-            &pill_path,
-            Stroke::default().with_color(border_color).with_width(1.0),
-        );
 
         let mood = state.effective_mood(self.base_mood, state.last_frame_at);
         let tick = state.gorilla_tick;
 
-        frame.with_clip(pill, |clipped| {
-            // `with_clip` usa coordenadas locais à região clipada (`0..pill.width`).
-            let gorilla_origin = Point::new(PILL_PADDING_H, (PILL_HEIGHT - GORILLA_HEIGHT) / 2.0);
-            draw_gorilla(clipped, gorilla_origin, mood, tick, COLOR_WARN, COLOR_BG);
+        // Desenha no mesmo `frame` (após o fundo da pílula e antes da borda) usando
+        // coordenadas relativas a `pill.x`/`pill.y`. Evita `with_clip`, que em
+        // `iced_wgpu` insere os meshes do sub-frame antes do buffer do frame pai
+        // (deixando o gorila atrás da pílula) e não translada a origem para `pill.x`.
+        let gorilla_rect = gorilla_bounds_in_pill(pill);
+        draw_gorilla(
+            &mut frame,
+            gorilla_rect.position(),
+            mood,
+            tick,
+            COLOR_WARN,
+            COLOR_BG,
+        );
 
-            let mut cursor_x = PILL_PADDING_H + GORILLA_WIDTH;
-            let center_y = PILL_HEIGHT / 2.0;
+        let mut cursor_x = gorilla_rect.x + GORILLA_WIDTH;
+        let center_y = pill.y + PILL_HEIGHT / 2.0;
+        let max_right = pill.x + pill.width - PILL_PADDING_H + 0.5;
 
-            for (n, dot_color) in [
-                (self.counts.working, COLOR_ACCENT),
-                (waiting_total, COLOR_WARN),
-                (self.counts.finished, COLOR_ONLINE),
-            ] {
-                if n == 0 {
-                    continue;
-                }
-                cursor_x += COUNT_LEFT_GAP;
-                let dot_center = Point::new(cursor_x + COUNT_DOT_SIZE / 2.0, center_y);
-                let dot = Path::circle(dot_center, COUNT_DOT_SIZE / 2.0);
-                clipped.fill(&dot, dot_color);
-                cursor_x += COUNT_DOT_SIZE + COUNT_TEXT_GAP;
-
-                clipped.fill_text(canvas::Text {
-                    content: n.to_string(),
-                    position: Point::new(cursor_x, center_y),
-                    max_width: 48.0,
-                    color: COLOR_TEXT2,
-                    size: 12.0.into(),
-                    line_height: text::LineHeight::default(),
-                    font: Font::MONOSPACE,
-                    align_x: text::Alignment::Left,
-                    align_y: alignment::Vertical::Center,
-                    shaping: text::Shaping::Basic,
-                });
-
-                cursor_x += (digit_count(n) as f32) * COUNT_DIGIT_WIDTH;
+        for (n, dot_color) in [
+            (self.counts.working, COLOR_ACCENT),
+            (waiting_total, COLOR_WARN),
+            (self.counts.finished, COLOR_ONLINE),
+        ] {
+            if n == 0 {
+                continue;
             }
-        });
+            let item_w = single_counter_width(n);
+            if cursor_x + item_w > max_right {
+                break;
+            }
+            cursor_x += COUNT_LEFT_GAP;
+            let dot_center = Point::new(cursor_x + COUNT_DOT_SIZE / 2.0, center_y);
+            let dot = Path::circle(dot_center, COUNT_DOT_SIZE / 2.0);
+            frame.fill(&dot, dot_color);
+            cursor_x += COUNT_DOT_SIZE + COUNT_TEXT_GAP;
+
+            frame.fill_text(canvas::Text {
+                content: n.to_string(),
+                position: Point::new(cursor_x, center_y),
+                max_width: 48.0,
+                color: COLOR_TEXT2,
+                size: theme::SIZE_LABEL.into(),
+                line_height: text::LineHeight::default(),
+                font: theme::FONT_MONO,
+                align_x: text::Alignment::Left,
+                align_y: alignment::Vertical::Center,
+                shaping: text::Shaping::Basic,
+            });
+
+            cursor_x += (digit_count(n) as f32) * COUNT_DIGIT_WIDTH;
+        }
+
+        frame.stroke(
+            &pill_path,
+            Stroke::default().with_color(border_color).with_width(1.0),
+        );
 
         vec![frame.into_geometry()]
     }
@@ -892,11 +907,26 @@ impl canvas::Program<IslandMsg> for IslandPillProgram {
     }
 }
 
+/// Calcula o retângulo (`32 x 25`) ocupado pelo gorila dentro do retângulo da pílula.
+pub fn gorilla_bounds_in_pill(pill: Rectangle) -> Rectangle {
+    Rectangle {
+        x: pill.x + PILL_PADDING_H,
+        y: pill.y + (PILL_HEIGHT - GORILLA_HEIGHT) / 2.0,
+        width: GORILLA_WIDTH,
+        height: GORILLA_HEIGHT,
+    }
+}
+
 /// Cabeçalho de seção do painel (`_Header` em `agent_island_panel.dart`).
 fn section_header<'a>(label: &str, color: Color) -> Element<'a, IslandMsg> {
-    container(text(label.to_uppercase()).size(11).color(color))
-        .padding([5, 8])
-        .into()
+    container(
+        text(label.to_uppercase())
+            .font(theme::FONT_TITLE)
+            .size(11)
+            .color(color),
+    )
+    .padding([5, 8])
+    .into()
 }
 
 /// Bolinha de estado à esquerda do nome do agente (`_Leading` em
@@ -999,8 +1029,8 @@ fn ask_card<'a>(agent: &IslandAgent) -> Element<'a, IslandMsg> {
 
     let code_box = container(
         text(tool_line)
-            .font(Font::MONOSPACE)
-            .size(12)
+            .font(theme::FONT_MONO)
+            .size(theme::SIZE_LABEL)
             .color(COLOR_TEXT2),
     )
     .width(Fill)
@@ -1054,18 +1084,13 @@ fn ask_card<'a>(agent: &IslandAgent) -> Element<'a, IslandMsg> {
             AskButtonKind::Ghost,
         ));
 
-    let warn_border = Color {
-        a: 0.45,
-        ..COLOR_WARN
-    };
-
     container(column![header, code_box, actions].spacing(8))
         .width(Fill)
         .padding(10)
         .style(move |_: &Theme| container::Style {
             background: Some(Background::Color(COLOR_PANEL2)),
             border: Border {
-                color: warn_border,
+                color: theme::WARN_BORDER,
                 width: 1.0,
                 radius: 9.0.into(),
             },
@@ -1086,7 +1111,7 @@ fn action_button<'a>(
     msg: IslandMsg,
     kind: AskButtonKind,
 ) -> Element<'a, IslandMsg> {
-    button(text(label).size(12))
+    button(text(label).size(theme::SIZE_LABEL))
         .width(Shrink)
         .padding([4, 10])
         .on_press(msg)
@@ -1095,11 +1120,11 @@ fn action_button<'a>(
             match kind {
                 AskButtonKind::Primary => button::Style {
                     background: Some(Background::Color(if hovered {
-                        Color::from_rgb8(0x45, 0x80, 0xF5)
+                        theme::ACCENT_HOVER
                     } else {
                         COLOR_ACCENT
                     })),
-                    text_color: COLOR_TEXT,
+                    text_color: theme::ON_ACCENT,
                     border: Border {
                         radius: 6.0.into(),
                         ..Default::default()
@@ -1363,5 +1388,64 @@ mod tests {
             assert!(pix.filled_count() > 200, "pose {mood:?} vazia");
         }
         assert!(zed_sprite().filled_count() > 10);
+    }
+
+    #[test]
+    fn gorila_fica_inteiro_dentro_do_contorno_da_pilula_em_todas_as_poses() {
+        let program = IslandPillProgram {
+            counts: IslandCounts {
+                asking: 1,
+                working: 1,
+                finished: 1,
+                waiting: 0,
+            },
+            base_mood: GorillaMood::Wave,
+            cheer_generation: 0,
+            target_width: target_pill_width(IslandCounts {
+                asking: 1,
+                working: 1,
+                finished: 1,
+                waiting: 0,
+            }),
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: PILL_HEIGHT,
+        };
+        let pill = program.pill_rect(bounds, program.target_width);
+        let g = gorilla_bounds_in_pill(pill);
+
+        assert!(g.x >= pill.x + PILL_PADDING_H - f32::EPSILON);
+        assert!(g.x + g.width <= pill.x + pill.width - PILL_PADDING_H + f32::EPSILON);
+        assert!(g.y >= pill.y);
+        assert!(g.y + g.height <= pill.y + pill.height);
+
+        for mood in [
+            GorillaMood::Sleep,
+            GorillaMood::Rest,
+            GorillaMood::Breathe,
+            GorillaMood::Typing,
+            GorillaMood::Wave,
+            GorillaMood::Cheer,
+        ] {
+            for tick in 0..20 {
+                let spec = frame_spec(mood, tick);
+                // Topo da cabeça no recorte (y_rel >= 1.0) somado a origin.y (2.5) + dy nunca sai do topo (0.0)
+                let top_y = g.y + 1.0 + spec.dy;
+                let bottom_y = g.y + (GORILLA_HEIGHT - 1.0) + spec.dy;
+                assert!(
+                    top_y >= pill.y,
+                    "pose {mood:?} tick {tick} vazou pelo topo: {top_y} < {}",
+                    pill.y
+                );
+                assert!(
+                    bottom_y <= pill.y + pill.height,
+                    "pose {mood:?} tick {tick} vazou por baixo: {bottom_y} > {}",
+                    pill.y + pill.height
+                );
+            }
+        }
     }
 }

@@ -1,0 +1,15 @@
+[package]
+name = "gsh-term"
+description = "GSH terminal session: PTY (portable-pty) and VT emulator (alacritty_terminal), no UI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Emulador VT/ANSI, grid, cursor, scrollback e seleção (ADR 0002).
+alacritty_terminal = "0.26"
+# PTY nativo multiplataforma: forkpty no Unix e ConPTY no Windows (ADR 0002).
+portable-pty = "0.9"
+# Enum de erro tipado.
+thiserror.workspace = true

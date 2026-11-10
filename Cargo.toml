@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/cli", "crates/ipc", "crates/app", "crates/config"]
+members = ["crates/core", "crates/cli", "crates/ipc", "crates/app", "crates/config", "crates/term"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,5 +9,6 @@ license = "MIT"
 repository = "https://github.com/Mystic0112/GSH"
 
 [workspace.dependencies]
+rfd = "0.15"
 serde_json = "1"
 thiserror = "2"
