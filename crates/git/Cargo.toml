@@ -1,0 +1,10 @@
+[package]
+name = "gsh-git"
+description = "Motor git do GSH (status, stage/unstage, commit, log, diff via binário git do sistema, sem UI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
