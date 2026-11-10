@@ -535,6 +535,28 @@ mod tests {
 
 // Paleta da cena: farm_world.dart, farm_sprites_crops.dart e office_world_paint.dart.
 pub mod scene {
+    // ARGB de office_sprites.dart (clay em farm_sprites.dart).
+    pub mod office {
+        pub const BEZEL: u32 = 0xff2a2f3a;
+        pub const STAND: u32 = 0xff5a606c;
+        pub const FOOT: u32 = 0xff7c828e;
+        pub const SCREEN: u32 = 0xff1e2b3d;
+        pub const CURSOR: u32 = 0xffe8edf5;
+        pub const INK: [u32; 5] = [0xff7fb4ff, 0xff6fcf8b, 0xfff2b43a, 0xffc99bf0, 0xff9fd0ee];
+        pub const CLAY: u32 = 0xffd97757;
+        pub const CREAM: u32 = 0xfffff1cf;
+        pub const SHADOW: u32 = 0x2e28241e;
+        pub const PRINTER_INK: u32 = 0xff3a404c;
+        pub const BODY: u32 = 0xffdfe2e6;
+        pub const BODY_LIGHT: u32 = 0xfff4f5f7;
+        pub const BODY_DARK: u32 = 0xffc3c8cf;
+        pub const TRAY: u32 = 0xfff2f4f6;
+        pub const WHITE: u32 = 0xffffffff;
+        pub const LED_OFF: u32 = 0xff4a6a52;
+        pub const LED_ON: u32 = 0xff7cfc9a;
+        pub const PAPER_EDGE: u32 = 0xff9aa3b2;
+    }
+
     use iced::Color;
     // ARGB de farm_sprites_crops.dart; Pix converte para RGBA na rasterização.
     pub const CROP_GREEN_DARK: u32 = 0xff3f8f35;

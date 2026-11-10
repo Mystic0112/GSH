@@ -1,6 +1,7 @@
 mod camera;
 pub mod crops;
 pub mod icons;
+pub mod office;
 mod paint;
 mod sprites;
 mod world;
