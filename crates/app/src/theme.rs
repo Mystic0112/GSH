@@ -167,6 +167,45 @@ pub const TERM_FG: Color = Color::from_rgb8(0xEC, 0xEC, 0xEF);
 pub const TERM_CURSOR: Color = ACCENT;
 pub const TERM_CURSOR_TEXT: Color = BG;
 pub const TERM_SELECTION_BG: Color = rgba8(0x7A, 0x85, 0x88, 0x55);
+/// Paleta GitHub Dark de syntax_colors.dart.
+pub const SYNTAX_BASE: Color = Color::from_rgb8(0xc9, 0xd1, 0xd9);
+pub const SYNTAX_COMMENT: Color = Color::from_rgb8(0x8b, 0x94, 0x9e);
+pub const SYNTAX_KEYWORD: Color = Color::from_rgb8(0xff, 0x7b, 0x72);
+pub const SYNTAX_STRING: Color = Color::from_rgb8(0xa5, 0xd6, 0xff);
+pub const SYNTAX_NUMBER: Color = Color::from_rgb8(0x79, 0xc0, 0xff);
+pub const SYNTAX_TYPE: Color = Color::from_rgb8(0xff, 0xa6, 0x57);
+pub const SYNTAX_BUILTIN: Color = Color::from_rgb8(0x79, 0xc0, 0xff);
+pub const SYNTAX_FUNCTION: Color = Color::from_rgb8(0xd2, 0xa8, 0xff);
+pub const SYNTAX_VARIABLE: Color = Color::from_rgb8(0xff, 0xa6, 0x57);
+pub const SYNTAX_META: Color = Color::from_rgb8(0x7e, 0xe7, 0x87);
+pub const EDITOR_PAD: f32 = 14.0;
+pub const GUTTER_PAD: f32 = 14.0;
+pub const GUTTER_ICON: f32 = 16.0;
+pub const EDITOR_VIEWPORT_FALLBACK: f32 = 600.0;
+pub const EDITOR_EXTRA_HEIGHT: f32 = 30.0;
+pub const EDITOR_MIN_HEIGHT: f32 = 100.0;
+pub const EDITOR_PAGE_MAX_LINES: usize = 200;
+/// Largura conservadora por coluna para permitir rolagem de linhas sem quebra.
+pub const EDITOR_COLUMN_WIDTH: f32 = SIZE_MONO;
+pub const EDITOR_GUTTER: Color = Color {
+    a: 0.4,
+    ..SYNTAX_BASE
+};
+pub fn syntax_color(token: gsh_editor::highlight::Token) -> Color {
+    use gsh_editor::highlight::Token;
+    match token {
+        Token::Base => SYNTAX_BASE,
+        Token::Comment => SYNTAX_COMMENT,
+        Token::Keyword => SYNTAX_KEYWORD,
+        Token::String => SYNTAX_STRING,
+        Token::Number => SYNTAX_NUMBER,
+        Token::Type => SYNTAX_TYPE,
+        Token::Builtin => SYNTAX_BUILTIN,
+        Token::Function => SYNTAX_FUNCTION,
+        Token::Variable => SYNTAX_VARIABLE,
+        Token::Meta => SYNTAX_META,
+    }
+}
 pub const TERM_SCROLLBAR: Color = Color { a: 0.45, ..TEXT3 };
 
 // Famílias tipográficas (`app_typography.dart`)

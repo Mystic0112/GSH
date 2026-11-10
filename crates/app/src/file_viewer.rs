@@ -10,7 +10,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use iced::widget::{container, row, scrollable, text, Space};
+use iced::widget::{column, container, row, scrollable, text, Space};
 use iced::{Background, Color, Element, Fill, Length, Theme};
 
 use crate::labels;
@@ -19,6 +19,7 @@ use crate::theme;
 /// Limite máximo de tamanho para abertura no viewer de texto (2 MiB, igual a
 /// `_maxTextBytes` em `file_reader_impl.dart`).
 pub const MAX_VIEWER_BYTES: u64 = 2 * 1024 * 1024;
+const LARGE_PREVIEW_BYTES: u64 = 64 * 1024;
 
 /// Motivo tipado pelo qual um arquivo foi classificado como binário.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,11 +74,15 @@ pub struct TextDocument {
     lines: Vec<String>,
     gutter_text: String,
     body_text: String,
+    source: String,
 }
 
 impl TextDocument {
     /// Constrói o documento numerando as linhas a partir de 1.
     pub fn from_text(path: PathBuf, content: &str) -> Self {
+        Self::from_owned_text(path, content.to_owned())
+    }
+    pub fn from_owned_text(path: PathBuf, content: String) -> Self {
         let mut lines: Vec<String> = content.lines().map(ToOwned::to_owned).collect();
         if lines.is_empty() {
             lines.push(String::new());
@@ -93,6 +98,7 @@ impl TextDocument {
             lines,
             gutter_text,
             body_text,
+            source: content,
         }
     }
 
@@ -115,13 +121,28 @@ impl TextDocument {
     pub fn body_text(&self) -> &str {
         &self.body_text
     }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+    pub fn into_source(self) -> String {
+        self.source
+    }
 }
 
 /// Estado tipado do viewer de arquivo.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileViewerState {
     Loaded(TextDocument),
-    TooLarge { size_bytes: u64, max_bytes: u64 },
+    TooLarge {
+        size_bytes: u64,
+        max_bytes: u64,
+    },
+    LargePreview {
+        size_bytes: u64,
+        max_bytes: u64,
+        document: TextDocument,
+    },
     Binary(BinaryKind),
     Error(ViewerReadError),
 }
@@ -142,10 +163,7 @@ impl FileViewerState {
             return Self::Error(ViewerReadError::NotRegularFile);
         }
         if meta.len() > max_bytes {
-            return Self::TooLarge {
-                size_bytes: meta.len(),
-                max_bytes,
-            };
+            return Self::large_preview(path, meta.len(), max_bytes);
         }
 
         let file = match fs::File::open(path) {
@@ -161,18 +179,51 @@ impl FileViewerState {
         }
         let read_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         if read_len > max_bytes {
-            return Self::TooLarge {
-                size_bytes: read_len,
-                max_bytes,
-            };
+            return Self::large_preview(path, read_len, max_bytes);
         }
 
         if bytes.contains(&0) {
             return Self::Binary(BinaryKind::NullBytes);
         }
         match String::from_utf8(bytes) {
-            Ok(content) => Self::Loaded(TextDocument::from_text(path.to_path_buf(), &content)),
+            Ok(content) => Self::Loaded(TextDocument::from_owned_text(path.to_path_buf(), content)),
             Err(_) => Self::Binary(BinaryKind::InvalidUtf8),
+        }
+    }
+
+    fn large_preview(path: &Path, size_bytes: u64, max_bytes: u64) -> Self {
+        let fallback = Self::TooLarge {
+            size_bytes,
+            max_bytes,
+        };
+        let Ok(file) = fs::File::open(path) else {
+            return fallback;
+        };
+        let mut bytes = Vec::new();
+        if file
+            .take(max_bytes.min(LARGE_PREVIEW_BYTES))
+            .read_to_end(&mut bytes)
+            .is_err()
+        {
+            return fallback;
+        }
+        if bytes.contains(&0) {
+            return Self::Binary(BinaryKind::NullBytes);
+        }
+        let content = match std::str::from_utf8(&bytes) {
+            Ok(content) => content,
+            Err(error) if error.error_len().is_none() => {
+                match std::str::from_utf8(bytes.get(..error.valid_up_to()).unwrap_or_default()) {
+                    Ok(content) => content,
+                    Err(_) => return fallback,
+                }
+            }
+            Err(_) => return Self::Binary(BinaryKind::InvalidUtf8),
+        };
+        Self::LargePreview {
+            size_bytes,
+            max_bytes,
+            document: TextDocument::from_text(path.to_path_buf(), content),
         }
     }
 
@@ -183,6 +234,11 @@ impl FileViewerState {
             Self::TooLarge {
                 size_bytes,
                 max_bytes,
+            }
+            | Self::LargePreview {
+                size_bytes,
+                max_bytes,
+                ..
             } => Some(labels::format_viewer_too_large(*size_bytes, *max_bytes)),
             Self::Binary(kind) => Some(kind.ui_message().to_string()),
             Self::Error(err) => Some(err.ui_message()),
@@ -194,6 +250,15 @@ impl FileViewerState {
 pub fn view<'a, M: 'a>(state: &'a FileViewerState) -> Element<'a, M> {
     match state {
         FileViewerState::Loaded(doc) => view_document(doc),
+        FileViewerState::LargePreview {
+            size_bytes,
+            max_bytes,
+            document,
+        } => column![
+            text(labels::format_viewer_large_preview(*size_bytes, *max_bytes)).color(theme::WARN),
+            view_document(document),
+        ]
+        .into(),
         FileViewerState::TooLarge {
             size_bytes,
             max_bytes,
@@ -326,13 +391,14 @@ mod tests {
         let path = tmp.write("big.log", &[b'a'; 128]);
 
         let state = FileViewerState::load_with_limit(&path, 64);
-        assert_eq!(
+        assert!(matches!(
             state,
-            FileViewerState::TooLarge {
+            FileViewerState::LargePreview {
                 size_bytes: 128,
                 max_bytes: 64,
+                ..
             }
-        );
+        ));
         assert!(state
             .ui_notice()
             .unwrap()

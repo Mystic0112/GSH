@@ -1,0 +1,36 @@
+use crate::editor_pane::EditorMsg;
+use iced::keyboard;
+use iced::widget::text_editor::{self, Binding, KeyPress, Status};
+
+pub(crate) fn bind_key(key: KeyPress, page_lines: usize) -> Option<Binding<EditorMsg>> {
+    if matches!(key.status, Status::Focused { .. }) {
+        if key.modifiers.command() {
+            if let keyboard::Key::Character(c) = &key.key {
+                match c.to_lowercase().as_str() {
+                    "s" => return Some(Binding::Custom(EditorMsg::Save)),
+                    "z" if key.modifiers.shift() => return Some(Binding::Custom(EditorMsg::Redo)),
+                    "z" => return Some(Binding::Custom(EditorMsg::Undo)),
+                    "y" => return Some(Binding::Custom(EditorMsg::Redo)),
+                    _ => {}
+                }
+            }
+        }
+        if matches!(key.key, keyboard::Key::Named(keyboard::key::Named::Tab)) {
+            return Some(Binding::Insert('\t'));
+        }
+        let motion = match &key.key {
+            keyboard::Key::Named(keyboard::key::Named::PageUp) => Some(text_editor::Motion::Up),
+            keyboard::Key::Named(keyboard::key::Named::PageDown) => Some(text_editor::Motion::Down),
+            _ => None,
+        };
+        if let Some(motion) = motion {
+            let binding = if key.modifiers.shift() {
+                Binding::Select(motion)
+            } else {
+                Binding::Move(motion)
+            };
+            return Some(Binding::Sequence(vec![binding; page_lines]));
+        }
+    }
+    Binding::from_key_press(key)
+}

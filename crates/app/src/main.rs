@@ -18,6 +18,13 @@ pub mod chat_composer;
 pub mod chat_pane;
 pub mod chat_view;
 pub mod claude_hook_installer;
+pub mod editor_gutter;
+pub mod editor_highlight;
+pub mod editor_keys;
+pub mod editor_pane;
+pub mod editor_scroll;
+pub mod editor_state;
+pub mod editor_view;
 pub mod file_tree;
 pub mod file_viewer;
 pub mod files_panel;
@@ -35,6 +42,8 @@ pub mod island;
 pub mod labels;
 pub mod pane_chrome;
 pub mod pane_model;
+pub mod pane_strip;
+pub mod pane_tab;
 pub mod panel_widgets;
 pub mod rail;
 pub mod terminal_canvas;
@@ -77,6 +86,11 @@ enum Msg {
     Files(FilesMsg),
     Git(git_panel::GitMsg),
     GitResult(git_state::ResultMsg),
+    Editor(PathBuf, editor_pane::EditorMsg),
+    WindowCloseRequested(iced::window::Id),
+    ConfirmWindowClose,
+    CancelWindowClose,
+    WindowUnfocused,
     StatusTick,
     SelectTab(usize),
     CloseTab(usize),
@@ -97,6 +111,8 @@ struct Shell {
     terminals: BTreeMap<TermId, TerminalPane>,
     chats: BTreeMap<ChatId, ChatPane>,
     file_viewers: BTreeMap<PathBuf, FileViewerState>,
+    editors: BTreeMap<PathBuf, editor_pane::EditorPane>,
+    pending_window_close: Option<iced::window::Id>,
     workspaces: WorkspaceList,
     file_tree: FileTree,
     git: git_state::GitState,
@@ -135,6 +151,8 @@ impl Default for Shell {
             terminals,
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
+            editors: BTreeMap::new(),
+            pending_window_close: None,
             workspaces,
             file_tree,
             git,
@@ -211,6 +229,9 @@ impl Shell {
     }
 
     fn reveal_terminal_by_pane_id(&mut self, pane_id: &str) {
+        for editor in self.editors.values_mut() {
+            editor.state.cancel_close();
+        }
         let Some(target_id) = term_id_from_pane_id(pane_id) else {
             return;
         };
@@ -255,7 +276,39 @@ impl Shell {
     }
 
     fn update(&mut self, msg: Msg) -> Task<Msg> {
+        if matches!(
+            &msg,
+            Msg::SelectTab(_)
+                | Msg::Files(FilesMsg::SelectFile(_))
+                | Msg::NewTerminalTab
+                | Msg::NewChatTab
+                | Msg::WindowUnfocused
+        ) {
+            for editor in self.editors.values_mut() {
+                editor.state.cancel_close();
+            }
+        }
         match msg {
+            Msg::WindowCloseRequested(id) => {
+                if self.editors.values().any(|e| e.state.buffer.is_dirty()) {
+                    self.pending_window_close = Some(id);
+                    Task::none()
+                } else {
+                    iced::window::close(id)
+                }
+            }
+            Msg::ConfirmWindowClose => self
+                .pending_window_close
+                .take()
+                .map_or_else(Task::none, iced::window::close),
+            Msg::CancelWindowClose => {
+                self.pending_window_close = None;
+                Task::none()
+            }
+            Msg::WindowUnfocused => {
+                self.pending_window_close = None;
+                Task::none()
+            }
             Msg::StatusTick => {
                 if self.status_runtime.drain_deliveries(now_epoch_ms()) {
                     self.sync_island_from_status();
@@ -337,14 +390,39 @@ impl Shell {
                     Task::none()
                 }
             }
+            Msg::Editor(path, msg) => {
+                if let Some(editor) = self.editors.get_mut(&path) {
+                    editor
+                        .update(msg)
+                        .map(move |message| Msg::Editor(path.clone(), message))
+                } else {
+                    Task::none()
+                }
+            }
             Msg::Files(files_msg) => {
                 match files_msg {
                     FilesMsg::ToggleDir(dir) => self.file_tree.toggle_dir(&dir),
                     FilesMsg::SelectFile(file_path) => {
                         let ViewerHook::OpenFile(target) = self.file_tree.select_file(file_path);
-                        self.file_viewers
-                            .entry(target.clone())
-                            .or_insert_with(|| FileViewerState::load(&target));
+                        let target = target.canonicalize().unwrap_or(target);
+                        if !self.editors.contains_key(&target)
+                            && !self.file_viewers.contains_key(&target)
+                        {
+                            match FileViewerState::load(&target) {
+                                FileViewerState::Loaded(doc) => {
+                                    self.editors.insert(
+                                        target.clone(),
+                                        editor_pane::EditorPane::new(
+                                            target.clone(),
+                                            doc.into_source(),
+                                        ),
+                                    );
+                                }
+                                fallback => {
+                                    self.file_viewers.insert(target.clone(), fallback);
+                                }
+                            }
+                        }
                         self.pane_model.open_file(target);
                     }
                     FilesMsg::CollapseAll => self.file_tree.collapse_all(),
@@ -438,6 +516,19 @@ impl Shell {
                 Task::none()
             }
             Msg::CloseTab(idx) => {
+                if self.pane_model.active_index() != Some(idx) {
+                    for editor in self.editors.values_mut() {
+                        editor.state.cancel_close();
+                    }
+                }
+                if let Some(PaneTab::File(path)) = self.pane_model.tabs().get(idx) {
+                    if let Some(editor) = self.editors.get_mut(path) {
+                        if !editor.state.request_close() {
+                            self.pane_model.activate(idx);
+                            return Task::none();
+                        }
+                    }
+                }
                 if let Some(removed) = self.pane_model.close(idx) {
                     match removed {
                         PaneTab::Terminal(id) => {
@@ -456,6 +547,7 @@ impl Shell {
                         }
                         PaneTab::File(path) => {
                             self.file_viewers.remove(&path);
+                            self.editors.remove(&path);
                         }
                     }
                 }
@@ -527,7 +619,12 @@ impl Shell {
             _ => Subscription::none(),
         };
 
-        Subscription::batch([status_sub, active_sub])
+        let windows = iced::window::events().filter_map(|(id, event)| match event {
+            iced::window::Event::CloseRequested => Some(Msg::WindowCloseRequested(id)),
+            iced::window::Event::Unfocused => Some(Msg::WindowUnfocused),
+            _ => None,
+        });
+        Subscription::batch([status_sub, active_sub, windows])
     }
 
     fn view(&self) -> Element<'_, Msg> {
@@ -560,11 +657,19 @@ impl Shell {
                 .get(&id)
                 .map(|chat| chat.view().map(move |m| Msg::Chat(id, m)))
                 .unwrap_or_else(pane_chrome::view_empty_body),
-            Some(PaneTab::File(path)) => self
-                .file_viewers
-                .get(path)
-                .map(file_viewer::view)
-                .unwrap_or_else(pane_chrome::view_empty_body),
+            Some(PaneTab::File(path)) => {
+                if let Some(editor) = self.editors.get(path) {
+                    let path = path.clone();
+                    editor
+                        .view()
+                        .map(move |message| Msg::Editor(path.clone(), message))
+                } else {
+                    self.file_viewers
+                        .get(path)
+                        .map(file_viewer::view)
+                        .unwrap_or_else(pane_chrome::view_empty_body)
+                }
+            }
             None => pane_chrome::view_empty_body(),
         };
 
@@ -577,6 +682,11 @@ impl Shell {
                 on_new_terminal: Msg::NewTerminalTab,
                 on_new_chat: Msg::NewChatTab,
                 noop_msg: Msg::Noop,
+            },
+            &|path| {
+                self.editors
+                    .get(path)
+                    .is_some_and(|editor| editor.state.buffer.is_dirty())
             },
         );
 
@@ -605,7 +715,18 @@ impl Shell {
             }
         }
 
-        let base = container(column![top, body].width(Fill).height(Fill))
+        let mut root = column![top].width(Fill).height(Fill);
+        if self.pending_window_close.is_some() {
+            root = root.push(
+                row![
+                    iced::widget::text(labels::EDITOR_CONFIRM_WINDOW).color(theme::WARN),
+                    iced::widget::button(labels::EDITOR_DISCARD).on_press(Msg::ConfirmWindowClose),
+                    iced::widget::button(labels::EDITOR_CANCEL).on_press(Msg::CancelWindowClose),
+                ]
+                .spacing(12),
+            );
+        }
+        let base = container(root.push(body))
             .width(Fill)
             .height(Fill)
             .style(|_: &Theme| container::Style {
@@ -640,6 +761,10 @@ impl Shell {
 
 fn main() -> iced::Result {
     let mut app = iced::application(Shell::default, Shell::update, Shell::view)
+        .window(iced::window::Settings {
+            exit_on_close_request: false,
+            ..Default::default()
+        })
         .subscription(Shell::subscription)
         .default_font(theme::FONT_BODY)
         .title(labels::APP_TITLE);
@@ -689,6 +814,8 @@ mod tests {
             terminals,
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
+            editors: BTreeMap::new(),
+            pending_window_close: None,
             workspaces,
             file_tree: FileTree::new(),
             git: git_state::GitState::default(),
@@ -696,6 +823,70 @@ mod tests {
             files_open: true,
             static_test_mode: true,
         }
+    }
+
+    #[test]
+    fn janela_suja_pede_confirmacao_e_perda_de_foco_cancela() {
+        use iced::widget::text_editor::{Action, Edit};
+        let mut shell = test_shell();
+        let path = std::env::temp_dir().join(format!("gsh-window-editor-{}", std::process::id()));
+        std::fs::write(&path, "original").unwrap();
+        let _ = shell.update(Msg::Files(FilesMsg::SelectFile(path.clone())));
+        let _ = shell.update(Msg::Editor(
+            path.clone(),
+            editor_pane::EditorMsg::Action(Action::Edit(Edit::Insert('x'))),
+        ));
+        let id = iced::window::Id::unique();
+        let _ = shell.update(Msg::WindowCloseRequested(id));
+        assert_eq!(shell.pending_window_close, Some(id));
+        let _ = shell.update(Msg::WindowUnfocused);
+        assert!(shell.pending_window_close.is_none());
+        assert!(shell.editors.get(&path).unwrap().state.buffer.is_dirty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn alias_de_arquivo_abre_uma_unica_aba() {
+        let dir = std::env::temp_dir().join(format!("gsh-alias-editor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("file.rs");
+        let alias = dir.join("alias.rs");
+        std::fs::write(&file, "abc").unwrap();
+        std::os::unix::fs::symlink(&file, &alias).unwrap();
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::Files(FilesMsg::SelectFile(file.clone())));
+        let _ = shell.update(Msg::Files(FilesMsg::SelectFile(alias)));
+        assert_eq!(shell.editors.len(), 1);
+        assert_eq!(shell.pane_model.tabs().len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn editor_confirma_fechamento_e_preserva_arquivo_sem_salvar() {
+        use iced::widget::text_editor::{Action, Edit};
+        let mut shell = test_shell();
+        let path = std::env::temp_dir().join(format!("gsh-shell-editor-{}", std::process::id()));
+        std::fs::write(&path, "original\n").expect("arquivo de teste");
+        let _ = shell.update(Msg::Files(FilesMsg::SelectFile(path.clone())));
+        let _ = shell.update(Msg::Editor(
+            path.clone(),
+            editor_pane::EditorMsg::Action(Action::Edit(Edit::Insert('x'))),
+        ));
+        assert!(shell.editors.get(&path).unwrap().state.buffer.is_dirty());
+        let _ = shell.update(Msg::CloseTab(1));
+        assert_eq!(shell.pane_model.tabs().len(), 2);
+        assert!(matches!(
+            shell.editors.get(&path).unwrap().state.notice,
+            Some(editor_state::EditorNotice::ConfirmClose)
+        ));
+        let _ = shell.update(Msg::SelectTab(0));
+        let _ = shell.update(Msg::CloseTab(1));
+        assert!(shell.editors.contains_key(&path));
+        let _ = shell.update(Msg::CloseTab(1));
+        assert!(!shell.editors.contains_key(&path));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original\n");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -725,10 +916,10 @@ mod tests {
             &[PaneTab::Terminal(1), PaneTab::File(target_file.clone())]
         );
         assert_eq!(shell.pane_model.active_index(), Some(1));
-        assert!(matches!(
-            shell.file_viewers.get(&target_file),
-            Some(FileViewerState::Loaded(doc)) if doc.line_count() == 2
-        ));
+        assert_eq!(
+            shell.editors.get(&target_file).unwrap().state.buffer.text(),
+            "# GSH\nLinha 2\n"
+        );
 
         // Clica novamente no mesmo arquivo depois de voltar ao terminal -> só ativa a aba existente
         let _ = shell.update(Msg::SelectTab(0));

@@ -48,7 +48,21 @@ pub const CHAT_CMD_PREFIX: &str = "$ ";
 pub const CHAT_TOOL_NAME_PAD: &str = "  ";
 
 // Viewer de arquivo (estados tipados de limite, binário e erro de leitura)
-pub const VIEWER_TOO_LARGE_PREFIX: &str = "Arquivo muito grande para exibir no viewer (";
+pub const VIEWER_TOO_LARGE_PREFIX: &str = "Arquivo acima do limite de edição (";
+pub const EDITOR_CONFIRM_CLOSE: &str =
+    "Alterações não salvas. Clique novamente em fechar para descartá-las.";
+pub const EDITOR_CONFIRM_WINDOW: &str = "Há alterações não salvas. Descartar e fechar a janela?";
+pub const EDITOR_DISCARD: &str = "Descartar e fechar";
+pub const EDITOR_CANCEL: &str = "Cancelar";
+pub const EDITOR_EXTERNAL_CHANGE: &str = "O arquivo mudou no disco. Confirme para sobrescrever.";
+pub const EDITOR_OVERWRITE: &str = "Sobrescrever arquivo";
+pub const EDITOR_SAVE_ERROR: &str = "Não foi possível salvar: ";
+pub const EDITOR_INVALID_POSITION: &str = "Posição de edição inválida.";
+pub const EDITOR_READ_ONLY: &str = "O arquivo é somente leitura.";
+pub const EDITOR_DIRTY: &str = "●";
+pub const EDITOR_DIRTY_TOOLTIP: &str = "Alterações não salvas";
+pub const EDITOR_CLEAN: &str = "";
+pub const VIEWER_LARGE_PREVIEW: &str = "Somente leitura: exibindo uma prévia do início do arquivo.";
 pub const VIEWER_TOO_LARGE_LIMIT_SEP: &str = " MiB; limite: ";
 pub const VIEWER_TOO_LARGE_SUFFIX: &str = " MiB).";
 pub const VIEWER_BINARY_NULL_BYTES: &str =
@@ -220,6 +234,22 @@ pub fn format_agent_tab_name(harness_label: Option<&str>, tab_title: &str) -> St
 }
 
 /// Aviso formatado quando o arquivo excede o limite do viewer (`max_bytes`).
+pub fn format_viewer_large_preview(size_bytes: u64, max_bytes: u64) -> String {
+    format!(
+        "{} {VIEWER_LARGE_PREVIEW}",
+        format_viewer_too_large(size_bytes, max_bytes)
+    )
+}
+
+pub fn format_editor_error(error: &gsh_editor::EditorError) -> String {
+    match error {
+        gsh_editor::EditorError::InvalidPosition => EDITOR_INVALID_POSITION.to_owned(),
+        gsh_editor::EditorError::ReadOnly => EDITOR_READ_ONLY.to_owned(),
+        gsh_editor::EditorError::ModifiedOnDisk => EDITOR_EXTERNAL_CHANGE.to_owned(),
+        gsh_editor::EditorError::Save(detail) => format!("{EDITOR_SAVE_ERROR}{detail}"),
+    }
+}
+
 pub fn format_viewer_too_large(size_bytes: u64, max_bytes: u64) -> String {
     const MIB: f64 = (1024 * 1024) as f64;
     let size_mib = (size_bytes as f64) / MIB;
