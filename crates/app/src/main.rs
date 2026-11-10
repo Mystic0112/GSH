@@ -438,7 +438,7 @@ impl Shell {
             Some(&PaneTab::Chat(id)) => self
                 .chats
                 .get(&id)
-                .map(|chat| chat.subscription().map(move |m| Msg::Chat(id, m)))
+                .map(|chat| chat.subscription().with(id).map(|(id, m)| Msg::Chat(id, m)))
                 .unwrap_or_else(Subscription::none),
             _ => Subscription::none(),
         };
