@@ -1,6 +1,7 @@
 //! Estado e persistência das configurações gerais.
 
 mod appearance;
+mod controls;
 pub mod view;
 
 use std::path::{Path, PathBuf};
@@ -9,6 +10,11 @@ use std::path::{Path, PathBuf};
 pub enum Error {
     InvalidLocale,
     InvalidInterfaceSize,
+    InvalidShell,
+    InvalidScrollback,
+    InvalidTerminalSize,
+    InvalidTabSize,
+    InvalidSection,
     Config(gsh_config::ConfigError),
     Io(std::io::Error),
     Document(toml_edit::TomlError),
@@ -21,12 +27,41 @@ pub enum Message {
     ShowAppearance(bool),
     InterfaceSizeChanged(String),
     SaveAppearance,
+    Select(Section),
+    ShellChanged(String),
+    ScrollbackChanged(String),
+    TerminalSizeChanged(String),
+    TabSizeChanged(String),
+    HighlightChanged(bool),
+    WrapChanged(bool),
+    NotificationsChanged(bool),
+    DarkSelected,
+    SaveControls,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    General,
+    Appearance,
+    Terminal,
+    Editor,
+    Notifications,
 }
 
 pub struct Settings {
     path: Result<PathBuf, gsh_config::ConfigError>,
     pub locale: String,
     pub appearance: bool,
+    pub section: Section,
+    pub shell: String,
+    pub scrollback: String,
+    pub terminal_size: String,
+    pub tab_size: String,
+    pub highlight: bool,
+    pub wrap: bool,
+    pub notifications: bool,
+    pub theme_mode: gsh_config::schema::AppThemeMode,
+    pub current: gsh_config::Config,
     pub interface_size: String,
     pub scale: f32,
     pub error: Option<Error>,
@@ -39,6 +74,16 @@ impl Default for Settings {
             path: gsh_config::default_path(),
             locale: String::new(),
             appearance: false,
+            section: Section::General,
+            shell: gsh_term::default_shell().to_owned(),
+            scrollback: String::from("10000"),
+            terminal_size: String::from("13"),
+            tab_size: String::from("4"),
+            highlight: true,
+            wrap: false,
+            notifications: true,
+            theme_mode: gsh_config::schema::AppThemeMode::System,
+            current: gsh_config::Config::default(),
             interface_size: String::from("14"),
             scale: 1.0,
             error: None,
@@ -53,7 +98,20 @@ impl Settings {
         match &self.path {
             Ok(path) => match gsh_config::load(path) {
                 Ok(config) => {
-                    self.locale = config.locale.unwrap_or_default();
+                    self.locale = config.locale.clone().unwrap_or_default();
+                    self.shell = config
+                        .terminal
+                        .shell
+                        .clone()
+                        .unwrap_or_else(|| gsh_term::default_shell().to_owned());
+                    self.scrollback = config.terminal.scrollback.to_string();
+                    self.terminal_size = config.effective_terminal_size().to_string();
+                    self.tab_size = config.editor.tab_size.to_string();
+                    self.highlight = config.editor.syntax_highlight;
+                    self.wrap = config.editor.word_wrap;
+                    self.notifications = config.notifications_enabled;
+                    self.theme_mode = config.theme_mode;
+                    self.current = config.clone();
                     self.interface_size = config.interface_size.to_string();
                     self.scale = (config.interface_size.clamp(10.0, 20.0) / 14.0) as f32;
                     self.error = None;
@@ -66,6 +124,62 @@ impl Settings {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::Select(section) => {
+                self.section = section;
+                self.error = None;
+                self.saved = false;
+            }
+            Message::ShellChanged(v) => {
+                self.shell = v;
+                self.saved = false;
+                self.error = None;
+            }
+            Message::ScrollbackChanged(v) => {
+                self.scrollback = v;
+                self.saved = false;
+                self.error = None;
+            }
+            Message::TerminalSizeChanged(v) => {
+                self.terminal_size = v;
+                self.saved = false;
+                self.error = None;
+            }
+            Message::TabSizeChanged(v) => {
+                self.tab_size = v;
+                self.saved = false;
+                self.error = None;
+            }
+            Message::HighlightChanged(v) => {
+                self.highlight = v;
+                self.saved = false;
+                self.error = None;
+            }
+            Message::WrapChanged(v) => {
+                self.wrap = v;
+                self.saved = false;
+                self.error = None;
+            }
+            Message::NotificationsChanged(v) => {
+                self.notifications = v;
+                self.saved = false;
+                self.error = None;
+            }
+            Message::DarkSelected => {
+                self.theme_mode = gsh_config::schema::AppThemeMode::Dark;
+                self.saved = false;
+            }
+            Message::SaveControls => {
+                let result = match &self.path {
+                    Ok(path) => controls::save(path, self),
+                    Err(_) => Err(Error::Config(gsh_config::ConfigError::NoHome)),
+                };
+                if let Ok(config) = &result {
+                    self.current = config.clone();
+                    self.scale = (config.interface_size.clamp(10.0, 20.0) / 14.0) as f32;
+                }
+                self.saved = result.is_ok();
+                self.error = result.err();
+            }
             Message::ShowAppearance(value) => {
                 self.appearance = value;
                 self.error = None;

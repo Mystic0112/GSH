@@ -25,6 +25,7 @@ pub struct EditorPane {
     pub(crate) highlight_text: std::sync::Arc<str>,
     pub(crate) gutter: crate::editor_gutter::Gutter,
     pub(crate) longest_line: usize,
+    pub(crate) config: gsh_config::schema::Editor,
 }
 impl EditorPane {
     pub fn new(path: std::path::PathBuf, text: String) -> Self {
@@ -43,7 +44,15 @@ impl EditorPane {
             highlight_text,
             gutter,
             longest_line,
+            config: gsh_config::schema::Editor::default(),
         }
+    }
+    pub fn with_config(mut self, config: gsh_config::schema::Editor) -> Self {
+        self.set_config(config);
+        self
+    }
+    pub fn set_config(&mut self, config: gsh_config::schema::Editor) {
+        self.config = config;
     }
     pub fn update(&mut self, msg: EditorMsg) -> Task<EditorMsg> {
         match msg {

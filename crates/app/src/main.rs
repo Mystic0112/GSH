@@ -147,7 +147,12 @@ impl Default for Shell {
         let mut terminals = BTreeMap::new();
         terminals.insert(
             1,
-            TerminalPane::new_with_env(initial_pane_id, active_path.as_deref(), initial_env),
+            TerminalPane::new_with_config(
+                initial_pane_id,
+                active_path.as_deref(),
+                initial_env,
+                settings.current.clone(),
+            ),
         );
 
         let mut file_tree = FileTree::new();
@@ -209,7 +214,7 @@ impl Shell {
                 .with_pane_id(pane_id)
                 .with_spawn_env(hook_env)
         } else {
-            TerminalPane::new_with_env(pane_id, cwd, hook_env)
+            TerminalPane::new_with_config(pane_id, cwd, hook_env, self.settings.current.clone())
         }
     }
 
@@ -427,7 +432,8 @@ impl Shell {
                                         editor_pane::EditorPane::new(
                                             target.clone(),
                                             doc.into_source(),
-                                        ),
+                                        )
+                                        .with_config(self.settings.current.editor.clone()),
                                     );
                                 }
                                 fallback => {
@@ -576,6 +582,11 @@ impl Shell {
             }
             Msg::Settings(message) => {
                 self.settings.update(message);
+                if self.settings.saved {
+                    for editor in self.editors.values_mut() {
+                        editor.set_config(self.settings.current.editor.clone());
+                    }
+                }
                 Task::none()
             }
             Msg::OpenFarm => {
