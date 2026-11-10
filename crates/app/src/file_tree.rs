@@ -49,12 +49,13 @@ impl TreeReadError {
     }
 }
 
-/// Ponto de extensão para quando um arquivo é clicado na árvore:
-/// nesta fase apenas destaca a linha selecionada; na próxima fase abrirá o viewer.
+/// Ação disparada quando um arquivo é clicado na árvore (`onTap` em
+/// `file_tree_panel.dart` do Flutter): seleciona a linha e abre/ativa a aba
+/// `File` no pane central.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewerHook {
-    /// Arquivo selecionado na árvore, aguardando integração da aba de viewer.
-    PendingViewer(PathBuf),
+    /// Arquivo selecionado na árvore para abrir ou ativar como aba no viewer.
+    OpenFile(PathBuf),
 }
 
 /// Linha visível achatada pronta para renderização no painel de arquivos.
@@ -187,10 +188,10 @@ impl FileTree {
         }
     }
 
-    /// Seleciona um arquivo e devolve o [`ViewerHook`] para a futura aba de viewer.
+    /// Seleciona um arquivo e devolve o [`ViewerHook`] para abrir/ativar a aba de viewer.
     pub fn select_file(&mut self, file_path: PathBuf) -> ViewerHook {
         self.selected_file = Some(file_path.clone());
-        ViewerHook::PendingViewer(file_path)
+        ViewerHook::OpenFile(file_path)
     }
 
     /// Recolhe todas as subpastas abertas.
@@ -337,7 +338,7 @@ mod tests {
 
         // Seleciona `lib.rs`
         let hook = tree.select_file(lib_file.clone());
-        assert_eq!(hook, ViewerHook::PendingViewer(lib_file.clone()));
+        assert_eq!(hook, ViewerHook::OpenFile(lib_file.clone()));
         assert_eq!(tree.selected_file(), Some(lib_file.as_path()));
 
         // Recolhe `src`: volta a ter apenas 1 linha visível

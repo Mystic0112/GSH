@@ -2,7 +2,7 @@
 //! `iced`, teclado (`keyboard::listen`), área de transferência
 //! (`Ctrl+Shift+C`/`Ctrl+Shift+V`), mouse (scrollback e seleção) e resize.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gsh_term::{Cell, Cursor, GridPos, ShellCommand, TermSession, TermSnapshot};
@@ -54,6 +54,7 @@ pub struct TerminalPane {
     selection: Option<SelectionRange>,
     cache: canvas::Cache,
     metrics: CellMetrics,
+    cwd: Option<PathBuf>,
     has_spawn_error: bool,
 }
 
@@ -76,9 +77,11 @@ impl TerminalPane {
     }
 
     /// Reinicia a sessão de terminal no diretório `cwd` preservando `(cols, rows)` atuais.
-    /// Em modo estático de teste (`session.is_none()` e `!has_spawn_error`), mantém o snapshot.
+    /// Em modo estático de teste (`session.is_none()` e `!has_spawn_error`), mantém o snapshot
+    /// e apenas atualiza `cwd`.
     pub fn respawn_in_dir(&mut self, cwd: Option<&Path>) {
         if self.session.is_none() && !self.has_spawn_error {
+            self.cwd = cwd.map(Path::to_path_buf);
             return;
         }
         let (cols, rows) = self.size();
@@ -90,14 +93,20 @@ impl TerminalPane {
         if let Some(dir) = cwd {
             cmd = cmd.cwd(dir);
         }
+        let cwd_owned = cwd.map(Path::to_path_buf);
         match TermSession::spawn(cmd, cols, rows) {
-            Ok(session) => Self::with_session(session),
+            Ok(session) => {
+                let mut pane = Self::with_session(session);
+                pane.cwd = cwd_owned;
+                pane
+            }
             Err(_) => Self {
                 session: None,
                 snapshot: empty_snapshot(cols, rows),
                 selection: None,
                 cache: canvas::Cache::new(),
                 metrics: CellMetrics::default(),
+                cwd: cwd_owned,
                 has_spawn_error: true,
             },
         }
@@ -112,20 +121,37 @@ impl TerminalPane {
             selection: None,
             cache: canvas::Cache::new(),
             metrics: CellMetrics::default(),
+            cwd: None,
             has_spawn_error: false,
         }
     }
 
     /// Constrói um [`TerminalPane`] estático a partir de um [`TermSnapshot`] (útil para testes).
     pub fn from_snapshot(snapshot: TermSnapshot) -> Self {
+        Self::from_snapshot_in_dir(snapshot, None)
+    }
+
+    /// Constrói um [`TerminalPane`] estático associado a `cwd` (útil para testes).
+    pub fn from_snapshot_in_dir(snapshot: TermSnapshot, cwd: Option<PathBuf>) -> Self {
         Self {
             session: None,
             snapshot,
             selection: None,
             cache: canvas::Cache::new(),
             metrics: CellMetrics::default(),
+            cwd,
             has_spawn_error: false,
         }
+    }
+
+    /// Diretório de trabalho configurado para esta aba de terminal.
+    pub fn cwd(&self) -> Option<&Path> {
+        self.cwd.as_deref()
+    }
+
+    /// Encerra explicitamente a sessão PTY associada a esta aba, se ativa.
+    pub fn close_session(&mut self) {
+        let _ = self.session.take();
     }
 
     /// Fotografia atual do grid visível.

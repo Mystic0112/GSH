@@ -19,7 +19,7 @@ use crate::theme;
 pub enum FilesMsg {
     /// Expande ou recolhe uma pasta na árvore.
     ToggleDir(PathBuf),
-    /// Seleciona um arquivo na árvore (ponto de integração com o futuro viewer).
+    /// Clique simples num arquivo na árvore: seleciona e abre/ativa sua aba no pane central.
     SelectFile(PathBuf),
     /// Recolhe todas as pastas expandidas.
     CollapseAll,

@@ -19,7 +19,21 @@ pub const DEFAULT_REALM: &str = "Padrão";
 
 pub const DEFAULT_TAB_TITLE: &str = "Terminal";
 pub const PANES_PLACEHOLDER: &str = "Terminal (spike de PTY ainda não ligado)";
+pub const PANE_EMPTY_STATE: &str = "Nenhuma aba aberta — clique em + para abrir um terminal.";
 pub const TERMINAL_SPAWN_ERROR: &str = "Não foi possível iniciar a sessão do terminal.";
+
+// Viewer de arquivo (estados tipados de limite, binário e erro de leitura)
+pub const VIEWER_TOO_LARGE_PREFIX: &str = "Arquivo muito grande para exibir no viewer (";
+pub const VIEWER_TOO_LARGE_LIMIT_SEP: &str = " MiB; limite: ";
+pub const VIEWER_TOO_LARGE_SUFFIX: &str = " MiB).";
+pub const VIEWER_BINARY_NULL_BYTES: &str =
+    "Arquivo binário detectado (contém bytes nulos) — visualização de texto indisponível.";
+pub const VIEWER_BINARY_INVALID_UTF8: &str =
+    "Arquivo binário ou codificação não UTF-8 — visualização de texto indisponível.";
+pub const VIEWER_ERR_NOT_FOUND: &str = "Arquivo não encontrado.";
+pub const VIEWER_ERR_PERMISSION: &str = "Permissão negada ao ler o arquivo.";
+pub const VIEWER_ERR_NOT_FILE: &str = "O caminho selecionado não é um arquivo regular.";
+pub const VIEWER_ERR_IO_PREFIX: &str = "Erro ao ler arquivo: ";
 
 pub const FILES_HEADER: &str = "Arquivos";
 pub const FILES_SECTION_UPPER: &str = "ARQUIVOS";
@@ -47,6 +61,11 @@ pub const ICON_SETTINGS: &str = "⚙";
 pub const ICON_CHEVRON_DOWN: &str = "▾";
 pub const ICON_CHEVRON_RIGHT: &str = "▸";
 pub const ICON_FILE_ITEM: &str = "◦";
+pub const ICON_FILE_CODE: &str = "‹›";
+pub const ICON_FILE_CONFIG: &str = "⚙";
+pub const ICON_FILE_DOC: &str = "¶";
+pub const ICON_FILE_LOCK: &str = "⚲";
+pub const ICON_FILE_GENERIC: &str = "≡";
 
 // Ilha de agentes — seções do painel (na ordem exata de `agent_island_panel.dart`)
 pub const SECTION_ASKS: &str = "Pedem permissão";
@@ -106,5 +125,31 @@ pub fn format_tool_line(tool_name: &str, input_summary: &str) -> String {
         tool_name.to_string()
     } else {
         format!("{tool_name}{TOOL_SUMMARY_SEPARATOR}{input_summary}")
+    }
+}
+
+/// Aviso formatado quando o arquivo excede o limite do viewer (`max_bytes`).
+pub fn format_viewer_too_large(size_bytes: u64, max_bytes: u64) -> String {
+    const MIB: f64 = (1024 * 1024) as f64;
+    let size_mib = (size_bytes as f64) / MIB;
+    let max_mib = (max_bytes as f64) / MIB;
+    format!(
+        "{VIEWER_TOO_LARGE_PREFIX}{size_mib:.2}{VIEWER_TOO_LARGE_LIMIT_SEP}{max_mib:.0}{VIEWER_TOO_LARGE_SUFFIX}"
+    )
+}
+
+/// Resolve o ícone tipográfico de uma aba de arquivo a partir do nome do arquivo
+/// (`FileTypeIcon.file(name)` no Flutter).
+pub fn file_icon_for_name(file_name: &str) -> &'static str {
+    let lower = file_name.to_ascii_lowercase();
+    let ext = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    match ext {
+        "rs" | "dart" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "c" | "cpp" | "h" | "sh"
+        | "html" | "css" | "sql" => ICON_FILE_CODE,
+        "toml" | "json" | "yaml" | "yml" | "ini" | "conf" | "env" => ICON_FILE_CONFIG,
+        "md" | "mdx" | "txt" | "rst" => ICON_FILE_DOC,
+        "lock" => ICON_FILE_LOCK,
+        _ if lower.starts_with(".env") => ICON_FILE_CONFIG,
+        _ => ICON_FILE_GENERIC,
     }
 }
