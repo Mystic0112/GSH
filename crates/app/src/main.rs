@@ -14,6 +14,9 @@
 
 pub mod agent_island_panel;
 pub mod agent_status;
+pub mod chat_composer;
+pub mod chat_pane;
+pub mod chat_view;
 pub mod claude_hook_installer;
 pub mod file_tree;
 pub mod file_viewer;
@@ -42,12 +45,13 @@ use iced::{Background, Element, Fill, Padding, Subscription, Task, Theme};
 use crate::agent_status::{
     now_epoch_ms, pane_id_for_term, term_id_from_pane_id, PaneDescriptor, StatusRuntime,
 };
+use crate::chat_pane::{ChatMsg, ChatPane};
 use crate::file_tree::{FileTree, ViewerHook};
 use crate::file_viewer::FileViewerState;
 use crate::files_panel::FilesMsg;
 use crate::island::{AgentIsland, IslandMsg, PermissionDecision};
 use crate::pane_chrome::ChromeCallbacks;
-use crate::pane_model::{PaneModel, PaneTab, TermId};
+use crate::pane_model::{ChatId, PaneModel, PaneTab, TermId};
 use crate::terminal_input::{classify_key_press, KeyAction};
 use crate::terminal_pane::{TerminalMsg, TerminalPane};
 use crate::topbar::TopbarProps;
@@ -59,11 +63,13 @@ const STATUS_POLL_INTERVAL_MS: u64 = 50;
 enum Msg {
     Island(IslandMsg),
     Terminal(TerminalMsg),
+    Chat(ChatId, ChatMsg),
     Files(FilesMsg),
     StatusTick,
     SelectTab(usize),
     CloseTab(usize),
     NewTerminalTab,
+    NewChatTab,
     SelectWorkspace(usize),
     PickWorkspaceFolder,
     WorkspaceFolderPicked(Option<PathBuf>),
@@ -77,6 +83,7 @@ struct Shell {
     island: AgentIsland,
     pane_model: PaneModel,
     terminals: BTreeMap<TermId, TerminalPane>,
+    chats: BTreeMap<ChatId, ChatPane>,
     file_viewers: BTreeMap<PathBuf, FileViewerState>,
     workspaces: WorkspaceList,
     file_tree: FileTree,
@@ -111,6 +118,7 @@ impl Default for Shell {
             island,
             pane_model,
             terminals,
+            chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
             workspaces,
             file_tree,
@@ -175,7 +183,7 @@ impl Shell {
                     labels::DEFAULT_TAB_TITLE,
                     workspace_name.clone(),
                 )),
-                PaneTab::File(_) => None,
+                PaneTab::Chat(_) | PaneTab::File(_) => None,
             })
             .collect()
     }
@@ -212,6 +220,13 @@ impl Shell {
                 term.respawn_in_dir(Some(dir));
             }
         }
+        let next_branch = self
+            .workspaces
+            .active()
+            .and_then(|ws| ws.git_branch.clone());
+        for chat in self.chats.values_mut() {
+            chat.set_workspace(next_path.clone(), next_branch.clone());
+        }
         self.sync_island_from_status();
     }
 
@@ -227,6 +242,9 @@ impl Shell {
             Msg::StatusTick => {
                 if self.status_runtime.drain_deliveries(now_epoch_ms()) {
                     self.sync_island_from_status();
+                }
+                for chat in self.chats.values_mut() {
+                    chat.poll_events();
                 }
                 Task::none()
             }
@@ -289,6 +307,13 @@ impl Shell {
                     Task::none()
                 }
             }
+            Msg::Chat(id, chat_msg) => {
+                if let Some(chat) = self.chats.get_mut(&id) {
+                    chat.update(chat_msg).map(move |m| Msg::Chat(id, m))
+                } else {
+                    Task::none()
+                }
+            }
             Msg::Files(files_msg) => {
                 match files_msg {
                     FilesMsg::ToggleDir(dir) => self.file_tree.toggle_dir(&dir),
@@ -316,6 +341,11 @@ impl Shell {
                                 self.sync_island_from_status();
                             }
                         }
+                        PaneTab::Chat(id) => {
+                            if let Some(chat) = self.chats.get_mut(&id) {
+                                chat.poll_events();
+                            }
+                        }
                         PaneTab::File(path) => {
                             let _ = self.file_tree.select_file(path);
                         }
@@ -335,6 +365,11 @@ impl Shell {
                                 self.sync_island_from_status();
                             }
                         }
+                        PaneTab::Chat(id) => {
+                            if let Some(mut chat) = self.chats.remove(&id) {
+                                chat.close();
+                            }
+                        }
                         PaneTab::File(path) => {
                             self.file_viewers.remove(&path);
                         }
@@ -347,6 +382,17 @@ impl Shell {
                 let id = self.pane_model.open_terminal();
                 let new_term = self.spawn_terminal_for_dir(id, cwd.as_deref());
                 self.terminals.insert(id, new_term);
+                Task::none()
+            }
+            Msg::NewChatTab => {
+                let cwd = self.active_workspace_dir().map(Path::to_path_buf);
+                let branch = self
+                    .workspaces
+                    .active()
+                    .and_then(|ws| ws.git_branch.clone());
+                let id = self.pane_model.open_chat();
+                let chat = ChatPane::new(cwd, branch).with_static_test_mode(self.static_test_mode);
+                self.chats.insert(id, chat);
                 Task::none()
             }
             Msg::SelectWorkspace(idx) => {
@@ -383,16 +429,21 @@ impl Shell {
         let status_sub = iced::time::every(Duration::from_millis(STATUS_POLL_INTERVAL_MS))
             .map(|_| Msg::StatusTick);
 
-        let term_sub = match self.pane_model.active_tab() {
+        let active_sub = match self.pane_model.active_tab() {
             Some(PaneTab::Terminal(id)) => self
                 .terminals
                 .get(id)
                 .map(|term| term.subscription().map(Msg::Terminal))
                 .unwrap_or_else(Subscription::none),
+            Some(&PaneTab::Chat(id)) => self
+                .chats
+                .get(&id)
+                .map(|chat| chat.subscription().map(move |m| Msg::Chat(id, m)))
+                .unwrap_or_else(Subscription::none),
             _ => Subscription::none(),
         };
 
-        Subscription::batch([status_sub, term_sub])
+        Subscription::batch([status_sub, active_sub])
     }
 
     fn view(&self) -> Element<'_, Msg> {
@@ -420,6 +471,11 @@ impl Shell {
                 .get(id)
                 .map(|term| term.view().map(Msg::Terminal))
                 .unwrap_or_else(pane_chrome::view_empty_body),
+            Some(&PaneTab::Chat(id)) => self
+                .chats
+                .get(&id)
+                .map(|chat| chat.view().map(move |m| Msg::Chat(id, m)))
+                .unwrap_or_else(pane_chrome::view_empty_body),
             Some(PaneTab::File(path)) => self
                 .file_viewers
                 .get(path)
@@ -435,6 +491,7 @@ impl Shell {
                 on_select_tab: Msg::SelectTab,
                 on_close_tab: Msg::CloseTab,
                 on_new_terminal: Msg::NewTerminalTab,
+                on_new_chat: Msg::NewChatTab,
                 noop_msg: Msg::Noop,
             },
         );
@@ -534,6 +591,7 @@ mod tests {
             island: AgentIsland::default(),
             pane_model: PaneModel::new(),
             terminals,
+            chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
             workspaces,
             file_tree: FileTree::new(),
@@ -682,5 +740,21 @@ mod tests {
         };
         let _ = shell.update(Msg::Terminal(TerminalMsg::Keyboard(esc_event)));
         assert!(shell.island.agents().is_empty());
+    }
+
+    #[test]
+    fn new_chat_tab_opens_and_closes_cleanly_without_spawning_process() {
+        let mut shell = test_shell();
+
+        let _ = shell.update(Msg::NewChatTab);
+        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Chat(1)));
+        assert!(shell.chats.contains_key(&1));
+
+        let _ = shell.update(Msg::Chat(1, ChatMsg::InputChanged("oi".to_string())));
+        assert_eq!(shell.chats.get(&1).map(ChatPane::input), Some("oi"));
+
+        let _ = shell.update(Msg::CloseTab(1));
+        assert!(!shell.chats.contains_key(&1));
+        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(1)));
     }
 }

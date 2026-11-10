@@ -13,11 +13,16 @@ use crate::labels;
 /// Identificador numérico estável de uma sessão de terminal no pane.
 pub type TermId = u64;
 
+/// Identificador numérico estável de uma sessão de chat no pane.
+pub type ChatId = u64;
+
 /// Aba aberta no pane central.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaneTab {
     /// Sessão de terminal identificada por [`TermId`].
     Terminal(TermId),
+    /// Sessão de chat com o agente identificada por [`ChatId`].
+    Chat(ChatId),
     /// Viewer de arquivo identificado pelo caminho no sistema de arquivos.
     File(PathBuf),
 }
@@ -28,23 +33,30 @@ impl PaneTab {
         matches!(self, Self::Terminal(_))
     }
 
+    /// Retorna `true` quando a aba é de chat.
+    pub fn is_chat(&self) -> bool {
+        matches!(self, Self::Chat(_))
+    }
+
     /// Retorna `true` quando a aba é de arquivo.
     pub fn is_file(&self) -> bool {
         matches!(self, Self::File(_))
     }
 
-    /// Título exibido na barra de abas (`"Terminal"` ou o basename do arquivo).
+    /// Título exibido na barra de abas (`"Terminal"`, `"Chat"` ou o basename do arquivo).
     pub fn title(&self) -> String {
         match self {
             Self::Terminal(_) => labels::DEFAULT_TAB_TITLE.to_string(),
+            Self::Chat(_) => labels::CHAT_TAB_TITLE.to_string(),
             Self::File(path) => file_display_name(path),
         }
     }
 
-    /// Ícone tipográfico da aba (`>_` para terminal; resolvido pelo nome para arquivo).
+    /// Ícone tipográfico da aba (`>_` para terminal; `✦` para chat; resolvido pelo nome para arquivo).
     pub fn icon(&self) -> &'static str {
         match self {
             Self::Terminal(_) => labels::ICON_TERMINAL,
+            Self::Chat(_) => labels::ICON_CHAT,
             Self::File(path) => {
                 let name = file_display_name(path);
                 labels::file_icon_for_name(&name)
@@ -76,6 +88,7 @@ pub struct PaneModel {
     tabs: Vec<PaneTab>,
     active: Option<usize>,
     next_term_id: TermId,
+    next_chat_id: ChatId,
 }
 
 impl Default for PaneModel {
@@ -91,6 +104,7 @@ impl PaneModel {
             tabs: vec![PaneTab::Terminal(1)],
             active: Some(0),
             next_term_id: 2,
+            next_chat_id: 1,
         }
     }
 
@@ -100,6 +114,7 @@ impl PaneModel {
             tabs: Vec::new(),
             active: None,
             next_term_id: 1,
+            next_chat_id: 1,
         }
     }
 
@@ -123,6 +138,15 @@ impl PaneModel {
         let id = self.next_term_id;
         self.next_term_id = self.next_term_id.saturating_add(1);
         self.tabs.push(PaneTab::Terminal(id));
+        self.active = Some(self.tabs.len().saturating_sub(1));
+        id
+    }
+
+    /// Abre uma nova aba de chat ao final da lista, torna-a ativa e devolve seu [`ChatId`].
+    pub fn open_chat(&mut self) -> ChatId {
+        let id = self.next_chat_id;
+        self.next_chat_id = self.next_chat_id.saturating_add(1);
+        self.tabs.push(PaneTab::Chat(id));
         self.active = Some(self.tabs.len().saturating_sub(1));
         id
     }
@@ -270,5 +294,15 @@ mod tests {
         let toml_file = PaneTab::File(PathBuf::from("/proj/Cargo.toml"));
         assert_eq!(toml_file.title(), "Cargo.toml");
         assert_eq!(toml_file.icon(), labels::ICON_FILE_CONFIG);
+
+        let chat = PaneTab::Chat(1);
+        assert_eq!(chat.title(), labels::CHAT_TAB_TITLE);
+        assert_eq!(chat.icon(), labels::ICON_CHAT);
+        assert!(chat.is_chat());
+
+        let mut model = PaneModel::new();
+        let cid = model.open_chat();
+        assert_eq!(cid, 1);
+        assert_eq!(model.active_tab(), Some(&PaneTab::Chat(1)));
     }
 }

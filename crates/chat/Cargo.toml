@@ -1,0 +1,11 @@
+[package]
+name = "gsh-chat"
+description = "Motor de chat do GSH com Claude Code em stream-json (sem UI, sem iced)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+thiserror.workspace = true

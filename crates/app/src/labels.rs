@@ -18,9 +18,34 @@ pub const WORKSPACE_EXAMPLE_BRANCH: &str = "feat/ui";
 pub const DEFAULT_REALM: &str = "Padrão";
 
 pub const DEFAULT_TAB_TITLE: &str = "Terminal";
+pub const CHAT_TAB_TITLE: &str = "Chat";
 pub const PANES_PLACEHOLDER: &str = "Terminal (spike de PTY ainda não ligado)";
 pub const PANE_EMPTY_STATE: &str = "Nenhuma aba aberta — clique em + para abrir um terminal.";
 pub const TERMINAL_SPAWN_ERROR: &str = "Não foi possível iniciar a sessão do terminal.";
+
+// Chat com o agente (`pt_BR.i18n.json` -> `gsh.chat`)
+pub const CHAT_NEW_CONVERSATION: &str = "Nova conversa";
+pub const CHAT_EMPTY_TITLE: &str = "Nova conversa";
+pub const CHAT_EMPTY_SUBTITLE_PREFIX: &str = "Claude Code em ";
+pub const CHAT_EMPTY_SUBTITLE_SUFFIX: &str = ", com o seu login.";
+pub const CHAT_EMPTY_HINT_SEND: &str = "Enter envia; Shift+Enter quebra linha.";
+pub const CHAT_EMPTY_HINT_PASTE: &str = "Cole um print com Ctrl+V ou solte arquivos no chat.";
+pub const CHAT_EMPTY_HINT_MODE: &str =
+    "Escolha o modo de permissão embaixo do campo: pedir, aceitar edições, planejar ou ignorar.";
+pub const CHAT_PLACEHOLDER: &str =
+    "Mensagem para o Claude… (Enter envia, Shift+Enter quebra linha)";
+pub const CHAT_SEND: &str = "Enviar";
+pub const CHAT_STOP: &str = "Parar";
+pub const CHAT_WORKING: &str = "trabalhando…";
+pub const CHAT_MODE_DEFAULT: &str = "Pedir permissão";
+pub const CHAT_STREAM_CURSOR: &str = " ▍";
+pub const CHAT_START_FAILED_PREFIX: &str = "Não consegui iniciar o claude: ";
+pub const CHAT_ENGINE_EXITED_PREFIX: &str = "O claude encerrou (código ";
+pub const CHAT_ENGINE_EXITED_SUFFIX: &str = ").";
+pub const CHAT_TURN_FAILED_PREFIX: &str = "O turno terminou com erro: ";
+pub const CHAT_COST_PREFIX: &str = "custo US$ ";
+pub const CHAT_CMD_PREFIX: &str = "$ ";
+pub const CHAT_TOOL_NAME_PAD: &str = "  ";
 
 // Viewer de arquivo (estados tipados de limite, binário e erro de leitura)
 pub const VIEWER_TOO_LARGE_PREFIX: &str = "Arquivo muito grande para exibir no viewer (";
@@ -66,6 +91,10 @@ pub const ICON_FILE_CONFIG: &str = "⚙";
 pub const ICON_FILE_DOC: &str = "¶";
 pub const ICON_FILE_LOCK: &str = "⚲";
 pub const ICON_FILE_GENERIC: &str = "≡";
+pub const ICON_CHAT: &str = "✦";
+pub const ICON_SEND: &str = "↵";
+pub const ICON_STOP: &str = "■";
+pub const ICON_TOOL_RUNNING: &str = "◌";
 
 // Ilha de agentes — seções do painel (na ordem exata de `agent_island_panel.dart`)
 pub const SECTION_STATUS_ERROR: &str = "Erro no servidor de status";
@@ -180,5 +209,45 @@ pub fn file_icon_for_name(file_name: &str) -> &'static str {
         "lock" => ICON_FILE_LOCK,
         _ if lower.starts_with(".env") => ICON_FILE_CONFIG,
         _ => ICON_FILE_GENERIC,
+    }
+}
+
+/// Subtítulo do estado vazio do chat (`tr.emptySubtitle(folder)` do Flutter).
+pub fn format_chat_empty_subtitle(folder: &str) -> String {
+    format!("{CHAT_EMPTY_SUBTITLE_PREFIX}{folder}{CHAT_EMPTY_SUBTITLE_SUFFIX}")
+}
+
+/// Aviso de falha ao iniciar o processo do `claude` (`tr.startFailed`).
+pub fn format_chat_start_failed(detail: &str) -> String {
+    format!("{CHAT_START_FAILED_PREFIX}{detail}")
+}
+
+/// Aviso de encerramento inesperado do `claude` (`tr.engineExited`).
+pub fn format_chat_engine_exited(exit_code: Option<i32>, stderr: &str) -> String {
+    let code = exit_code.unwrap_or(-1);
+    let trimmed = stderr.trim();
+    if trimmed.is_empty() {
+        format!("{CHAT_ENGINE_EXITED_PREFIX}{code}{CHAT_ENGINE_EXITED_SUFFIX}")
+    } else {
+        format!("{CHAT_ENGINE_EXITED_PREFIX}{code}{CHAT_ENGINE_EXITED_SUFFIX}\n{trimmed}")
+    }
+}
+
+/// Aviso de erro de turno retornado pelo `claude` (`tr.turnFailed`).
+pub fn format_chat_turn_failed(detail: &str) -> String {
+    format!("{CHAT_TURN_FAILED_PREFIX}{detail}")
+}
+
+/// Rótulo de custo acumulado do turno/conversa (`tr.cost`).
+pub fn format_chat_cost(cost_usd: f64) -> String {
+    format!("{CHAT_COST_PREFIX}{cost_usd:.2}")
+}
+
+/// Formata a linha de comando ou resumo exibida no bloco expandido da ferramenta.
+pub fn format_chat_tool_detail(name: &str, summary: &str, command: Option<&str>) -> String {
+    match command.filter(|c| !c.trim().is_empty()) {
+        Some(cmd) => format!("{CHAT_CMD_PREFIX}{cmd}"),
+        None if summary.is_empty() => name.to_string(),
+        None => format!("{name} {summary}"),
     }
 }
