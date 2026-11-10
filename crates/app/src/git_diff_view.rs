@@ -29,7 +29,7 @@ pub fn view<'a>(diff: &'a gsh_git::FileDiff, original: Option<&'a str>) -> Eleme
     };
     let header = row![
         text(labels::ICON_DIFF)
-            .font(theme::FONT_MONO)
+            .font(theme::FONT_ICON)
             .size(theme::SIZE_LABEL)
             .color(theme::palette().text3),
         text(labels::format_diff_tab_title(&diff.path))

@@ -66,7 +66,7 @@ impl PaneTab {
         match self {
             Self::Terminal(_) => labels::ICON_TERMINAL,
             Self::Chat(_) => labels::ICON_CHAT,
-            Self::Farm => labels::ICON_PLUS,
+            Self::Farm => labels::ICON_FARM,
             Self::Settings => labels::ICON_SETTINGS,
             Self::Database => labels::ICON_DATABASE,
             Self::File(path) => {

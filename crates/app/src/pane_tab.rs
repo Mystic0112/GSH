@@ -22,7 +22,11 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
 
     let mut tab_label = row![
         text(tab.icon())
-            .font(theme::FONT_MONO_BOLD)
+            .font(if tab.is_file() {
+                theme::FONT_MONO_BOLD
+            } else {
+                theme::FONT_ICON
+            })
             .size(theme::SIZE_SECTION_HEADER)
             .color(icon_color),
         Space::new().width(8.0),
@@ -70,7 +74,7 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
     let close_btn = button(
         container(
             text(labels::ICON_CLOSE)
-                .font(theme::FONT_MONO)
+                .font(theme::FONT_ICON)
                 .size(theme::SIZE_TITLE)
                 .color(theme::palette().text3),
         )

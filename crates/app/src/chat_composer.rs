@@ -106,6 +106,7 @@ fn view_send_button<'a>(enabled: bool) -> Element<'a, ChatMsg> {
         container(
             row![
                 text(labels::ICON_SEND)
+                    .font(theme::FONT_ICON)
                     .font(theme::FONT_MONO_BOLD)
                     .size(theme::SIZE_LABEL)
                     .color(if enabled {
@@ -163,7 +164,7 @@ fn view_stop_button<'a>() -> Element<'a, ChatMsg> {
         container(
             row![
                 text(labels::ICON_STOP)
-                    .font(theme::FONT_MONO)
+                    .font(theme::FONT_ICON)
                     .size(theme::SIZE_SECTION_HEADER)
                     .color(theme::palette().error),
                 Space::new().width(5.0),

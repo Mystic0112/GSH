@@ -84,7 +84,7 @@ fn view_add_tab_button<'a, M: Clone + 'a>(on_new_terminal: M) -> Element<'a, M> 
     let btn = button(
         container(
             text(labels::ICON_PLUS)
-                .font(theme::FONT_MONO)
+                .font(theme::FONT_ICON)
                 .size(theme::SIZE_TOPBAR_TITLE)
                 .color(theme::palette().text4),
         )
@@ -126,7 +126,7 @@ fn view_add_chat_button<'a, M: Clone + 'a>(on_new_chat: M) -> Element<'a, M> {
         container(
             row![
                 text(labels::ICON_CHAT)
-                    .font(theme::FONT_MONO)
+                    .font(theme::FONT_ICON)
                     .size(theme::SIZE_LABEL)
                     .color(theme::palette().text3),
                 Space::new().width(5.0),

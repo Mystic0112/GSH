@@ -75,7 +75,7 @@ fn split_controls<'a, M: Clone + 'a>(
         controls = controls.push(
             button(
                 text(labels::ICON_SPLIT_H)
-                    .font(theme::FONT_MONO)
+                    .font(theme::FONT_ICON)
                     .size(theme::SIZE_LABEL),
             )
             .on_press(msg),
@@ -85,7 +85,7 @@ fn split_controls<'a, M: Clone + 'a>(
         controls = controls.push(
             button(
                 text(labels::ICON_CLOSE)
-                    .font(theme::FONT_MONO)
+                    .font(theme::FONT_ICON)
                     .size(theme::SIZE_LABEL),
             )
             .on_press(msg),

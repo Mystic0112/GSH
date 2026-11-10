@@ -60,7 +60,7 @@ pub fn view(pane: &ChatPane) -> Element<'_, ChatMsg> {
 fn view_header(pane: &ChatPane) -> Element<'_, ChatMsg> {
     let content = row![
         text(labels::ICON_CHAT)
-            .font(theme::FONT_MONO)
+            .font(theme::FONT_ICON)
             .size(theme::SIZE_TITLE)
             .color(theme::palette().text2),
         Space::new().width(8.0),
@@ -115,7 +115,7 @@ fn view_empty(pane: &ChatPane) -> Element<'_, ChatMsg> {
     let mut card = column![
         container(
             text(labels::ICON_CHAT)
-                .font(theme::FONT_MONO)
+                .font(theme::FONT_ICON)
                 .size(theme::SIZE_DISPLAY)
                 .color(theme::palette().text4),
         )
@@ -148,7 +148,7 @@ fn view_empty(pane: &ChatPane) -> Element<'_, ChatMsg> {
         card = card.push(
             row![
                 text(labels::ICON_CHEVRON_RIGHT)
-                    .font(theme::FONT_MONO)
+                    .font(theme::FONT_ICON)
                     .size(theme::SIZE_LABEL)
                     .color(theme::palette().text3),
                 Space::new().width(8.0),
@@ -269,7 +269,7 @@ fn view_tool_line(idx: usize, tool: &ChatToolEntry) -> Element<'_, ChatMsg> {
         line_row = line_row
             .push(
                 text(labels::ICON_TOOL_RUNNING)
-                    .font(theme::FONT_MONO)
+                    .font(theme::FONT_ICON)
                     .size(theme::SIZE_SECTION_HEADER)
                     .color(theme::palette().text3),
             )

@@ -38,7 +38,7 @@ pub fn view<'a, M: Clone + 'a>(
     let add_button = button(
         container(
             text(labels::ICON_PLUS)
-                .font(theme::FONT_MONO)
+                .font(theme::FONT_ICON)
                 .size(theme::SIZE_TOPBAR_TITLE)
                 .color(theme::palette().text2),
         )
@@ -75,7 +75,7 @@ pub fn view<'a, M: Clone + 'a>(
     let header = container(
         row![
             text(labels::ICON_LAYERS)
-                .font(theme::FONT_MONO)
+                .font(theme::FONT_ICON)
                 .size(theme::SIZE_TITLE)
                 .color(theme::palette().text3),
             Space::new().width(7.0),
@@ -105,7 +105,7 @@ pub fn view<'a, M: Clone + 'a>(
     let footer = container(
         row![
             text(labels::ICON_LAYERS)
-                .font(theme::FONT_MONO)
+                .font(theme::FONT_ICON)
                 .size(theme::SIZE_LABEL)
                 .color(theme::palette().text3),
             Space::new().width(6.0),
@@ -115,12 +115,12 @@ pub fn view<'a, M: Clone + 'a>(
                 .color(theme::palette().text2),
             Space::new().width(4.0),
             text(labels::ICON_CHEVRON_DOWN)
-                .font(theme::FONT_MONO)
+                .font(theme::FONT_ICON)
                 .size(theme::SIZE_LABEL)
                 .color(theme::palette().text3),
             Space::new().width(Fill),
             text(labels::ICON_SETTINGS)
-                .font(theme::FONT_MONO)
+                .font(theme::FONT_ICON)
                 .size(theme::SIZE_TITLE)
                 .color(theme::palette().text3),
         ]

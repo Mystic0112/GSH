@@ -300,7 +300,10 @@ pub const MONTSERRAT_SEMIBOLD_TTF: &[u8] =
 pub const MONTSERRAT_BOLD_TTF: &[u8] = include_bytes!("../assets/fonts/Montserrat-Bold.ttf");
 
 /// Todas as faces estáticas embutidas para registro no `iced::application`.
-pub const EMBEDDED_FONTS: [&[u8]; 8] = [
+pub const MATERIAL_SYMBOLS_TTF: &[u8] =
+    include_bytes!("../assets/fonts/MaterialSymbolsOutlined.ttf");
+
+pub const EMBEDDED_FONTS: [&[u8]; 9] = [
     HANKEN_REGULAR_TTF,
     HANKEN_MEDIUM_TTF,
     HANKEN_SEMIBOLD_TTF,
@@ -309,9 +312,12 @@ pub const EMBEDDED_FONTS: [&[u8]; 8] = [
     MONTSERRAT_MEDIUM_TTF,
     MONTSERRAT_SEMIBOLD_TTF,
     MONTSERRAT_BOLD_TTF,
+    MATERIAL_SYMBOLS_TTF,
 ];
 
 pub const FONT_MONO: Font = Font::with_name(FONT_FAMILY_MONO);
+/// Ícones (Material Symbols Outlined, subset com os glifos usados).
+pub const FONT_ICON: Font = Font::with_name("Material Symbols Outlined");
 pub const FONT_MONO_MEDIUM: Font = Font {
     weight: Weight::Medium,
     ..Font::with_name(FONT_FAMILY_MONO)
@@ -597,7 +603,7 @@ mod tests {
         assert_ne!(FONT_TITLE, Font::DEFAULT);
         assert_ne!(FONT_TAB, Font::DEFAULT);
 
-        assert_eq!(EMBEDDED_FONTS.len(), 8);
+        assert_eq!(EMBEDDED_FONTS.len(), 9);
         for bytes in EMBEDDED_FONTS {
             // Assinatura TrueType sfnt (0x00010000)
             assert_eq!(bytes.get(..4), Some(&[0x00, 0x01, 0x00, 0x00][..]));
