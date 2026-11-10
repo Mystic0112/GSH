@@ -1,4 +1,5 @@
 mod camera;
+pub mod icons;
 mod paint;
 mod sprites;
 mod world;
