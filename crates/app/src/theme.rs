@@ -7,6 +7,7 @@
 use gsh_term::{indexed_to_rgb, Cell, CellColor, NamedColor, Rgb};
 use iced::font::{Style as FontStyle, Weight};
 use iced::{Color, Font};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Estrutura completa de tokens de superfície, borda, texto, marca e semântica
 /// de uma variante do tema `gsh` (espelha `AppColors` em `app_colors.dart`).
@@ -108,7 +109,73 @@ impl GshPalette {
     };
 }
 
-// Tokens principais do tema `gsh` escuro ativo
+/// Brilho efetivo do tema `gsh` (escuro ou claro).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeVariant {
+    Dark,
+    Light,
+}
+
+impl ThemeVariant {
+    /// Paleta de tokens do brilho.
+    pub const fn palette(self) -> GshPalette {
+        match self {
+            Self::Dark => GshPalette::DARK,
+            Self::Light => GshPalette::LIGHT,
+        }
+    }
+
+    /// Resolve o modo gravado no config. `system` segue o escuro: o app não
+    /// detecta o brilho do sistema operacional.
+    pub const fn from_mode(mode: gsh_config::schema::AppThemeMode) -> Self {
+        match mode {
+            gsh_config::schema::AppThemeMode::Light => Self::Light,
+            gsh_config::schema::AppThemeMode::Dark | gsh_config::schema::AppThemeMode::System => {
+                Self::Dark
+            }
+        }
+    }
+}
+
+static ACTIVE_LIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Troca a variante ativa; vale para o próximo `view`, sem reiniciar.
+pub fn set_active(variant: ThemeVariant) {
+    ACTIVE_LIGHT.store(variant == ThemeVariant::Light, Ordering::Relaxed);
+}
+
+/// Variante ativa no momento (escuro por padrão).
+pub fn active() -> ThemeVariant {
+    if ACTIVE_LIGHT.load(Ordering::Relaxed) {
+        ThemeVariant::Light
+    } else {
+        ThemeVariant::Dark
+    }
+}
+
+/// Paleta ativa. Leia cores daqui em `view`, nunca em constante, para que a
+/// troca de tema apareça ao vivo.
+pub fn palette() -> GshPalette {
+    active().palette()
+}
+
+/// Razão de contraste WCAG 2.x entre duas cores opacas (de 1,0 a 21,0).
+pub fn contrast_ratio(a: Color, b: Color) -> f32 {
+    fn linear(channel: f32) -> f32 {
+        if channel <= 0.03928 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    fn luminance(c: Color) -> f32 {
+        0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b)
+    }
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+// Tokens principais do tema `gsh` escuro (valores de compilação; o tema ativo vem de `palette()`)
 pub const BG: Color = GshPalette::DARK.bg;
 pub const PANEL: Color = GshPalette::DARK.panel;
 pub const PANEL2: Color = GshPalette::DARK.panel2;
@@ -387,6 +454,14 @@ pub const fn cell_font(bold: bool) -> Font {
     }
 }
 
+/// Serializa testes que mexem na variante global (os testes rodam em paralelo).
+#[cfg(test)]
+pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,6 +498,59 @@ mod tests {
         assert_eq!(TERM_CURSOR, ACCENT);
         assert_eq!(TERM_CURSOR_TEXT, BG);
         assert!((TERM_SELECTION_BG.a - (0x55 as f32 / 255.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn light_palette_matches_design_system_samples() {
+        let light = ThemeVariant::Light.palette();
+        assert_eq!(light.panel2, Color::from_rgb8(0xF8, 0xFA, 0xFA));
+        assert_eq!(light.text3, Color::from_rgb8(0x6B, 0x75, 0x78));
+        assert_eq!(light.error, Color::from_rgb8(0xD3, 0x2F, 0x2F));
+        assert_eq!(light.border2, Color::from_rgb8(0xBE, 0xC5, 0xC8));
+        assert_eq!(light.accent_text, Color::from_rgb8(0x2E, 0x35, 0x36));
+        assert!((light.accent_soft.a - (0x1F as f32 / 255.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn switching_variant_changes_active_background() {
+        let _guard = test_guard();
+        set_active(ThemeVariant::Dark);
+        assert_eq!(palette().bg, GshPalette::DARK.bg);
+        set_active(ThemeVariant::Light);
+        assert_eq!(active(), ThemeVariant::Light);
+        assert_eq!(palette().bg, Color::from_rgb8(0xE3, 0xE7, 0xE8));
+        assert_ne!(palette().bg, GshPalette::DARK.bg);
+        set_active(ThemeVariant::Dark);
+        assert_eq!(palette().bg, GshPalette::DARK.bg);
+    }
+
+    #[test]
+    fn config_modes_resolve_to_variants() {
+        use gsh_config::schema::AppThemeMode;
+        assert_eq!(
+            ThemeVariant::from_mode(AppThemeMode::Light),
+            ThemeVariant::Light
+        );
+        assert_eq!(
+            ThemeVariant::from_mode(AppThemeMode::Dark),
+            ThemeVariant::Dark
+        );
+        assert_eq!(
+            ThemeVariant::from_mode(AppThemeMode::System),
+            ThemeVariant::Dark
+        );
+    }
+
+    #[test]
+    fn text3_keeps_minimum_contrast_on_panel_and_panel2() {
+        for variant in [ThemeVariant::Dark, ThemeVariant::Light] {
+            let p = variant.palette();
+            assert!(contrast_ratio(p.text3, p.panel) >= 3.8, "{variant:?} panel");
+            assert!(
+                contrast_ratio(p.text3, p.panel2) >= 3.8,
+                "{variant:?} panel2"
+            );
+        }
     }
 
     #[test]

@@ -386,14 +386,14 @@ pub const SETTINGS_INVALID_LOCALE: &str = "Idioma inválido. Use letras e hífen
 pub const SETTINGS_CONFIG_ERROR: &str = "Não foi possível ler ou salvar as configurações.";
 pub const SETTINGS_SAVED: &str = "Configuração salva.";
 
-pub const SETTINGS_DARK_ONLY: &str = "Tema: escuro (claro em breve)";
 pub const SETTINGS_INTERFACE_SIZE: &str = "Tamanho da interface";
 pub const SETTINGS_INTERFACE_SIZE_HINT: &str = "De 10 a 20";
 pub const SETTINGS_INVALID_INTERFACE_SIZE: &str = "Informe um tamanho entre 10 e 20.";
 
 pub const SETTINGS_THEME: &str = "Tema";
 pub const SETTINGS_DARK: &str = "Escuro";
-pub const SETTINGS_LIGHT_SOON: &str = "Claro — em breve";
+pub const SETTINGS_LIGHT: &str = "Claro";
+pub const SETTINGS_INVALID_THEME: &str = "Tema inválido. Escolha escuro ou claro.";
 pub const SETTINGS_SHELL: &str = "Shell padrão";
 pub const SETTINGS_SCROLLBACK: &str = "Histórico do terminal (1000 a 100000 linhas)";
 pub const SETTINGS_TERMINAL_SIZE: &str = "Fonte do terminal (8 a 32)";

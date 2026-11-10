@@ -62,7 +62,7 @@ where
     .width(Fill)
     .height(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
     .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(theme::BG)),
+        background: Some(Background::Color(theme::palette().bg)),
         ..Default::default()
     });
 
@@ -70,7 +70,7 @@ where
         .width(Fill)
         .height(Length::Fixed(1.0))
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::BORDER)),
+            background: Some(Background::Color(theme::palette().border)),
             ..Default::default()
         });
 
@@ -86,7 +86,7 @@ fn view_add_tab_button<'a, M: Clone + 'a>(on_new_terminal: M) -> Element<'a, M> 
             text(labels::ICON_PLUS)
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_TOPBAR_TITLE)
-                .color(theme::TEXT4),
+                .color(theme::palette().text4),
         )
         .width(Fill)
         .height(Fill)
@@ -101,11 +101,15 @@ fn view_add_tab_button<'a, M: Clone + 'a>(on_new_terminal: M) -> Element<'a, M> 
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
             background: if hovered {
-                Some(Background::Color(theme::PANEL3))
+                Some(Background::Color(theme::palette().panel3))
             } else {
                 None
             },
-            text_color: if hovered { theme::TEXT2 } else { theme::TEXT4 },
+            text_color: if hovered {
+                theme::palette().text2
+            } else {
+                theme::palette().text4
+            },
             border: Border::default(),
             ..Default::default()
         }
@@ -124,12 +128,12 @@ fn view_add_chat_button<'a, M: Clone + 'a>(on_new_chat: M) -> Element<'a, M> {
                 text(labels::ICON_CHAT)
                     .font(theme::FONT_MONO)
                     .size(theme::SIZE_LABEL)
-                    .color(theme::TEXT3),
+                    .color(theme::palette().text3),
                 Space::new().width(5.0),
                 text(labels::CHAT_TAB_TITLE)
                     .font(theme::FONT_BODY_MEDIUM)
                     .size(theme::SIZE_LABEL)
-                    .color(theme::TEXT3),
+                    .color(theme::palette().text3),
             ]
             .align_y(Alignment::Center),
         )
@@ -146,11 +150,15 @@ fn view_add_chat_button<'a, M: Clone + 'a>(on_new_chat: M) -> Element<'a, M> {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
             background: if hovered {
-                Some(Background::Color(theme::PANEL3))
+                Some(Background::Color(theme::palette().panel3))
             } else {
                 None
             },
-            text_color: if hovered { theme::TEXT } else { theme::TEXT3 },
+            text_color: if hovered {
+                theme::palette().text
+            } else {
+                theme::palette().text3
+            },
             border: Border::default(),
             ..Default::default()
         }
@@ -168,7 +176,7 @@ fn pane_tool_button<'a, M: Clone + 'a>(glyph: &'static str, noop_msg: M) -> Elem
             text(glyph)
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT4),
+                .color(theme::palette().text4),
         )
         .width(Fill)
         .height(Fill)
@@ -183,11 +191,15 @@ fn pane_tool_button<'a, M: Clone + 'a>(glyph: &'static str, noop_msg: M) -> Elem
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
             background: if hovered {
-                Some(Background::Color(theme::PANEL3))
+                Some(Background::Color(theme::palette().panel3))
             } else {
                 None
             },
-            text_color: if hovered { theme::TEXT2 } else { theme::TEXT4 },
+            text_color: if hovered {
+                theme::palette().text2
+            } else {
+                theme::palette().text4
+            },
             border: Border {
                 radius: theme::RADIUS_BADGE.into(),
                 ..Default::default()
@@ -203,7 +215,7 @@ pub(crate) fn hairline_v<'a, M: 'a>() -> Element<'a, M> {
         .width(Length::Fixed(1.0))
         .height(Fill)
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::BORDER)),
+            background: Some(Background::Color(theme::palette().border)),
             ..Default::default()
         })
         .into()

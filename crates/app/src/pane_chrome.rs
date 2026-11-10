@@ -42,9 +42,9 @@ where
         .height(Fill)
         .padding(1)
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::PANEL)),
+            background: Some(Background::Color(theme::palette().panel)),
             border: Border {
-                color: theme::BORDER,
+                color: theme::palette().border,
                 width: 1.0,
                 ..Default::default()
             },
@@ -60,7 +60,7 @@ pub fn view_empty_body<'a, M: 'a>() -> Element<'a, M> {
         text(labels::PANE_EMPTY_STATE)
             .font(theme::FONT_BODY)
             .size(theme::SIZE_LABEL)
-            .color(theme::TEXT3),
+            .color(theme::palette().text3),
     )
     .padding([20, 24])
     .width(Fill)

@@ -26,20 +26,48 @@ use crate::labels;
 use crate::theme;
 
 // Paleta da ilha e do painel (reexportada de `crate::theme` — fonte única de tokens).
-pub const COLOR_BG: Color = theme::BG;
-pub const COLOR_PANEL: Color = theme::PANEL;
-pub const COLOR_PANEL2: Color = theme::PANEL2;
-pub const COLOR_PANEL3: Color = theme::PANEL3;
-pub const COLOR_BORDER: Color = theme::BORDER;
-pub const COLOR_BORDER2: Color = theme::BORDER2;
-pub const COLOR_TEXT: Color = theme::TEXT;
-pub const COLOR_TEXT2: Color = theme::TEXT2;
-pub const COLOR_TEXT3: Color = theme::TEXT3;
-pub const COLOR_ACCENT: Color = theme::ACCENT;
-pub const COLOR_OK: Color = theme::OK;
-pub const COLOR_WARN: Color = theme::WARN;
-pub const COLOR_ERROR: Color = theme::ERROR;
-pub const COLOR_ONLINE: Color = theme::ONLINE;
+pub fn color_bg() -> Color {
+    theme::palette().bg
+}
+pub fn color_panel() -> Color {
+    theme::palette().panel
+}
+pub fn color_panel2() -> Color {
+    theme::palette().panel2
+}
+pub fn color_panel3() -> Color {
+    theme::palette().panel3
+}
+pub fn color_border() -> Color {
+    theme::palette().border
+}
+pub fn color_border2() -> Color {
+    theme::palette().border2
+}
+pub fn color_text() -> Color {
+    theme::palette().text
+}
+pub fn color_text2() -> Color {
+    theme::palette().text2
+}
+pub fn color_text3() -> Color {
+    theme::palette().text3
+}
+pub fn color_accent() -> Color {
+    theme::palette().accent
+}
+pub fn color_ok() -> Color {
+    theme::palette().ok
+}
+pub fn color_warn() -> Color {
+    theme::palette().warn
+}
+pub fn color_error() -> Color {
+    theme::palette().error
+}
+pub fn color_online() -> Color {
+    theme::palette().online
+}
 pub const COLOR_SHADOW: Color = theme::SHADOW;
 
 /// Altura da pílula (`SizedBox(height: 30)` em `agent_island.dart`).
@@ -745,14 +773,18 @@ impl canvas::Program<IslandMsg> for IslandPillProgram {
         };
         let hovered = cursor.is_over(global_pill);
 
-        let bg_color = if hovered { COLOR_PANEL3 } else { COLOR_PANEL2 };
+        let bg_color = if hovered {
+            color_panel3()
+        } else {
+            color_panel2()
+        };
         let waiting_total = self.counts.waiting_badge();
         let border_color = if self.has_server_error {
-            COLOR_ERROR
+            color_error()
         } else if waiting_total > 0 {
-            COLOR_WARN
+            color_warn()
         } else {
-            COLOR_BORDER
+            color_border()
         };
 
         let pill_path = Path::rounded_rectangle(
@@ -775,8 +807,8 @@ impl canvas::Program<IslandMsg> for IslandPillProgram {
             gorilla_rect.position(),
             mood,
             tick,
-            COLOR_WARN,
-            COLOR_BG,
+            color_warn(),
+            color_bg(),
         );
 
         let mut cursor_x = gorilla_rect.x + GORILLA_WIDTH;
@@ -784,9 +816,9 @@ impl canvas::Program<IslandMsg> for IslandPillProgram {
         let max_right = pill.x + pill.width - PILL_PADDING_H + 0.5;
 
         for (n, dot_color) in [
-            (self.counts.working, COLOR_ACCENT),
-            (waiting_total, COLOR_WARN),
-            (self.counts.finished, COLOR_ONLINE),
+            (self.counts.working, color_accent()),
+            (waiting_total, color_warn()),
+            (self.counts.finished, color_online()),
         ] {
             if n == 0 {
                 continue;
@@ -805,7 +837,7 @@ impl canvas::Program<IslandMsg> for IslandPillProgram {
                 content: n.to_string(),
                 position: Point::new(cursor_x, center_y),
                 max_width: 48.0,
-                color: COLOR_TEXT2,
+                color: color_text2(),
                 size: theme::SIZE_LABEL.into(),
                 line_height: text::LineHeight::default(),
                 font: theme::FONT_MONO,

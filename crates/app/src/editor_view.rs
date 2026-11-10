@@ -79,9 +79,9 @@ impl EditorPane {
             .on_action(EditorMsg::Action)
             .key_binding(move |key| crate::editor_keys::bind_key(key, page_lines, tab_size))
             .style(|_: &Theme, _| text_editor::Style {
-                background: theme::PANEL.into(),
+                background: theme::palette().panel.into(),
                 border: iced::Border::default(),
-                placeholder: theme::TEXT2,
+                placeholder: theme::palette().text2,
                 // iced 0.14 uses the value color for the caret as well as unstyled text.
                 value: theme::SYNTAX_BASE,
                 selection: theme::TERM_SELECTION_BG,
@@ -129,7 +129,7 @@ impl EditorPane {
                     .padding([8, 12])
                     .width(Fill)
                     .style(|_: &Theme| container::Style {
-                        background: Some(theme::PANEL2.into()),
+                        background: Some(theme::palette().panel2.into()),
                         ..Default::default()
                     }),
             );
@@ -143,7 +143,7 @@ impl EditorPane {
             .height(Fill)
             .width(Fill)
             .style(|_: &Theme| container::Style {
-                background: Some(theme::PANEL.into()),
+                background: Some(theme::palette().panel.into()),
                 ..Default::default()
             })
             .into()

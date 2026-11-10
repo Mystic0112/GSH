@@ -1,10 +1,24 @@
 //! Interface da aba de configurações.
 use super::{Error, Message, Section, Settings};
 use crate::{labels, theme};
-use iced::widget::{button, checkbox, column, container, row, text, text_input};
+use gsh_config::schema::AppThemeMode;
+use iced::widget::{button, checkbox, column, container, radio, row, text, text_input};
 use iced::{Element, Fill};
 
+fn theme_choice(
+    label: &'static str,
+    mode: AppThemeMode,
+    selected: AppThemeMode,
+) -> Element<'static, Message> {
+    radio(label, mode, Some(selected), Message::ThemeSelected).into()
+}
+
 pub fn view(s: &Settings) -> Element<'_, Message> {
+    // `system` é exibido como escuro, que é o que ele resolve.
+    let selected = match s.theme_mode {
+        AppThemeMode::Light => AppThemeMode::Light,
+        AppThemeMode::Dark | AppThemeMode::System => AppThemeMode::Dark,
+    };
     let navigation = column![
         button(labels::SETTINGS_GENERAL).on_press(Message::Select(Section::General)),
         button(labels::SETTINGS_APPEARANCE).on_press(Message::Select(Section::Appearance)),
@@ -24,10 +38,8 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
         Section::Appearance => column![
             text(labels::SETTINGS_APPEARANCE).size(24),
             text(labels::SETTINGS_THEME),
-            checkbox(s.theme_mode == gsh_config::schema::AppThemeMode::Dark)
-                .label(labels::SETTINGS_DARK)
-                .on_toggle(|_| Message::DarkSelected),
-            text(labels::SETTINGS_LIGHT_SOON),
+            theme_choice(labels::SETTINGS_DARK, AppThemeMode::Dark, selected),
+            theme_choice(labels::SETTINGS_LIGHT, AppThemeMode::Light, selected),
             text(labels::SETTINGS_INTERFACE_SIZE),
             text_input(labels::SETTINGS_INTERFACE_SIZE_HINT, &s.interface_size)
                 .on_input(Message::InterfaceSizeChanged),
@@ -73,6 +85,7 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
         let message = match error {
             Error::InvalidLocale => labels::SETTINGS_INVALID_LOCALE,
             Error::InvalidInterfaceSize => labels::SETTINGS_INVALID_INTERFACE_SIZE,
+            Error::InvalidTheme => labels::SETTINGS_INVALID_THEME,
             Error::InvalidShell => labels::SETTINGS_INVALID_SHELL,
             Error::InvalidScrollback => labels::SETTINGS_INVALID_SCROLLBACK,
             Error::InvalidTerminalSize => labels::SETTINGS_INVALID_TERMINAL_SIZE,
@@ -81,7 +94,7 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
                 labels::SETTINGS_CONFIG_ERROR
             }
         };
-        content = content.push(text(message).color(theme::WARN));
+        content = content.push(text(message).color(theme::palette().warn));
     } else if s.saved {
         content = content.push(text(labels::SETTINGS_SAVED));
     }

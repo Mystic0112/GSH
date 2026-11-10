@@ -51,21 +51,21 @@ pub fn shorten(value: &str, limit: usize) -> String {
         labels::GIT_ELLIPSIS
     )
 }
-pub const fn status_color(status: GitFileStatus) -> Color {
+pub fn status_color(status: GitFileStatus) -> Color {
     match status {
-        GitFileStatus::Staged => theme::GIT_STAGED,
-        GitFileStatus::Untracked => theme::GIT_UNTRACKED,
-        GitFileStatus::Deleted => theme::GIT_DELETED,
-        GitFileStatus::Modified => theme::WARN,
+        GitFileStatus::Staged => theme::palette().git_staged,
+        GitFileStatus::Untracked => theme::palette().git_untracked,
+        GitFileStatus::Deleted => theme::palette().git_deleted,
+        GitFileStatus::Modified => theme::palette().warn,
         GitFileStatus::Conflict => theme::GIT_CONFLICT,
-        GitFileStatus::Ignored => theme::TEXT4,
+        GitFileStatus::Ignored => theme::palette().text4,
     }
 }
-pub const fn diff_style(kind: DiffLineKind) -> (Color, Option<Color>) {
+pub fn diff_style(kind: DiffLineKind) -> (Color, Option<Color>) {
     match kind {
-        DiffLineKind::Added => (theme::GIT_STAGED, Some(theme::GIT_ADDED_BG)),
-        DiffLineKind::Removed => (theme::GIT_DELETED, Some(theme::GIT_REMOVED_BG)),
-        DiffLineKind::Context => (theme::TEXT, None),
+        DiffLineKind::Added => (theme::palette().git_staged, Some(theme::GIT_ADDED_BG)),
+        DiffLineKind::Removed => (theme::palette().git_deleted, Some(theme::GIT_REMOVED_BG)),
+        DiffLineKind::Context => (theme::palette().text, None),
     }
 }
 #[cfg(test)]

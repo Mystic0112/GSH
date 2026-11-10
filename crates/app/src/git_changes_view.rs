@@ -9,7 +9,7 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
             text(labels::format_staged_header(status.staged.len()))
                 .font(theme::FONT_TITLE)
                 .size(theme::SIZE_SECTION_HEADER)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         );
         for (path, status) in git_presenter::files(&status.staged) {
             list = list.push(git_file_row::view(
@@ -27,7 +27,7 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
             text(labels::format_changes_header(status.unstaged.len()))
                 .font(theme::FONT_TITLE)
                 .size(theme::SIZE_SECTION_HEADER)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         );
         for (path, status) in git_presenter::files(&status.unstaged) {
             list = list.push(git_file_row::view(
@@ -46,7 +46,7 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
                 text(labels::GIT_NO_CHANGES)
                     .font(theme::FONT_BODY)
                     .size(theme::SIZE_LABEL)
-                    .color(theme::TEXT3),
+                    .color(theme::palette().text3),
             );
         }
     }
@@ -55,16 +55,16 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
         .font(theme::FONT_BODY)
         .size(theme::SIZE_LABEL)
         .style(|_, _| text_input::Style {
-            background: theme::PANEL2.into(),
+            background: theme::palette().panel2.into(),
             border: Border {
-                color: theme::BORDER2,
+                color: theme::palette().border2,
                 width: 1.0,
                 radius: theme::RADIUS_BUTTON.into(),
             },
-            icon: theme::TEXT3,
-            placeholder: theme::TEXT3,
-            value: theme::TEXT,
-            selection: theme::ACCENT_SOFT,
+            icon: theme::palette().text3,
+            placeholder: theme::palette().text3,
+            value: theme::palette().text,
+            selection: theme::palette().accent_soft,
         });
     let commit = button(
         text(if state.committing {
@@ -80,14 +80,14 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
     .style(|_: &Theme, status| button::Style {
         background: Some(
             if matches!(status, button::Status::Disabled) {
-                theme::PANEL2
+                theme::palette().panel2
             } else {
-                theme::ACCENT
+                theme::palette().accent
             }
             .into(),
         ),
         text_color: if matches!(status, button::Status::Disabled) {
-            theme::TEXT4
+            theme::palette().text4
         } else {
             theme::ON_ACCENT
         },

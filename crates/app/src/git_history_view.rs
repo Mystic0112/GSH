@@ -9,7 +9,7 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
             text(labels::GIT_HISTORY_EMPTY)
                 .font(theme::FONT_BODY)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         );
     }
     for commit in &state.history {
@@ -18,11 +18,11 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
             text(title)
                 .font(theme::FONT_BODY_MEDIUM)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT),
+                .color(theme::palette().text),
             text(meta)
                 .font(theme::FONT_BODY)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT3)
+                .color(theme::palette().text3)
         ]);
     }
     scrollable(list).height(Fill).into()

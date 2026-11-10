@@ -24,7 +24,7 @@ impl Gutter {
                     .size(theme::SIZE_MONO)
                     .line_height(theme::LINE_HEIGHT_MONO)
                     .color(if index == active {
-                        theme::TEXT
+                        theme::palette().text
                     } else {
                         theme::EDITOR_GUTTER
                     }),
@@ -32,7 +32,7 @@ impl Gutter {
         }
         let divider =
             container(Space::new().width(1.0).height(Fill)).style(|_: &Theme| container::Style {
-                background: Some(theme::BORDER.into()),
+                background: Some(theme::palette().border.into()),
                 ..Default::default()
             });
         row![

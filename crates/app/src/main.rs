@@ -796,7 +796,7 @@ impl Shell {
         if self.pending_window_close.is_some() {
             root = root.push(
                 row![
-                    iced::widget::text(labels::EDITOR_CONFIRM_WINDOW).color(theme::WARN),
+                    iced::widget::text(labels::EDITOR_CONFIRM_WINDOW).color(theme::palette().warn),
                     iced::widget::button(labels::EDITOR_DISCARD).on_press(Msg::ConfirmWindowClose),
                     iced::widget::button(labels::EDITOR_CANCEL).on_press(Msg::CancelWindowClose),
                 ]
@@ -807,7 +807,7 @@ impl Shell {
             .width(Fill)
             .height(Fill)
             .style(|_: &Theme| container::Style {
-                background: Some(Background::Color(theme::BG)),
+                background: Some(Background::Color(theme::palette().bg)),
                 ..Default::default()
             });
 

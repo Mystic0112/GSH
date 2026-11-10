@@ -32,7 +32,7 @@ pub fn view<'a, M: Clone + 'a>(
         text(props.workspace_title)
             .font(theme::FONT_TITLE)
             .size(theme::SIZE_TOPBAR_TITLE)
-            .color(theme::TEXT),
+            .color(theme::palette().text),
     ]
     .align_y(Alignment::Center);
 
@@ -67,7 +67,7 @@ pub fn view<'a, M: Clone + 'a>(
         .width(Fill)
         .height(Length::Fixed(1.0))
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::BORDER)),
+            background: Some(Background::Color(theme::palette().border)),
             ..Default::default()
         });
 
@@ -75,7 +75,7 @@ pub fn view<'a, M: Clone + 'a>(
         .width(Fill)
         .height(Length::Fixed(theme::TOPBAR_HEIGHT))
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::BG)),
+            background: Some(Background::Color(theme::palette().bg)),
             ..Default::default()
         })
         .into()
@@ -92,9 +92,9 @@ fn icon_toggle_button<'a, M: Clone + 'a>(
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_TITLE)
                 .color(if selected {
-                    theme::ACCENT_TEXT
+                    theme::palette().accent_text
                 } else {
-                    theme::TEXT3
+                    theme::palette().text3
                 }),
         )
         .width(Fill)
@@ -109,20 +109,20 @@ fn icon_toggle_button<'a, M: Clone + 'a>(
     .style(move |_: &Theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         let bg = if selected {
-            Some(Background::Color(theme::ACCENT_SOFT))
+            Some(Background::Color(theme::palette().accent_soft))
         } else if hovered {
-            Some(Background::Color(theme::PANEL3))
+            Some(Background::Color(theme::palette().panel3))
         } else {
             None
         };
         button::Style {
             background: bg,
             text_color: if selected {
-                theme::ACCENT_TEXT
+                theme::palette().accent_text
             } else if hovered {
-                theme::TEXT2
+                theme::palette().text2
             } else {
-                theme::TEXT3
+                theme::palette().text3
             },
             border: Border {
                 radius: theme::RADIUS_BUTTON.into(),
