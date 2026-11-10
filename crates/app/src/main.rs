@@ -117,6 +117,10 @@ enum Msg {
     ToggleRail,
     ToggleFiles,
     Noop,
+    WindowDrag,
+    WindowMinimize,
+    WindowToggleMaximize,
+    WindowCloseButton,
 }
 
 struct Shell {
@@ -762,6 +766,22 @@ impl Shell {
                 Task::none()
             }
             Msg::Noop => Task::none(),
+            Msg::WindowDrag => iced::window::oldest().then(|id| match id {
+                Some(id) => iced::window::drag(id),
+                None => Task::none(),
+            }),
+            Msg::WindowMinimize => iced::window::oldest().then(|id| match id {
+                Some(id) => iced::window::minimize(id, true),
+                None => Task::none(),
+            }),
+            Msg::WindowToggleMaximize => iced::window::oldest().then(|id| match id {
+                Some(id) => iced::window::toggle_maximize(id),
+                None => Task::none(),
+            }),
+            Msg::WindowCloseButton => iced::window::oldest().then(|id| match id {
+                Some(id) => Task::done(Msg::WindowCloseRequested(id)),
+                None => Task::none(),
+            }),
         }
     }
 
@@ -897,14 +917,21 @@ impl Shell {
             Msg::ToggleFiles,
         );
 
+        let window_controls = row![
+            window_button(labels::ICON_WINDOW_MINIMIZE, Msg::WindowMinimize),
+            window_button(labels::ICON_WINDOW_MAXIMIZE, Msg::WindowToggleMaximize),
+            window_button(labels::ICON_CLOSE, Msg::WindowCloseButton),
+        ]
+        .spacing(2);
         let top = row![
-            container(top).width(Fill),
+            mouse_area(container(top).width(Fill)).on_press(Msg::WindowDrag),
             iced::widget::button(iced::widget::text(labels::ICON_DATABASE).font(theme::FONT_ICON))
                 .style(theme::ghost_button)
                 .on_press(Msg::OpenDatabase),
             iced::widget::button(iced::widget::text(labels::ICON_SETTINGS).font(theme::FONT_ICON))
                 .style(theme::ghost_button)
-                .on_press(Msg::OpenSettings)
+                .on_press(Msg::OpenSettings),
+            window_controls,
         ]
         .align_y(iced::Alignment::Center);
 
@@ -998,10 +1025,24 @@ impl Shell {
     }
 }
 
+/// Botão de controle de janela (minimizar, maximizar, fechar) da barra própria.
+fn window_button<'a>(glyph: &'static str, msg: Msg) -> Element<'a, Msg> {
+    iced::widget::button(
+        iced::widget::text(glyph)
+            .font(theme::FONT_ICON)
+            .size(theme::SIZE_TITLE),
+    )
+    .style(theme::ghost_button)
+    .padding([4, 10])
+    .on_press(msg)
+    .into()
+}
+
 fn main() -> iced::Result {
     let mut app = iced::application(Shell::default, Shell::update, Shell::view)
         .window(iced::window::Settings {
             exit_on_close_request: false,
+            decorations: false,
             ..Default::default()
         })
         .subscription(Shell::subscription)

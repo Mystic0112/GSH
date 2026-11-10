@@ -5,7 +5,7 @@
 //! permite que o futuro módulo de i18n substitua os textos sem varrer a árvore
 //! de componentes.
 
-pub const APP_TITLE: &str = "GSH";
+pub const APP_TITLE: &str = "GSH Desktop";
 
 // Shell (colunas laterais, topbar, abas e rodapés)
 pub const WORKSPACES_HEADER: &str = "Workspaces";
@@ -105,6 +105,8 @@ pub const ICON_FILE_CONFIG: &str = "⚙";
 pub const ICON_FILE_DOC: &str = "¶";
 pub const ICON_FILE_LOCK: &str = "⚲";
 pub const ICON_FILE_GENERIC: &str = "≡";
+pub const ICON_WINDOW_MAXIMIZE: &str = "\u{e3c6}";
+pub const ICON_WINDOW_MINIMIZE: &str = "\u{e15b}";
 pub const ICON_FARM: &str = "\u{f205}";
 pub const ICON_CHAT: &str = "\u{e0cb}";
 pub const ICON_SEND: &str = "\u{e163}";
