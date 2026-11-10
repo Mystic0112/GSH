@@ -408,3 +408,21 @@ pub const SETTINGS_INVALID_SCROLLBACK: &str = "Informe um histórico entre 1000 
 pub const SETTINGS_INVALID_TERMINAL_SIZE: &str = "Informe um tamanho de fonte entre 8 e 32.";
 pub const SETTINGS_INVALID_TAB_SIZE: &str = "Informe 2 ou 4 para a tabulação.";
 pub const SETTINGS_TERMINAL_RESTART: &str = "As alterações valem para novos terminais.";
+
+// Banco de dados (pane de consulta PostgreSQL)
+pub const DB_TAB_TITLE: &str = "Banco";
+pub const ICON_DATABASE: &str = "▤";
+pub const DB_CONN_PLACEHOLDER: &str = "postgres://usuario@host:5432/banco";
+pub const DB_SQL_PLACEHOLDER: &str = "select * from tabela limit 100;";
+pub const DB_RUN: &str = "Executar";
+pub const DB_IDLE: &str = "Informe a conexão e escreva uma consulta.";
+pub const DB_RUNNING: &str = "Executando…";
+pub const DB_NO_ROWS: &str = "Nenhuma linha.";
+pub const DB_ROWS_AFFECTED: &str = "Linhas afetadas:";
+pub const DB_NULL: &str = "∅";
+pub const DB_TRUNCATED: &str = "Resultado limitado às primeiras linhas.";
+pub const DB_ERR_INVALID: &str = "Conexão inválida. Use postgres://usuario@host/banco.";
+pub const DB_ERR_CONNECT: &str = "Não foi possível conectar ao banco.";
+pub const DB_ERR_QUERY: &str = "Erro na consulta";
+pub const DB_ERR_TIMEOUT: &str = "A consulta demorou demais e foi cancelada.";
+pub const DB_ERR_RUNTIME: &str = "Falha interna ao executar a consulta.";

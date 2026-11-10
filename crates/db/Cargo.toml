@@ -1,0 +1,12 @@
+[package]
+name = "gsh-db"
+description = "GSH consultas SQL (PostgreSQL) sem UI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tokio = { version = "1", features = ["rt", "time"] }
+tokio-postgres = "0.7"

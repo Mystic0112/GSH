@@ -29,6 +29,8 @@ pub enum PaneTab {
     Farm,
     /// Configurações do aplicativo.
     Settings,
+    /// Consulta SQL (PostgreSQL).
+    Database,
 }
 
 impl PaneTab {
@@ -55,6 +57,7 @@ impl PaneTab {
             Self::File(path) => file_display_name(path),
             Self::Farm => labels::FARM_TAB_TITLE.to_string(),
             Self::Settings => labels::SETTINGS_TITLE.to_string(),
+            Self::Database => labels::DB_TAB_TITLE.to_string(),
         }
     }
 
@@ -65,6 +68,7 @@ impl PaneTab {
             Self::Chat(_) => labels::ICON_CHAT,
             Self::Farm => labels::ICON_PLUS,
             Self::Settings => labels::ICON_SETTINGS,
+            Self::Database => labels::ICON_DATABASE,
             Self::File(path) => {
                 let name = file_display_name(path);
                 labels::file_icon_for_name(&name)
@@ -183,6 +187,20 @@ impl PaneModel {
             self.active = Some(index);
         } else {
             self.tabs.push(PaneTab::Settings);
+            self.active = Some(self.tabs.len().saturating_sub(1));
+        }
+    }
+
+    /// Abre ou ativa a aba única de consulta SQL.
+    pub fn open_database(&mut self) {
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab, PaneTab::Database))
+        {
+            self.active = Some(index);
+        } else {
+            self.tabs.push(PaneTab::Database);
             self.active = Some(self.tabs.len().saturating_sub(1));
         }
     }

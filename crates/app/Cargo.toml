@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 gsh-chat = { path = "../chat" }
+gsh-db = { path = "../db" }
 gsh-config = { path = "../config" }
 gsh-core = { path = "../core" }
 gsh-editor = { path = "../editor" }

@@ -18,6 +18,7 @@ pub mod chat_composer;
 pub mod chat_pane;
 pub mod chat_view;
 pub mod claude_hook_installer;
+pub mod db_pane;
 pub mod editor_gutter;
 pub mod editor_highlight;
 pub mod editor_keys;
@@ -108,6 +109,8 @@ enum Msg {
     OpenSettings,
     Settings(settings::Message),
     Farm(farm::Message),
+    OpenDatabase,
+    Database(db_pane::Message),
     SelectWorkspace(usize),
     PickWorkspaceFolder,
     WorkspaceFolderPicked(Option<PathBuf>),
@@ -120,6 +123,7 @@ struct Shell {
     status_runtime: StatusRuntime,
     island: AgentIsland,
     farm: farm::FarmPane,
+    database: db_pane::DbPane,
     settings: settings::Settings,
     pane_model: PaneModel,
     /// Segundo pane quando o central está dividido; `pane_model` é sempre o focado.
@@ -173,6 +177,7 @@ impl Default for Shell {
             status_runtime,
             island,
             farm: farm::FarmPane::default(),
+            database: db_pane::DbPane::default(),
             settings,
             pane_model,
             split_pane: None,
@@ -246,7 +251,11 @@ impl Shell {
                     labels::DEFAULT_TAB_TITLE,
                     workspace_name.clone(),
                 )),
-                PaneTab::Chat(_) | PaneTab::File(_) | PaneTab::Farm | PaneTab::Settings => None,
+                PaneTab::Chat(_)
+                | PaneTab::File(_)
+                | PaneTab::Farm
+                | PaneTab::Settings
+                | PaneTab::Database => None,
             })
             .collect()
     }
@@ -592,7 +601,7 @@ impl Shell {
                         PaneTab::File(path) => {
                             let _ = self.file_tree.select_file(path);
                         }
-                        PaneTab::Farm | PaneTab::Settings => {}
+                        PaneTab::Farm | PaneTab::Settings | PaneTab::Database => {}
                     }
                 }
                 Task::none()
@@ -631,7 +640,7 @@ impl Shell {
                             self.file_viewers.remove(&path);
                             self.editors.remove(&path);
                         }
-                        PaneTab::Farm | PaneTab::Settings => {}
+                        PaneTab::Farm | PaneTab::Settings | PaneTab::Database => {}
                     }
                 }
                 Task::none()
@@ -660,6 +669,11 @@ impl Shell {
                 self.reveal_terminal_by_pane_id(&pane_id);
                 Task::none()
             }
+            Msg::OpenDatabase => {
+                self.pane_model.open_database();
+                Task::none()
+            }
+            Msg::Database(message) => self.database.update(message).map(Msg::Database),
             Msg::Farm(message) => {
                 self.farm.update(message);
                 Task::none()
@@ -814,6 +828,7 @@ impl Shell {
                 }
             }
             Some(PaneTab::Farm) => self.farm.view().map(Msg::Farm),
+            Some(PaneTab::Database) => self.database.view().map(Msg::Database),
             Some(PaneTab::Settings) => settings::view::view(&self.settings).map(Msg::Settings),
             None => pane_chrome::view_empty_body(),
         }
@@ -884,6 +899,8 @@ impl Shell {
 
         let top = row![
             container(top).width(Fill),
+            iced::widget::button(iced::widget::text(labels::ICON_DATABASE).font(theme::FONT_MONO))
+                .on_press(Msg::OpenDatabase),
             iced::widget::button(iced::widget::text(labels::ICON_SETTINGS).font(theme::FONT_MONO))
                 .on_press(Msg::OpenSettings)
         ]
@@ -1032,6 +1049,7 @@ mod tests {
             status_runtime,
             island: AgentIsland::default(),
             farm: farm::FarmPane::default(),
+            database: db_pane::DbPane::default(),
             settings: settings::Settings::default(),
             pane_model: PaneModel::new(),
             split_pane: None,
