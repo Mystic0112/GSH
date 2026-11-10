@@ -365,3 +365,18 @@ pub const FARM_TAB_TITLE: &str = "Cenário";
 pub const FARM_OFFICE: &str = "Escritório";
 pub const FARM_FARM: &str = "Fazenda";
 pub const FARM_CENTER: &str = "Centralizar";
+
+// Configurações
+pub const SETTINGS_TITLE: &str = "Configurações";
+pub const SETTINGS_GENERAL: &str = "Geral";
+pub const SETTINGS_APPEARANCE: &str = "Aparência";
+pub const SETTINGS_TERMINAL: &str = "Terminal";
+pub const SETTINGS_EDITOR: &str = "Editor";
+pub const SETTINGS_NOTIFICATIONS: &str = "Notificações";
+pub const SETTINGS_COMING_SOON: &str = "Em breve";
+pub const SETTINGS_LOCALE: &str = "Idioma";
+pub const SETTINGS_LOCALE_HINT: &str = "Ex.: pt-BR ou en; vazio acompanha o sistema";
+pub const SETTINGS_SAVE: &str = "Salvar";
+pub const SETTINGS_INVALID_LOCALE: &str = "Idioma inválido. Use letras e hífens, como pt-BR.";
+pub const SETTINGS_CONFIG_ERROR: &str = "Não foi possível ler ou salvar as configurações.";
+pub const SETTINGS_SAVED: &str = "Configuração salva.";

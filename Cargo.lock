@@ -1300,6 +1300,7 @@ name = "gsh-app"
 version = "0.1.0"
 dependencies = [
  "gsh-chat",
+ "gsh-config",
  "gsh-core",
  "gsh-editor",
  "gsh-git",
@@ -1310,6 +1311,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "toml_edit",
 ]
 
 [[package]]
@@ -3752,6 +3754,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

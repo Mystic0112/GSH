@@ -47,6 +47,7 @@ pub mod pane_strip;
 pub mod pane_tab;
 pub mod panel_widgets;
 pub mod rail;
+pub mod settings;
 pub mod terminal_canvas;
 pub mod terminal_grid;
 pub mod terminal_input;
@@ -98,6 +99,8 @@ enum Msg {
     NewTerminalTab,
     NewChatTab,
     OpenFarm,
+    OpenSettings,
+    Settings(settings::Message),
     Farm(farm::Message),
     SelectWorkspace(usize),
     PickWorkspaceFolder,
@@ -111,6 +114,7 @@ struct Shell {
     status_runtime: StatusRuntime,
     island: AgentIsland,
     farm: farm::FarmPane,
+    settings: settings::Settings,
     pane_model: PaneModel,
     terminals: BTreeMap<TermId, TerminalPane>,
     chats: BTreeMap<ChatId, ChatPane>,
@@ -152,6 +156,7 @@ impl Default for Shell {
             status_runtime,
             island,
             farm: farm::FarmPane::default(),
+            settings: settings::Settings::default(),
             pane_model,
             terminals,
             chats: BTreeMap::new(),
@@ -222,7 +227,7 @@ impl Shell {
                     labels::DEFAULT_TAB_TITLE,
                     workspace_name.clone(),
                 )),
-                PaneTab::Chat(_) | PaneTab::File(_) | PaneTab::Farm => None,
+                PaneTab::Chat(_) | PaneTab::File(_) | PaneTab::Farm | PaneTab::Settings => None,
             })
             .collect()
     }
@@ -516,7 +521,7 @@ impl Shell {
                         PaneTab::File(path) => {
                             let _ = self.file_tree.select_file(path);
                         }
-                        PaneTab::Farm => {}
+                        PaneTab::Farm | PaneTab::Settings => {}
                     }
                 }
                 Task::none()
@@ -555,9 +560,20 @@ impl Shell {
                             self.file_viewers.remove(&path);
                             self.editors.remove(&path);
                         }
-                        PaneTab::Farm => {}
+                        PaneTab::Farm | PaneTab::Settings => {}
                     }
                 }
+                Task::none()
+            }
+            Msg::OpenSettings => {
+                if !self.pane_model.tabs().contains(&PaneTab::Settings) {
+                    self.settings.reload();
+                }
+                self.pane_model.open_settings();
+                Task::none()
+            }
+            Msg::Settings(message) => {
+                self.settings.update(message);
                 Task::none()
             }
             Msg::OpenFarm => {
@@ -661,6 +677,13 @@ impl Shell {
             Msg::ToggleFiles,
         );
 
+        let top = row![
+            container(top).width(Fill),
+            iced::widget::button(iced::widget::text(labels::ICON_SETTINGS).font(theme::FONT_MONO))
+                .on_press(Msg::OpenSettings)
+        ]
+        .align_y(iced::Alignment::Center);
+
         let active_content: Element<'_, Msg> = match self.pane_model.active_tab() {
             Some(PaneTab::Terminal(id)) => self
                 .terminals
@@ -686,6 +709,7 @@ impl Shell {
                 }
             }
             Some(PaneTab::Farm) => self.farm.view().map(Msg::Farm),
+            Some(PaneTab::Settings) => settings::view::view(&self.settings).map(Msg::Settings),
             None => pane_chrome::view_empty_body(),
         };
 
@@ -828,6 +852,7 @@ mod tests {
             status_runtime,
             island: AgentIsland::default(),
             farm: farm::FarmPane::default(),
+            settings: settings::Settings::default(),
             pane_model: PaneModel::new(),
             terminals,
             chats: BTreeMap::new(),
@@ -841,6 +866,17 @@ mod tests {
             files_open: true,
             static_test_mode: true,
         }
+    }
+
+    #[test]
+    fn settings_abre_e_reativa_sem_duplicar() {
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::OpenSettings);
+        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Settings));
+        let _ = shell.update(Msg::SelectTab(0));
+        let _ = shell.update(Msg::OpenSettings);
+        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Settings));
+        assert_eq!(shell.pane_model.tabs().len(), 2);
     }
 
     #[test]
