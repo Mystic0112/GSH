@@ -1,6 +1,6 @@
 use super::{
     camera::Camera,
-    sprites,
+    crops, sprites,
     world::{self, Kind, Mode},
 };
 use crate::theme::scene as c;
@@ -87,15 +87,28 @@ pub fn draw(frame: &mut canvas::Frame, view: Size, camera: Camera, mode: Mode) {
         let (x, y) = (prop.x as f32, prop.y as f32);
         match prop.kind {
             Kind::Plot(stage) => {
-                rect(frame, camera, view, x, y, 32.0, 18.0, c::SOIL_DARK);
-                rect(frame, camera, view, x + 2.0, y + 2.0, 28.0, 14.0, c::SOIL);
-                for dx in [2.0, 10.0, 18.0] {
-                    let crop = match stage {
-                        0 => sprites::SEED,
-                        1 => sprites::SPROUT,
-                        _ => sprites::GROW,
-                    };
-                    sprite(frame, camera, view, x + dx, y - 2.0, crop);
+                rect(frame, camera, view, x, y, 30.0, 16.0, c::SOIL_DARK);
+                rect(frame, camera, view, x + 2.0, y + 2.0, 26.0, 12.0, c::SOIL);
+                let pixels = crops::rgba(stage, 0);
+                for row in 0..2 {
+                    for k in 0..3 {
+                        let left = x + 6.0 + k as f32 * 9.0 + row as f32 * 4.0 - 2.5;
+                        let top = y + if row == 1 { 15.0 } else { 8.0 } - 9.0;
+                        for (i, &[r, g, b, a]) in pixels.as_chunks::<4>().0.iter().enumerate() {
+                            if a != 0 {
+                                rect(
+                                    frame,
+                                    camera,
+                                    view,
+                                    left + (i % crops::WIDTH) as f32 * 0.5,
+                                    top + (i / crops::WIDTH) as f32 * 0.5,
+                                    0.5,
+                                    0.5,
+                                    Color::from_rgba8(r, g, b, f32::from(a) / 255.0),
+                                );
+                            }
+                        }
+                    }
                 }
             }
             Kind::Desk => {

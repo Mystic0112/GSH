@@ -536,6 +536,18 @@ mod tests {
 // Paleta da cena: farm_world.dart, farm_sprites_crops.dart e office_world_paint.dart.
 pub mod scene {
     use iced::Color;
+    // ARGB de farm_sprites_crops.dart; Pix converte para RGBA na rasterização.
+    pub const CROP_GREEN_DARK: u32 = 0xff3f8f35;
+    pub const CROP_GREEN: u32 = 0xff6fcf5b;
+    pub const CROP_GREEN_LIGHT: u32 = 0xffa6e27a;
+    pub const CROP_SEED_SOIL: u32 = 0xff4a3220;
+    pub const CROP_WILT_STEM: u32 = 0xff7a6a3a;
+    pub const CROP_WILT_TIP: u32 = 0xff5c4b27;
+    pub const CROP_WILT_LEAF: u32 = 0xff8a7a45;
+    pub const CROP_FRUIT: u32 = 0xffd97757;
+    pub const CROP_FRUIT_LIGHT: u32 = 0xfff2a07a;
+    pub const CROP_SPARK_CENTER: u32 = 0xfffff1cf;
+    pub const CROP_SPARK_CROSS: u32 = 0xffe8845f;
     pub const GRASS: Color = Color::from_rgb8(0x64, 0x84, 0x36);
     pub const GRASS_DARK: Color = Color::from_rgb8(0x57, 0x75, 0x30);
     pub const SOIL: Color = Color::from_rgb8(0x6b, 0x4a, 0x2e);
