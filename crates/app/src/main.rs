@@ -131,6 +131,8 @@ struct Shell {
 
 impl Default for Shell {
     fn default() -> Self {
+        let mut settings = settings::Settings::default();
+        settings.reload();
         let mut status_runtime = StatusRuntime::start_default();
         let mut island = AgentIsland::default();
         island.set_server_error(status_runtime.server_error().cloned());
@@ -156,7 +158,7 @@ impl Default for Shell {
             status_runtime,
             island,
             farm: farm::FarmPane::default(),
-            settings: settings::Settings::default(),
+            settings,
             pane_model,
             terminals,
             chats: BTreeMap::new(),
@@ -807,6 +809,7 @@ fn main() -> iced::Result {
             ..Default::default()
         })
         .subscription(Shell::subscription)
+        .scale_factor(|shell: &Shell| shell.settings.scale)
         .default_font(theme::FONT_BODY)
         .title(labels::APP_TITLE);
 

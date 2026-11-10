@@ -8,8 +8,8 @@ use crate::{labels, theme};
 
 pub fn view(settings: &Settings) -> Element<'_, Message> {
     let navigation = column![
-        text(labels::SETTINGS_GENERAL).color(theme::TEXT),
-        section(labels::SETTINGS_APPEARANCE),
+        button(labels::SETTINGS_GENERAL).on_press(Message::ShowAppearance(false)),
+        button(labels::SETTINGS_APPEARANCE).on_press(Message::ShowAppearance(true)),
         section(labels::SETTINGS_TERMINAL),
         section(labels::SETTINGS_EDITOR),
         section(labels::SETTINGS_NOTIFICATIONS),
@@ -17,17 +17,35 @@ pub fn view(settings: &Settings) -> Element<'_, Message> {
     .spacing(20)
     .width(200);
 
-    let mut content = column![
-        text(labels::SETTINGS_GENERAL).size(24),
-        text(labels::SETTINGS_LOCALE),
-        text_input(labels::SETTINGS_LOCALE_HINT, &settings.locale).on_input(Message::LocaleChanged),
-        button(labels::SETTINGS_SAVE).on_press(Message::Save),
-    ]
-    .spacing(16)
-    .width(Fill);
+    let mut content = if settings.appearance {
+        column![
+            text(labels::SETTINGS_APPEARANCE).size(24),
+            text(labels::SETTINGS_DARK_ONLY),
+            text(labels::SETTINGS_INTERFACE_SIZE),
+            text_input(
+                labels::SETTINGS_INTERFACE_SIZE_HINT,
+                &settings.interface_size
+            )
+            .on_input(Message::InterfaceSizeChanged),
+            button(labels::SETTINGS_SAVE).on_press(Message::SaveAppearance),
+        ]
+        .spacing(16)
+        .width(Fill)
+    } else {
+        column![
+            text(labels::SETTINGS_GENERAL).size(24),
+            text(labels::SETTINGS_LOCALE),
+            text_input(labels::SETTINGS_LOCALE_HINT, &settings.locale)
+                .on_input(Message::LocaleChanged),
+            button(labels::SETTINGS_SAVE).on_press(Message::Save),
+        ]
+        .spacing(16)
+        .width(Fill)
+    };
     if let Some(error) = &settings.error {
         let message = match error {
             Error::InvalidLocale => labels::SETTINGS_INVALID_LOCALE,
+            Error::InvalidInterfaceSize => labels::SETTINGS_INVALID_INTERFACE_SIZE,
             Error::Config(_) | Error::Io(_) | Error::Document(_) => labels::SETTINGS_CONFIG_ERROR,
         };
         content = content.push(text(message).color(theme::WARN));

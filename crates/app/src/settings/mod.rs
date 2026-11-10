@@ -1,5 +1,6 @@
 //! Estado e persistência das configurações gerais.
 
+mod appearance;
 pub mod view;
 
 use std::path::{Path, PathBuf};
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug)]
 pub enum Error {
     InvalidLocale,
+    InvalidInterfaceSize,
     Config(gsh_config::ConfigError),
     Io(std::io::Error),
     Document(toml_edit::TomlError),
@@ -16,11 +18,17 @@ pub enum Error {
 pub enum Message {
     LocaleChanged(String),
     Save,
+    ShowAppearance(bool),
+    InterfaceSizeChanged(String),
+    SaveAppearance,
 }
 
 pub struct Settings {
     path: Result<PathBuf, gsh_config::ConfigError>,
     pub locale: String,
+    pub appearance: bool,
+    pub interface_size: String,
+    pub scale: f32,
     pub error: Option<Error>,
     pub saved: bool,
 }
@@ -30,6 +38,9 @@ impl Default for Settings {
         Self {
             path: gsh_config::default_path(),
             locale: String::new(),
+            appearance: false,
+            interface_size: String::from("14"),
+            scale: 1.0,
             error: None,
             saved: false,
         }
@@ -43,6 +54,8 @@ impl Settings {
             Ok(path) => match gsh_config::load(path) {
                 Ok(config) => {
                     self.locale = config.locale.unwrap_or_default();
+                    self.interface_size = config.interface_size.to_string();
+                    self.scale = (config.interface_size.clamp(10.0, 20.0) / 14.0) as f32;
                     self.error = None;
                 }
                 Err(error) => self.error = Some(Error::Config(error)),
@@ -53,6 +66,27 @@ impl Settings {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::ShowAppearance(value) => {
+                self.appearance = value;
+                self.error = None;
+                self.saved = false;
+            }
+            Message::InterfaceSizeChanged(value) => {
+                self.interface_size = value;
+                self.error = None;
+                self.saved = false;
+            }
+            Message::SaveAppearance => {
+                let result = match &self.path {
+                    Ok(path) => appearance::save(path, &self.interface_size),
+                    Err(_) => Err(Error::Config(gsh_config::ConfigError::NoHome)),
+                };
+                if let Ok(size) = &result {
+                    self.scale = (*size / 14.0) as f32;
+                }
+                self.saved = result.is_ok();
+                self.error = result.err();
+            }
             Message::LocaleChanged(value) => {
                 self.locale = value;
                 self.error = None;

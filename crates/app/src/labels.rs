@@ -380,3 +380,8 @@ pub const SETTINGS_SAVE: &str = "Salvar";
 pub const SETTINGS_INVALID_LOCALE: &str = "Idioma inválido. Use letras e hífens, como pt-BR.";
 pub const SETTINGS_CONFIG_ERROR: &str = "Não foi possível ler ou salvar as configurações.";
 pub const SETTINGS_SAVED: &str = "Configuração salva.";
+
+pub const SETTINGS_DARK_ONLY: &str = "Tema: escuro (claro em breve)";
+pub const SETTINGS_INTERFACE_SIZE: &str = "Tamanho da interface";
+pub const SETTINGS_INTERFACE_SIZE_HINT: &str = "De 10 a 20";
+pub const SETTINGS_INVALID_INTERFACE_SIZE: &str = "Informe um tamanho entre 10 e 20.";
