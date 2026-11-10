@@ -33,8 +33,9 @@ where
 
     let add_tab = view_add_tab_button(callbacks.on_new_terminal);
     let add_chat = view_add_chat_button(callbacks.on_new_chat);
-    let farm =
-        button(text(labels::FARM_TAB_TITLE).size(theme::SIZE_LABEL)).on_press(callbacks.on_farm);
+    let farm = button(text(labels::FARM_TAB_TITLE).size(theme::SIZE_LABEL))
+        .on_press(callbacks.on_farm)
+        .style(theme::ghost_button);
     let noop = callbacks.noop_msg;
 
     let right_tools = row![
@@ -174,7 +175,7 @@ fn pane_tool_button<'a, M: Clone + 'a>(glyph: &'static str, noop_msg: M) -> Elem
     button(
         container(
             text(glyph)
-                .font(theme::FONT_MONO)
+                .font(theme::FONT_ICON)
                 .size(theme::SIZE_LABEL)
                 .color(theme::palette().text4),
         )

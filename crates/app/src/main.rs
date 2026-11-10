@@ -900,8 +900,10 @@ impl Shell {
         let top = row![
             container(top).width(Fill),
             iced::widget::button(iced::widget::text(labels::ICON_DATABASE).font(theme::FONT_ICON))
+                .style(theme::ghost_button)
                 .on_press(Msg::OpenDatabase),
             iced::widget::button(iced::widget::text(labels::ICON_SETTINGS).font(theme::FONT_ICON))
+                .style(theme::ghost_button)
                 .on_press(Msg::OpenSettings)
         ]
         .align_y(iced::Alignment::Center);

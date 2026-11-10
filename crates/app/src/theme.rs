@@ -740,3 +740,25 @@ pub const FARM_AGENTS: [Color; 8] = [
     Color::from_rgb8(0xf5, 0xc5, 0x42),
     Color::from_rgb8(0xd6, 0x3a, 0x3a),
 ];
+
+/// Botão discreto: fundo transparente, hover em `PANEL3` (estilo dos ícones da topbar e das abas).
+pub fn ghost_button(
+    _: &iced::Theme,
+    status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    use iced::widget::button::{Status, Style};
+    let palette = palette();
+    let background = match status {
+        Status::Hovered | Status::Pressed => Some(iced::Background::Color(palette.panel3)),
+        _ => None,
+    };
+    Style {
+        background,
+        text_color: palette.text2,
+        border: iced::Border {
+            radius: 6.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}

@@ -89,7 +89,7 @@ fn icon_toggle_button<'a, M: Clone + 'a>(
     button(
         container(
             text(glyph)
-                .font(theme::FONT_MONO)
+                .font(theme::FONT_ICON)
                 .size(theme::SIZE_TITLE)
                 .color(if selected {
                     theme::palette().accent_text

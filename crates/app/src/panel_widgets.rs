@@ -9,7 +9,7 @@ pub fn ghost<'a, M: Clone + 'a>(
     active: bool,
 ) -> Element<'a, M> {
     button(
-        container(text(glyph).font(theme::FONT_MONO).size(theme::SIZE_TITLE))
+        container(text(glyph).font(theme::FONT_ICON).size(theme::SIZE_TITLE))
             .center_x(Fill)
             .center_y(Fill),
     )
