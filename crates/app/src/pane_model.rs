@@ -187,6 +187,19 @@ impl PaneModel {
         }
     }
 
+    /// Recebe uma aba já existente (movida de outro pane): adiciona ao final, ou só
+    /// ativa se a mesma aba já estiver aberto aqui. Devolve o índice ativo.
+    pub fn adopt(&mut self, tab: PaneTab) -> usize {
+        if let Some(existing) = self.tabs.iter().position(|t| t == &tab) {
+            self.active = Some(existing);
+            return existing;
+        }
+        self.tabs.push(tab);
+        let idx = self.tabs.len().saturating_sub(1);
+        self.active = Some(idx);
+        idx
+    }
+
     /// Abre um arquivo como aba: se já estiver aberto, apenas ativa a aba existente;
     /// caso contrário adiciona ao final e ativa. Devolve o índice ativo.
     pub fn open_file(&mut self, path: impl Into<PathBuf>) -> usize {

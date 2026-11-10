@@ -98,6 +98,12 @@ enum Msg {
     CloseTab(usize),
     NewTerminalTab,
     NewChatTab,
+    SplitRight,
+    CloseSplit,
+    SelectOther(usize),
+    CloseOther(usize),
+    NewTerminalOther,
+    NewChatOther,
     OpenFarm,
     OpenSettings,
     Settings(settings::Message),
@@ -116,6 +122,10 @@ struct Shell {
     farm: farm::FarmPane,
     settings: settings::Settings,
     pane_model: PaneModel,
+    /// Segundo pane quando o central está dividido; `pane_model` é sempre o focado.
+    split_pane: Option<PaneModel>,
+    /// `true` quando o pane focado está à direita (o outro, à esquerda).
+    split_focus_right: bool,
     terminals: BTreeMap<TermId, TerminalPane>,
     chats: BTreeMap<ChatId, ChatPane>,
     file_viewers: BTreeMap<PathBuf, FileViewerState>,
@@ -165,6 +175,8 @@ impl Default for Shell {
             farm: farm::FarmPane::default(),
             settings,
             pane_model,
+            split_pane: None,
+            split_focus_right: false,
             terminals,
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
@@ -312,6 +324,38 @@ impl Shell {
     }
 
     fn update(&mut self, msg: Msg) -> Task<Msg> {
+        let task = self.update_inner(msg);
+        self.normalize_split();
+        task
+    }
+
+    /// Divisão sem abas some; pane focado vazio cede lugar ao outro.
+    fn normalize_split(&mut self) {
+        if self
+            .split_pane
+            .as_ref()
+            .is_some_and(|o| o.tabs().is_empty())
+        {
+            self.split_pane = None;
+            self.split_focus_right = false;
+        }
+        if self.pane_model.tabs().is_empty() {
+            if let Some(other) = self.split_pane.take() {
+                self.pane_model = other;
+                self.split_focus_right = false;
+            }
+        }
+    }
+
+    /// Troca o pane focado pelo outro (o focado passa a ser o que estava ao lado).
+    fn focus_other(&mut self) {
+        if let Some(other) = self.split_pane.as_mut() {
+            std::mem::swap(&mut self.pane_model, other);
+            self.split_focus_right = !self.split_focus_right;
+        }
+    }
+
+    fn update_inner(&mut self, msg: Msg) -> Task<Msg> {
         if matches!(
             &msg,
             Msg::SelectTab(_)
@@ -620,6 +664,45 @@ impl Shell {
                 self.farm.update(message);
                 Task::none()
             }
+            Msg::SplitRight => {
+                if self.split_pane.is_none() {
+                    if let Some(idx) = self.pane_model.active_index() {
+                        if let Some(tab) = self.pane_model.close(idx) {
+                            let mut moved = PaneModel::empty();
+                            moved.adopt(tab);
+                            let remaining = std::mem::replace(&mut self.pane_model, moved);
+                            self.split_pane = Some(remaining);
+                            self.split_focus_right = true;
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Msg::CloseSplit => {
+                if let Some(other) = self.split_pane.take() {
+                    for tab in other.tabs().iter().cloned() {
+                        self.pane_model.adopt(tab);
+                    }
+                }
+                self.split_focus_right = false;
+                Task::none()
+            }
+            Msg::SelectOther(idx) => {
+                self.focus_other();
+                self.update(Msg::SelectTab(idx))
+            }
+            Msg::CloseOther(idx) => {
+                self.focus_other();
+                self.update(Msg::CloseTab(idx))
+            }
+            Msg::NewTerminalOther => {
+                self.focus_other();
+                self.update(Msg::NewTerminalTab)
+            }
+            Msg::NewChatOther => {
+                self.focus_other();
+                self.update(Msg::NewChatTab)
+            }
             Msg::NewTerminalTab => {
                 let cwd = self.active_workspace_dir().map(Path::to_path_buf);
                 let id = self.pane_model.open_terminal();
@@ -672,7 +755,24 @@ impl Shell {
         let status_sub = iced::time::every(Duration::from_millis(STATUS_POLL_INTERVAL_MS))
             .map(|_| Msg::StatusTick);
 
-        let active_sub = match self.pane_model.active_tab() {
+        let active_sub = self.tab_subscription(&self.pane_model);
+        let other_sub = self
+            .split_pane
+            .as_ref()
+            .map(|other| self.tab_subscription(other))
+            .unwrap_or_else(Subscription::none);
+
+        let windows = iced::window::events().filter_map(|(id, event)| match event {
+            iced::window::Event::CloseRequested => Some(Msg::WindowCloseRequested(id)),
+            iced::window::Event::Unfocused => Some(Msg::WindowUnfocused),
+            _ => None,
+        });
+        Subscription::batch([status_sub, active_sub, other_sub, windows])
+    }
+
+    /// Assinatura de atualização da aba ativa de um pane (terminal ou chat).
+    fn tab_subscription(&self, model: &PaneModel) -> Subscription<Msg> {
+        match model.active_tab() {
             Some(PaneTab::Terminal(id)) => self
                 .terminals
                 .get(id)
@@ -684,14 +784,83 @@ impl Shell {
                 .map(|chat| chat.subscription().with(id).map(|(id, m)| Msg::Chat(id, m)))
                 .unwrap_or_else(Subscription::none),
             _ => Subscription::none(),
-        };
+        }
+    }
 
-        let windows = iced::window::events().filter_map(|(id, event)| match event {
-            iced::window::Event::CloseRequested => Some(Msg::WindowCloseRequested(id)),
-            iced::window::Event::Unfocused => Some(Msg::WindowUnfocused),
-            _ => None,
-        });
-        Subscription::batch([status_sub, active_sub, windows])
+    /// Conteúdo da aba ativa de um pane.
+    fn pane_content<'a>(&'a self, model: &'a PaneModel) -> Element<'a, Msg> {
+        match model.active_tab() {
+            Some(PaneTab::Terminal(id)) => self
+                .terminals
+                .get(id)
+                .map(|term| term.view().map(Msg::Terminal))
+                .unwrap_or_else(pane_chrome::view_empty_body),
+            Some(&PaneTab::Chat(id)) => self
+                .chats
+                .get(&id)
+                .map(|chat| chat.view().map(move |m| Msg::Chat(id, m)))
+                .unwrap_or_else(pane_chrome::view_empty_body),
+            Some(PaneTab::File(path)) => {
+                if let Some(editor) = self.editors.get(path) {
+                    let path = path.clone();
+                    editor
+                        .view()
+                        .map(move |message| Msg::Editor(path.clone(), message))
+                } else {
+                    self.file_viewers
+                        .get(path)
+                        .map(file_viewer::view)
+                        .unwrap_or_else(pane_chrome::view_empty_body)
+                }
+            }
+            Some(PaneTab::Farm) => self.farm.view().map(Msg::Farm),
+            Some(PaneTab::Settings) => settings::view::view(&self.settings).map(Msg::Settings),
+            None => pane_chrome::view_empty_body(),
+        }
+    }
+
+    /// Um pane inteiro (barra de abas + conteúdo). O focado recebe os controles de divisão.
+    fn pane_view<'a>(&'a self, model: &'a PaneModel, focused: bool) -> Element<'a, Msg> {
+        let content = self.pane_content(model);
+        let dirty = |path: &Path| {
+            self.editors
+                .get(path)
+                .is_some_and(|editor| editor.state.buffer.is_dirty())
+        };
+        let split_open = self.split_pane.is_some();
+        if focused {
+            pane_chrome::view(
+                model,
+                content,
+                ChromeCallbacks {
+                    on_select_tab: Msg::SelectTab,
+                    on_close_tab: Msg::CloseTab,
+                    on_new_terminal: Msg::NewTerminalTab,
+                    on_new_chat: Msg::NewChatTab,
+                    on_farm: Msg::OpenFarm,
+                    noop_msg: Msg::Noop,
+                    on_split: (!split_open).then_some(Msg::SplitRight),
+                    on_close_split: split_open.then_some(Msg::CloseSplit),
+                },
+                &dirty,
+            )
+        } else {
+            pane_chrome::view(
+                model,
+                content,
+                ChromeCallbacks {
+                    on_select_tab: Msg::SelectOther,
+                    on_close_tab: Msg::CloseOther,
+                    on_new_terminal: Msg::NewTerminalOther,
+                    on_new_chat: Msg::NewChatOther,
+                    on_farm: Msg::Noop,
+                    noop_msg: Msg::Noop,
+                    on_split: None,
+                    on_close_split: None,
+                },
+                &dirty,
+            )
+        }
     }
 
     fn view(&self) -> Element<'_, Msg> {
@@ -720,52 +889,26 @@ impl Shell {
         ]
         .align_y(iced::Alignment::Center);
 
-        let active_content: Element<'_, Msg> = match self.pane_model.active_tab() {
-            Some(PaneTab::Terminal(id)) => self
-                .terminals
-                .get(id)
-                .map(|term| term.view().map(Msg::Terminal))
-                .unwrap_or_else(pane_chrome::view_empty_body),
-            Some(&PaneTab::Chat(id)) => self
-                .chats
-                .get(&id)
-                .map(|chat| chat.view().map(move |m| Msg::Chat(id, m)))
-                .unwrap_or_else(pane_chrome::view_empty_body),
-            Some(PaneTab::File(path)) => {
-                if let Some(editor) = self.editors.get(path) {
-                    let path = path.clone();
-                    editor
-                        .view()
-                        .map(move |message| Msg::Editor(path.clone(), message))
+        let focused_el = self.pane_view(&self.pane_model, true);
+        let center_pane: Element<'_, Msg> = match self.split_pane.as_ref() {
+            Some(other) => {
+                let other_el = self.pane_view(other, false);
+                let (left, right) = if self.split_focus_right {
+                    (other_el, focused_el)
                 } else {
-                    self.file_viewers
-                        .get(path)
-                        .map(file_viewer::view)
-                        .unwrap_or_else(pane_chrome::view_empty_body)
-                }
+                    (focused_el, other_el)
+                };
+                let divider = container(iced::widget::Space::new())
+                    .width(1)
+                    .height(Fill)
+                    .style(|_: &Theme| container::Style {
+                        background: Some(Background::Color(theme::BORDER)),
+                        ..Default::default()
+                    });
+                row![left, divider, right].height(Fill).width(Fill).into()
             }
-            Some(PaneTab::Farm) => self.farm.view().map(Msg::Farm),
-            Some(PaneTab::Settings) => settings::view::view(&self.settings).map(Msg::Settings),
-            None => pane_chrome::view_empty_body(),
+            None => focused_el,
         };
-
-        let center_pane = pane_chrome::view(
-            &self.pane_model,
-            active_content,
-            ChromeCallbacks {
-                on_select_tab: Msg::SelectTab,
-                on_close_tab: Msg::CloseTab,
-                on_new_terminal: Msg::NewTerminalTab,
-                on_new_chat: Msg::NewChatTab,
-                on_farm: Msg::OpenFarm,
-                noop_msg: Msg::Noop,
-            },
-            &|path| {
-                self.editors
-                    .get(path)
-                    .is_some_and(|editor| editor.state.buffer.is_dirty())
-            },
-        );
 
         let mut body = row![].height(Fill).width(Fill);
         if self.rail_open {
@@ -891,6 +1034,8 @@ mod tests {
             farm: farm::FarmPane::default(),
             settings: settings::Settings::default(),
             pane_model: PaneModel::new(),
+            split_pane: None,
+            split_focus_right: false,
             terminals,
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
@@ -1158,6 +1303,44 @@ mod tests {
 
         let _ = shell.update(Msg::CloseTab(1));
         assert!(!shell.chats.contains_key(&1));
+        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(1)));
+    }
+
+    #[test]
+    fn dividir_move_aba_ativa_para_o_painel_novo_e_fechar_junta() {
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::OpenSettings);
+        let before = shell.pane_model.tabs().len();
+        let _ = shell.update(Msg::SplitRight);
+        assert!(shell.split_pane.is_some());
+        assert!(shell.split_focus_right);
+        assert_eq!(shell.pane_model.tabs(), &[PaneTab::Settings]);
+        assert_eq!(
+            shell.split_pane.as_ref().map(|p| p.tabs().len()),
+            Some(before - 1)
+        );
+        let _ = shell.update(Msg::CloseSplit);
+        assert!(shell.split_pane.is_none());
+        assert_eq!(shell.pane_model.tabs().len(), before);
+    }
+
+    #[test]
+    fn selecionar_aba_do_outro_painel_troca_o_foco() {
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::OpenSettings);
+        let _ = shell.update(Msg::SplitRight);
+        let _ = shell.update(Msg::SelectOther(0));
+        assert!(!shell.split_focus_right);
+        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(1)));
+    }
+
+    #[test]
+    fn fechar_ultima_aba_do_painel_focado_cede_lugar_ao_outro() {
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::OpenSettings);
+        let _ = shell.update(Msg::SplitRight);
+        let _ = shell.update(Msg::CloseTab(0));
+        assert!(shell.split_pane.is_none());
         assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(1)));
     }
 }
