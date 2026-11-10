@@ -25,6 +25,7 @@ pub mod editor_pane;
 pub mod editor_scroll;
 pub mod editor_state;
 pub mod editor_view;
+pub mod farm;
 pub mod file_tree;
 pub mod file_viewer;
 pub mod files_panel;
@@ -96,6 +97,8 @@ enum Msg {
     CloseTab(usize),
     NewTerminalTab,
     NewChatTab,
+    OpenFarm,
+    Farm(farm::Message),
     SelectWorkspace(usize),
     PickWorkspaceFolder,
     WorkspaceFolderPicked(Option<PathBuf>),
@@ -107,6 +110,7 @@ enum Msg {
 struct Shell {
     status_runtime: StatusRuntime,
     island: AgentIsland,
+    farm: farm::FarmPane,
     pane_model: PaneModel,
     terminals: BTreeMap<TermId, TerminalPane>,
     chats: BTreeMap<ChatId, ChatPane>,
@@ -147,6 +151,7 @@ impl Default for Shell {
         Self {
             status_runtime,
             island,
+            farm: farm::FarmPane::default(),
             pane_model,
             terminals,
             chats: BTreeMap::new(),
@@ -217,7 +222,7 @@ impl Shell {
                     labels::DEFAULT_TAB_TITLE,
                     workspace_name.clone(),
                 )),
-                PaneTab::Chat(_) | PaneTab::File(_) => None,
+                PaneTab::Chat(_) | PaneTab::File(_) | PaneTab::Farm => None,
             })
             .collect()
     }
@@ -511,6 +516,7 @@ impl Shell {
                         PaneTab::File(path) => {
                             let _ = self.file_tree.select_file(path);
                         }
+                        PaneTab::Farm => {}
                     }
                 }
                 Task::none()
@@ -549,8 +555,17 @@ impl Shell {
                             self.file_viewers.remove(&path);
                             self.editors.remove(&path);
                         }
+                        PaneTab::Farm => {}
                     }
                 }
+                Task::none()
+            }
+            Msg::OpenFarm => {
+                self.pane_model.open_farm();
+                Task::none()
+            }
+            Msg::Farm(message) => {
+                self.farm.update(message);
                 Task::none()
             }
             Msg::NewTerminalTab => {
@@ -670,6 +685,7 @@ impl Shell {
                         .unwrap_or_else(pane_chrome::view_empty_body)
                 }
             }
+            Some(PaneTab::Farm) => self.farm.view().map(Msg::Farm),
             None => pane_chrome::view_empty_body(),
         };
 
@@ -681,6 +697,7 @@ impl Shell {
                 on_close_tab: Msg::CloseTab,
                 on_new_terminal: Msg::NewTerminalTab,
                 on_new_chat: Msg::NewChatTab,
+                on_farm: Msg::OpenFarm,
                 noop_msg: Msg::Noop,
             },
             &|path| {
@@ -810,6 +827,7 @@ mod tests {
         Shell {
             status_runtime,
             island: AgentIsland::default(),
+            farm: farm::FarmPane::default(),
             pane_model: PaneModel::new(),
             terminals,
             chats: BTreeMap::new(),

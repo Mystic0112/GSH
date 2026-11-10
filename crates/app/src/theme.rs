@@ -532,3 +532,31 @@ mod tests {
         assert_eq!(cell_font(false), TERM_FONT);
     }
 }
+
+// Paleta da cena: farm_world.dart, farm_sprites_crops.dart e office_world_paint.dart.
+pub mod scene {
+    use iced::Color;
+    pub const GRASS: Color = Color::from_rgb8(0x64, 0x84, 0x36);
+    pub const GRASS_DARK: Color = Color::from_rgb8(0x57, 0x75, 0x30);
+    pub const SOIL: Color = Color::from_rgb8(0x6b, 0x4a, 0x2e);
+    pub const SOIL_DARK: Color = Color::from_rgb8(0x3f, 0x29, 0x15);
+    pub const FLOOR: Color = Color::from_rgb8(0xe5, 0xdd, 0xcd);
+    pub const CARPET: Color = Color::from_rgb8(0xbf, 0xc9, 0xd4);
+    pub const WALL: Color = Color::from_rgb8(0x3a, 0x40, 0x4c);
+    pub const DESK: Color = Color::from_rgb8(0xf7, 0xf7, 0xf4);
+    pub const CHAIR: Color = Color::from_rgb8(0x50, 0x79, 0xc4);
+    pub const WOOD: Color = Color::from_rgb8(0xc9, 0x9c, 0x66);
+    pub const WATER: Color = Color::from_rgb8(0x3f, 0x7f, 0xb8);
+    pub const BARN: Color = Color::from_rgb8(0x9b, 0x45, 0x32);
+    pub const LEAF_DARK: Color = Color::from_rgb8(0x3f, 0x8f, 0x35);
+    pub const LEAF: Color = Color::from_rgb8(0x6f, 0xcf, 0x5b);
+    pub const LEAF_LIGHT: Color = Color::from_rgb8(0xa6, 0xe2, 0x7a);
+    pub const CROP: Color = Color::from_rgb8(0xd9, 0x77, 0x57);
+    pub const CROP_LIGHT: Color = Color::from_rgb8(0xf2, 0xa0, 0x7a);
+    pub const MONITOR: Color = Color::from_rgb8(0x2a, 0x2f, 0x3a);
+    pub const SCREEN: Color = Color::from_rgb8(0x1b, 0x1f, 0x28);
+    pub const REFLECTION: Color = Color::from_rgb8(0x32, 0x38, 0x46);
+    pub const STANDBY: Color = Color::from_rgb8(0xb0, 0x7a, 0x2a);
+    pub const MONITOR_STAND: Color = Color::from_rgb8(0x5a, 0x60, 0x6c);
+    pub const METAL: Color = Color::from_rgb8(0x7c, 0x82, 0x8e);
+}

@@ -360,3 +360,8 @@ pub fn format_git_error(err: &gsh_git::GitError) -> String {
         gsh_git::GitError::Io { detail } => format!("{GIT_ERR_IO_PREFIX}{detail}"),
     }
 }
+
+pub const FARM_TAB_TITLE: &str = "Cenário";
+pub const FARM_OFFICE: &str = "Escritório";
+pub const FARM_FARM: &str = "Fazenda";
+pub const FARM_CENTER: &str = "Centralizar";

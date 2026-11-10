@@ -19,6 +19,7 @@ pub struct ChromeCallbacks<M, FSelect, FClose> {
     pub on_close_tab: FClose,
     pub on_new_terminal: M,
     pub on_new_chat: M,
+    pub on_farm: M,
     pub noop_msg: M,
 }
 

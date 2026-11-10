@@ -33,6 +33,8 @@ where
 
     let add_tab = view_add_tab_button(callbacks.on_new_terminal);
     let add_chat = view_add_chat_button(callbacks.on_new_chat);
+    let farm =
+        button(text(labels::FARM_TAB_TITLE).size(theme::SIZE_LABEL)).on_press(callbacks.on_farm);
     let noop = callbacks.noop_msg;
 
     let right_tools = row![
@@ -49,6 +51,7 @@ where
             tabs_row,
             add_tab,
             add_chat,
+            farm,
             Space::new().width(Fill),
             right_tools
         ]
