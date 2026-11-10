@@ -2,7 +2,11 @@ use crate::editor_pane::EditorMsg;
 use iced::keyboard;
 use iced::widget::text_editor::{self, Binding, KeyPress, Status};
 
-pub(crate) fn bind_key(key: KeyPress, page_lines: usize) -> Option<Binding<EditorMsg>> {
+pub(crate) fn bind_key(
+    key: KeyPress,
+    page_lines: usize,
+    tab_size: u8,
+) -> Option<Binding<EditorMsg>> {
     if matches!(key.status, Status::Focused { .. }) {
         if key.modifiers.command() {
             if let keyboard::Key::Character(c) = &key.key {
@@ -16,7 +20,11 @@ pub(crate) fn bind_key(key: KeyPress, page_lines: usize) -> Option<Binding<Edito
             }
         }
         if matches!(key.key, keyboard::Key::Named(keyboard::key::Named::Tab)) {
-            return Some(Binding::Insert('\t'));
+            return Some(if tab_size == 2 {
+                Binding::Sequence(vec![Binding::Insert(' '); 2])
+            } else {
+                Binding::Insert('\t')
+            });
         }
         let motion = match &key.key {
             keyboard::Key::Named(keyboard::key::Named::PageUp) => Some(text_editor::Motion::Up),

@@ -270,15 +270,28 @@ impl Default for Config {
 }
 
 /// `[editor]`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Editor {
     #[serde(deserialize_with = "named::or_default")]
     pub engine: FileEditorEngine,
+    pub tab_size: u8,
+    pub syntax_highlight: bool,
+    pub word_wrap: bool,
+}
+impl Default for Editor {
+    fn default() -> Self {
+        Self {
+            engine: FileEditorEngine::default(),
+            tab_size: 4,
+            syntax_highlight: true,
+            word_wrap: false,
+        }
+    }
 }
 
 /// `[terminal]`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Terminal {
     /// Perfil padrão do `+`. `None` = fallback de plataforma. A chave é
@@ -287,6 +300,19 @@ pub struct Terminal {
     pub default_profile_id: Option<String>,
     #[serde(deserialize_with = "named::or_default")]
     pub engine: TerminalEngine,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+    pub scrollback: usize,
+}
+impl Default for Terminal {
+    fn default() -> Self {
+        Self {
+            default_profile_id: None,
+            engine: TerminalEngine::default(),
+            shell: None,
+            scrollback: 10_000,
+        }
+    }
 }
 
 /// `[sound]`.

@@ -27,6 +27,8 @@ pub enum PaneTab {
     File(PathBuf),
     /// Cenário estático da fazenda ou escritório.
     Farm,
+    /// Configurações do aplicativo.
+    Settings,
 }
 
 impl PaneTab {
@@ -52,6 +54,7 @@ impl PaneTab {
             Self::Chat(_) => labels::CHAT_TAB_TITLE.to_string(),
             Self::File(path) => file_display_name(path),
             Self::Farm => labels::FARM_TAB_TITLE.to_string(),
+            Self::Settings => labels::SETTINGS_TITLE.to_string(),
         }
     }
 
@@ -61,6 +64,7 @@ impl PaneTab {
             Self::Terminal(_) => labels::ICON_TERMINAL,
             Self::Chat(_) => labels::ICON_CHAT,
             Self::Farm => labels::ICON_PLUS,
+            Self::Settings => labels::ICON_SETTINGS,
             Self::File(path) => {
                 let name = file_display_name(path);
                 labels::file_icon_for_name(&name)
@@ -165,6 +169,20 @@ impl PaneModel {
             self.active = Some(index);
         } else {
             self.tabs.push(PaneTab::Farm);
+            self.active = Some(self.tabs.len().saturating_sub(1));
+        }
+    }
+
+    /// Abre ou ativa a aba única de configurações.
+    pub fn open_settings(&mut self) {
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab, PaneTab::Settings))
+        {
+            self.active = Some(index);
+        } else {
+            self.tabs.push(PaneTab::Settings);
             self.active = Some(self.tabs.len().saturating_sub(1));
         }
     }

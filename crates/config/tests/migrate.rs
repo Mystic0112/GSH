@@ -173,10 +173,12 @@ fn expected_full_config() -> Config {
         )]),
         editor: Editor {
             engine: FileEditorEngine::Neovim,
+            ..Editor::default()
         },
         terminal: Terminal {
             default_profile_id: Some("zsh-login".to_owned()),
             engine: TerminalEngine::Xterm,
+            ..Terminal::default()
         },
         sound: Sound {
             volume: 85.0,

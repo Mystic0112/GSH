@@ -47,6 +47,7 @@ pub mod pane_strip;
 pub mod pane_tab;
 pub mod panel_widgets;
 pub mod rail;
+pub mod settings;
 pub mod terminal_canvas;
 pub mod terminal_grid;
 pub mod terminal_input;
@@ -98,6 +99,8 @@ enum Msg {
     NewTerminalTab,
     NewChatTab,
     OpenFarm,
+    OpenSettings,
+    Settings(settings::Message),
     Farm(farm::Message),
     SelectWorkspace(usize),
     PickWorkspaceFolder,
@@ -111,6 +114,7 @@ struct Shell {
     status_runtime: StatusRuntime,
     island: AgentIsland,
     farm: farm::FarmPane,
+    settings: settings::Settings,
     pane_model: PaneModel,
     terminals: BTreeMap<TermId, TerminalPane>,
     chats: BTreeMap<ChatId, ChatPane>,
@@ -127,6 +131,8 @@ struct Shell {
 
 impl Default for Shell {
     fn default() -> Self {
+        let mut settings = settings::Settings::default();
+        settings.reload();
         let mut status_runtime = StatusRuntime::start_default();
         let mut island = AgentIsland::default();
         island.set_server_error(status_runtime.server_error().cloned());
@@ -141,7 +147,12 @@ impl Default for Shell {
         let mut terminals = BTreeMap::new();
         terminals.insert(
             1,
-            TerminalPane::new_with_env(initial_pane_id, active_path.as_deref(), initial_env),
+            TerminalPane::new_with_config(
+                initial_pane_id,
+                active_path.as_deref(),
+                initial_env,
+                settings.current.clone(),
+            ),
         );
 
         let mut file_tree = FileTree::new();
@@ -152,6 +163,7 @@ impl Default for Shell {
             status_runtime,
             island,
             farm: farm::FarmPane::default(),
+            settings,
             pane_model,
             terminals,
             chats: BTreeMap::new(),
@@ -202,7 +214,7 @@ impl Shell {
                 .with_pane_id(pane_id)
                 .with_spawn_env(hook_env)
         } else {
-            TerminalPane::new_with_env(pane_id, cwd, hook_env)
+            TerminalPane::new_with_config(pane_id, cwd, hook_env, self.settings.current.clone())
         }
     }
 
@@ -222,7 +234,7 @@ impl Shell {
                     labels::DEFAULT_TAB_TITLE,
                     workspace_name.clone(),
                 )),
-                PaneTab::Chat(_) | PaneTab::File(_) | PaneTab::Farm => None,
+                PaneTab::Chat(_) | PaneTab::File(_) | PaneTab::Farm | PaneTab::Settings => None,
             })
             .collect()
     }
@@ -439,7 +451,8 @@ impl Shell {
                                         editor_pane::EditorPane::new(
                                             target.clone(),
                                             doc.into_source(),
-                                        ),
+                                        )
+                                        .with_config(self.settings.current.editor.clone()),
                                     );
                                 }
                                 fallback => {
@@ -535,7 +548,7 @@ impl Shell {
                         PaneTab::File(path) => {
                             let _ = self.file_tree.select_file(path);
                         }
-                        PaneTab::Farm => {}
+                        PaneTab::Farm | PaneTab::Settings => {}
                     }
                 }
                 Task::none()
@@ -574,7 +587,23 @@ impl Shell {
                             self.file_viewers.remove(&path);
                             self.editors.remove(&path);
                         }
-                        PaneTab::Farm => {}
+                        PaneTab::Farm | PaneTab::Settings => {}
+                    }
+                }
+                Task::none()
+            }
+            Msg::OpenSettings => {
+                if !self.pane_model.tabs().contains(&PaneTab::Settings) {
+                    self.settings.reload();
+                }
+                self.pane_model.open_settings();
+                Task::none()
+            }
+            Msg::Settings(message) => {
+                self.settings.update(message);
+                if self.settings.saved {
+                    for editor in self.editors.values_mut() {
+                        editor.set_config(self.settings.current.editor.clone());
                     }
                 }
                 Task::none()
@@ -684,6 +713,13 @@ impl Shell {
             Msg::ToggleFiles,
         );
 
+        let top = row![
+            container(top).width(Fill),
+            iced::widget::button(iced::widget::text(labels::ICON_SETTINGS).font(theme::FONT_MONO))
+                .on_press(Msg::OpenSettings)
+        ]
+        .align_y(iced::Alignment::Center);
+
         let active_content: Element<'_, Msg> = match self.pane_model.active_tab() {
             Some(PaneTab::Terminal(id)) => self
                 .terminals
@@ -709,6 +745,7 @@ impl Shell {
                 }
             }
             Some(PaneTab::Farm) => self.farm.view().map(Msg::Farm),
+            Some(PaneTab::Settings) => settings::view::view(&self.settings).map(Msg::Settings),
             None => pane_chrome::view_empty_body(),
         };
 
@@ -806,6 +843,7 @@ fn main() -> iced::Result {
             ..Default::default()
         })
         .subscription(Shell::subscription)
+        .scale_factor(|shell: &Shell| shell.settings.scale)
         .default_font(theme::FONT_BODY)
         .title(labels::APP_TITLE);
 
@@ -851,6 +889,7 @@ mod tests {
             status_runtime,
             island: AgentIsland::default(),
             farm: farm::FarmPane::default(),
+            settings: settings::Settings::default(),
             pane_model: PaneModel::new(),
             terminals,
             chats: BTreeMap::new(),
@@ -864,6 +903,17 @@ mod tests {
             files_open: true,
             static_test_mode: true,
         }
+    }
+
+    #[test]
+    fn settings_abre_e_reativa_sem_duplicar() {
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::OpenSettings);
+        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Settings));
+        let _ = shell.update(Msg::SelectTab(0));
+        let _ = shell.update(Msg::OpenSettings);
+        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Settings));
+        assert_eq!(shell.pane_model.tabs().len(), 2);
     }
 
     #[test]

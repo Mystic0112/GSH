@@ -238,7 +238,7 @@ pub fn draw_snapshot_frame(
                     position: Point::new(cell_x, cell_y + ch * 0.5),
                     max_width: cw * 2.0,
                     color: fg_color,
-                    size: theme::TERM_FONT_SIZE.into(),
+                    size: (theme::TERM_FONT_SIZE * ch / theme::TERM_CELL_HEIGHT).into(),
                     line_height: text::LineHeight::Absolute(ch.into()),
                     font: theme::cell_font(cell.bold),
                     align_x: text::Alignment::Left,

@@ -371,3 +371,40 @@ pub const FARM_WAITING: &str = "Esperando";
 pub const FARM_IDLE: &str = "Ocioso";
 pub const FARM_DONE: &str = "Terminou";
 pub const FARM_ALERT: &str = "!";
+// Configurações
+pub const SETTINGS_TITLE: &str = "Configurações";
+pub const SETTINGS_GENERAL: &str = "Geral";
+pub const SETTINGS_APPEARANCE: &str = "Aparência";
+pub const SETTINGS_TERMINAL: &str = "Terminal";
+pub const SETTINGS_EDITOR: &str = "Editor";
+pub const SETTINGS_NOTIFICATIONS: &str = "Notificações";
+pub const SETTINGS_COMING_SOON: &str = "Em breve";
+pub const SETTINGS_LOCALE: &str = "Idioma";
+pub const SETTINGS_LOCALE_HINT: &str = "Ex.: pt-BR ou en; vazio acompanha o sistema";
+pub const SETTINGS_SAVE: &str = "Salvar";
+pub const SETTINGS_INVALID_LOCALE: &str = "Idioma inválido. Use letras e hífens, como pt-BR.";
+pub const SETTINGS_CONFIG_ERROR: &str = "Não foi possível ler ou salvar as configurações.";
+pub const SETTINGS_SAVED: &str = "Configuração salva.";
+
+pub const SETTINGS_DARK_ONLY: &str = "Tema: escuro (claro em breve)";
+pub const SETTINGS_INTERFACE_SIZE: &str = "Tamanho da interface";
+pub const SETTINGS_INTERFACE_SIZE_HINT: &str = "De 10 a 20";
+pub const SETTINGS_INVALID_INTERFACE_SIZE: &str = "Informe um tamanho entre 10 e 20.";
+
+pub const SETTINGS_THEME: &str = "Tema";
+pub const SETTINGS_DARK: &str = "Escuro";
+pub const SETTINGS_LIGHT_SOON: &str = "Claro — em breve";
+pub const SETTINGS_SHELL: &str = "Shell padrão";
+pub const SETTINGS_SCROLLBACK: &str = "Histórico do terminal (1000 a 100000 linhas)";
+pub const SETTINGS_TERMINAL_SIZE: &str = "Fonte do terminal (8 a 32)";
+pub const SETTINGS_TAB_SIZE: &str = "Tabulação (2 ou 4)";
+pub const SETTINGS_HIGHLIGHT: &str = "Realce de sintaxe";
+pub const SETTINGS_WRAP: &str = "Quebra de linha";
+pub const SETTINGS_AGENT_NOTIFICATIONS: &str = "Notificações de agente";
+pub const SETTINGS_NOTIFICATIONS_PENDING: &str =
+    "A entrega de notificações ainda não está disponível neste aplicativo.";
+pub const SETTINGS_INVALID_SHELL: &str = "Informe um shell não vazio.";
+pub const SETTINGS_INVALID_SCROLLBACK: &str = "Informe um histórico entre 1000 e 100000.";
+pub const SETTINGS_INVALID_TERMINAL_SIZE: &str = "Informe um tamanho de fonte entre 8 e 32.";
+pub const SETTINGS_INVALID_TAB_SIZE: &str = "Informe 2 ou 4 para a tabulação.";
+pub const SETTINGS_TERMINAL_RESTART: &str = "As alterações valem para novos terminais.";

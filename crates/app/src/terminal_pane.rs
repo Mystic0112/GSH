@@ -58,6 +58,7 @@ pub struct TerminalPane {
     metrics: CellMetrics,
     cwd: Option<PathBuf>,
     has_spawn_error: bool,
+    config: gsh_config::Config,
 }
 
 impl Default for TerminalPane {
@@ -75,7 +76,14 @@ impl TerminalPane {
     /// Inicia um novo pane de terminal no diretório `cwd` informado (ou no
     /// diretório atual do processo quando `None`).
     pub fn new_in_dir(cwd: Option<&Path>) -> Self {
-        Self::spawn_with_dims(String::new(), cwd, Vec::new(), DEFAULT_COLS, DEFAULT_ROWS)
+        Self::spawn_with_dims(
+            String::new(),
+            cwd,
+            Vec::new(),
+            DEFAULT_COLS,
+            DEFAULT_ROWS,
+            gsh_config::Config::default(),
+        )
     }
 
     /// Inicia um novo pane de terminal com `pane_id` estável e variáveis de ambiente
@@ -85,7 +93,23 @@ impl TerminalPane {
         cwd: Option<&Path>,
         spawn_env: Vec<(String, String)>,
     ) -> Self {
-        Self::spawn_with_dims(pane_id.into(), cwd, spawn_env, DEFAULT_COLS, DEFAULT_ROWS)
+        Self::new_with_config(pane_id, cwd, spawn_env, gsh_config::Config::default())
+    }
+
+    pub fn new_with_config(
+        pane_id: impl Into<String>,
+        cwd: Option<&Path>,
+        spawn_env: Vec<(String, String)>,
+        config: gsh_config::Config,
+    ) -> Self {
+        Self::spawn_with_dims(
+            pane_id.into(),
+            cwd,
+            spawn_env,
+            DEFAULT_COLS,
+            DEFAULT_ROWS,
+            config,
+        )
     }
 
     /// Reinicia a sessão de terminal no diretório `cwd` preservando `(cols, rows)`,
@@ -100,7 +124,7 @@ impl TerminalPane {
         let (cols, rows) = self.size();
         let pane_id = self.pane_id.clone();
         let spawn_env = self.spawn_env.clone();
-        *self = Self::spawn_with_dims(pane_id, cwd, spawn_env, cols, rows);
+        *self = Self::spawn_with_dims(pane_id, cwd, spawn_env, cols, rows, self.config.clone());
     }
 
     fn spawn_with_dims(
@@ -109,8 +133,18 @@ impl TerminalPane {
         spawn_env: Vec<(String, String)>,
         cols: u16,
         rows: u16,
+        config: gsh_config::Config,
     ) -> Self {
-        let mut cmd = ShellCommand::default();
+        let mut cmd = ShellCommand::new(
+            config
+                .terminal
+                .shell
+                .as_deref()
+                .unwrap_or(gsh_term::default_shell()),
+        )
+        .scrollback_lines(config.terminal.scrollback.clamp(1000, 100_000));
+        let scale =
+            (config.effective_terminal_size().clamp(8.0, 32.0) as f32) / theme::TERM_FONT_SIZE;
         if let Some(dir) = cwd {
             cmd = cmd.cwd(dir);
         }
@@ -124,6 +158,9 @@ impl TerminalPane {
                 pane.pane_id = pane_id;
                 pane.spawn_env = spawn_env;
                 pane.cwd = cwd_owned;
+                pane.metrics.cell_width *= scale;
+                pane.metrics.cell_height *= scale;
+                pane.config = config;
                 pane
             }
             Err(_) => Self {
@@ -136,6 +173,7 @@ impl TerminalPane {
                 metrics: CellMetrics::default(),
                 cwd: cwd_owned,
                 has_spawn_error: true,
+                config,
             },
         }
     }
@@ -153,6 +191,7 @@ impl TerminalPane {
             metrics: CellMetrics::default(),
             cwd: None,
             has_spawn_error: false,
+            config: gsh_config::Config::default(),
         }
     }
 
@@ -173,6 +212,7 @@ impl TerminalPane {
             metrics: CellMetrics::default(),
             cwd,
             has_spawn_error: false,
+            config: gsh_config::Config::default(),
         }
     }
 
