@@ -33,9 +33,13 @@ where
 
     let add_tab = view_add_tab_button(callbacks.on_new_terminal);
     let add_chat = view_add_chat_button(callbacks.on_new_chat);
-    let farm = button(text(labels::FARM_TAB_TITLE).size(theme::SIZE_LABEL))
-        .on_press(callbacks.on_farm)
-        .style(theme::ghost_button);
+    let farm = button(
+        text(labels::ICON_FARM)
+            .font(theme::FONT_ICON)
+            .size(theme::SIZE_TOPBAR_TITLE),
+    )
+    .on_press(callbacks.on_farm)
+    .style(theme::ghost_button);
     let noop = callbacks.noop_msg;
 
     let right_tools = row![
@@ -125,50 +129,21 @@ fn view_add_tab_button<'a, M: Clone + 'a>(on_new_terminal: M) -> Element<'a, M> 
 fn view_add_chat_button<'a, M: Clone + 'a>(on_new_chat: M) -> Element<'a, M> {
     let btn = button(
         container(
-            row![
-                text(labels::ICON_CHAT)
-                    .font(theme::FONT_ICON)
-                    .size(theme::SIZE_LABEL)
-                    .color(theme::palette().text3),
-                Space::new().width(5.0),
-                text(labels::CHAT_TAB_TITLE)
-                    .font(theme::FONT_BODY_MEDIUM)
-                    .size(theme::SIZE_LABEL)
-                    .color(theme::palette().text3),
-            ]
-            .align_y(Alignment::Center),
+            text(labels::ICON_CHAT)
+                .font(theme::FONT_ICON)
+                .size(theme::SIZE_TOPBAR_TITLE),
         )
         .width(Fill)
         .height(Fill)
         .center_x(Fill)
         .center_y(Fill),
     )
-    .width(Length::Fixed(58.0))
+    .width(Length::Fixed(33.0))
     .height(Fill)
     .padding(0)
     .on_press(on_new_chat)
-    .style(|_: &Theme, status| {
-        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        button::Style {
-            background: if hovered {
-                Some(Background::Color(theme::palette().panel3))
-            } else {
-                None
-            },
-            text_color: if hovered {
-                theme::palette().text
-            } else {
-                theme::palette().text3
-            },
-            border: Border::default(),
-            ..Default::default()
-        }
-    });
-
-    row![btn, hairline_v()]
-        .width(Length::Fixed(59.0))
-        .height(Fill)
-        .into()
+    .style(theme::ghost_button);
+    btn.into()
 }
 
 fn pane_tool_button<'a, M: Clone + 'a>(glyph: &'static str, noop_msg: M) -> Element<'a, M> {
@@ -208,6 +183,7 @@ fn pane_tool_button<'a, M: Clone + 'a>(glyph: &'static str, noop_msg: M) -> Elem
             ..Default::default()
         }
     })
+    .style(theme::ghost_button)
     .into()
 }
 
