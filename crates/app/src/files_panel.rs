@@ -25,69 +25,50 @@ pub enum FilesMsg {
     CollapseAll,
     /// Atualiza os diretórios abertos no painel.
     Refresh,
+    OpenGit,
 }
 
 /// Renderiza o painel de arquivos à direita com a divisória esquerda de 1px `BORDER`.
-pub fn view(tree: &FileTree) -> Element<'_, FilesMsg> {
+pub fn view<'a>(
+    tree: &'a FileTree,
+    status: Option<&'a gsh_git::GitRepoStatus>,
+    repo_root: Option<&'a std::path::Path>,
+    busy: bool,
+) -> Element<'a, FilesMsg> {
     let mode_bar = view_mode_bar();
-    let section_header = view_section_header();
-    let tree_body = view_tree_body(tree);
+    let section_header = view_section_header(busy);
+    let tree_body = view_tree_body(tree, status, repo_root);
     let footer = view_footer();
 
-    let content = container(column![
-        mode_bar,
-        hairline_h(),
-        section_header,
-        tree_body,
-        hairline_h(),
-        footer,
-    ])
-    .width(Length::Fixed(theme::FILES_PANEL_WIDTH - 1.0))
-    .height(Fill)
-    .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(theme::BG)),
-        ..Default::default()
-    });
-
-    row![hairline_v(), content]
-        .width(Length::Fixed(theme::FILES_PANEL_WIDTH))
-        .height(Fill)
-        .into()
+    crate::panel_widgets::frame(
+        column![
+            mode_bar,
+            crate::panel_widgets::hairline_h(),
+            section_header,
+            tree_body,
+            crate::panel_widgets::hairline_h(),
+            footer
+        ]
+        .into(),
+    )
 }
 
 fn view_mode_bar<'a>() -> Element<'a, FilesMsg> {
-    let mode_button = container(
-        text(labels::ICON_FOLDER)
-            .font(theme::FONT_MONO)
-            .size(theme::SIZE_TITLE)
-            .color(theme::ACCENT_TEXT),
-    )
-    .width(Length::Fixed(28.0))
-    .height(Length::Fixed(28.0))
-    .center_x(Length::Fixed(28.0))
-    .center_y(Length::Fixed(28.0))
-    .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(theme::ACCENT_SOFT)),
-        border: Border {
-            radius: theme::RADIUS_BUTTON.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    });
-
     container(
-        row![mode_button, Space::new().width(Fill)]
-            .width(Fill)
-            .height(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
-            .align_y(Alignment::Center)
-            .padding([0, 14]),
+        row![
+            crate::panel_widgets::ghost(labels::ICON_FOLDER, None, true),
+            crate::panel_widgets::ghost(labels::ICON_GIT_BRANCH, Some(FilesMsg::OpenGit), false),
+            Space::new().width(Fill)
+        ]
+        .align_y(Alignment::Center)
+        .padding([0, 14]),
     )
     .width(Fill)
     .height(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
     .into()
 }
 
-fn view_section_header<'a>() -> Element<'a, FilesMsg> {
+fn view_section_header<'a>(busy: bool) -> Element<'a, FilesMsg> {
     container(
         row![
             text(labels::FILES_SECTION_UPPER)
@@ -95,9 +76,13 @@ fn view_section_header<'a>() -> Element<'a, FilesMsg> {
                 .size(theme::SIZE_SECTION_HEADER)
                 .color(theme::TEXT3),
             Space::new().width(Fill),
-            header_action_button(labels::ICON_COLLAPSE, FilesMsg::CollapseAll),
+            crate::panel_widgets::ghost(labels::ICON_COLLAPSE, Some(FilesMsg::CollapseAll), false),
             Space::new().width(4.0),
-            header_action_button(labels::ICON_REFRESH, FilesMsg::Refresh),
+            crate::panel_widgets::ghost(
+                labels::ICON_REFRESH,
+                (!busy).then_some(FilesMsg::Refresh),
+                false
+            ),
         ]
         .align_y(Alignment::Center),
     )
@@ -111,7 +96,11 @@ fn view_section_header<'a>() -> Element<'a, FilesMsg> {
     .into()
 }
 
-fn view_tree_body(tree: &FileTree) -> Element<'_, FilesMsg> {
+fn view_tree_body<'a>(
+    tree: &'a FileTree,
+    status: Option<&'a gsh_git::GitRepoStatus>,
+    repo_root: Option<&'a std::path::Path>,
+) -> Element<'a, FilesMsg> {
     if tree.root().is_none() {
         return empty_state_label(labels::FILES_NO_FOLDER);
     }
@@ -130,7 +119,9 @@ fn view_tree_body(tree: &FileTree) -> Element<'_, FilesMsg> {
                 expanded,
                 selected,
             } => {
-                list = list.push(view_entry_row(entry, depth, expanded, selected));
+                let git_status = repo_root
+                    .and_then(|root| status.and_then(|s| s.status_for_abs_path(root, &entry.path)));
+                list = list.push(view_entry_row(entry, depth, expanded, selected, git_status));
             }
             TreeRow::Error { depth, error } => {
                 let indent = (depth as f32) * 14.0 + 8.0;
@@ -160,6 +151,7 @@ fn view_entry_row<'a>(
     depth: usize,
     expanded: bool,
     selected: bool,
+    git_status: Option<gsh_git::GitFileStatus>,
 ) -> Element<'a, FilesMsg> {
     let indent = (depth as f32) * 14.0 + 6.0;
     let icon = if entry.is_dir {
@@ -183,7 +175,9 @@ fn view_entry_row<'a>(
     } else {
         theme::FONT_BODY
     };
-    let name_color = if selected || entry.is_dir {
+    let name_color = if let Some(status) = git_status {
+        crate::git_presenter::status_color(status)
+    } else if selected || entry.is_dir {
         theme::TEXT
     } else {
         theme::TEXT2
@@ -194,7 +188,7 @@ fn view_entry_row<'a>(
         FilesMsg::SelectFile(entry.path)
     };
 
-    let row_content = row![
+    let mut row_content = row![
         Space::new().width(indent),
         text(icon)
             .font(theme::FONT_MONO)
@@ -207,6 +201,13 @@ fn view_entry_row<'a>(
             .color(name_color),
     ]
     .align_y(Alignment::Center);
+    if let Some(status) = git_status {
+        row_content = row_content.push(Space::new().width(Fill)).push(
+            text(status.badge_code())
+                .color(crate::git_presenter::status_color(status))
+                .size(theme::SIZE_LABEL),
+        );
+    }
 
     button(row_content)
         .width(Fill)
@@ -267,62 +268,4 @@ fn view_footer<'a>() -> Element<'a, FilesMsg> {
     .height(Length::Fixed(theme::FOOTER_HEIGHT))
     .padding([0, 12])
     .into()
-}
-
-fn header_action_button<'a>(glyph: &'static str, msg: FilesMsg) -> Element<'a, FilesMsg> {
-    button(
-        container(
-            text(glyph)
-                .font(theme::FONT_MONO)
-                .size(theme::SIZE_LABEL)
-                .color(theme::TEXT3),
-        )
-        .width(Fill)
-        .height(Fill)
-        .center_x(Fill)
-        .center_y(Fill),
-    )
-    .width(Length::Fixed(22.0))
-    .height(Length::Fixed(22.0))
-    .padding(0)
-    .on_press(msg)
-    .style(|_: &Theme, status| {
-        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        button::Style {
-            background: if hovered {
-                Some(Background::Color(theme::PANEL3))
-            } else {
-                None
-            },
-            text_color: if hovered { theme::TEXT2 } else { theme::TEXT3 },
-            border: Border {
-                radius: theme::RADIUS_BADGE.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    })
-    .into()
-}
-
-fn hairline_h<'a>() -> Element<'a, FilesMsg> {
-    container(Space::new().width(Fill).height(1.0))
-        .width(Fill)
-        .height(Length::Fixed(1.0))
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::BORDER)),
-            ..Default::default()
-        })
-        .into()
-}
-
-fn hairline_v<'a>() -> Element<'a, FilesMsg> {
-    container(Space::new().width(1.0).height(Fill))
-        .width(Length::Fixed(1.0))
-        .height(Fill)
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::BORDER)),
-            ..Default::default()
-        })
-        .into()
 }

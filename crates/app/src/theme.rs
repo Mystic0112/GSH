@@ -137,6 +137,16 @@ pub const SHADOW: Color = GshPalette::DARK.shadow;
 
 /// Borda translúcida de aviso usada nos cards de permissão (`WARN` com 45% de opacidade).
 pub const WARN_BORDER: Color = Color { a: 0.45, ..WARN };
+/// Fundo translúcido para linhas adicionadas (`+`) no diff (`GIT_STAGED` com 14% de opacidade).
+pub const GIT_ADDED_BG: Color = Color {
+    a: 0.14,
+    ..GIT_STAGED
+};
+/// Fundo translúcido para linhas removidas (`-`) no diff (`GIT_DELETED` com 14% de opacidade).
+pub const GIT_REMOVED_BG: Color = Color {
+    a: 0.14,
+    ..GIT_DELETED
+};
 /// Cor de hover para botão primário acentuado.
 pub const ACCENT_HOVER: Color = ACCENT_TEXT;
 /// Cor de texto sobre botão primário `ACCENT` claro (`#C9D3D6`).

@@ -21,11 +21,21 @@ pub mod claude_hook_installer;
 pub mod file_tree;
 pub mod file_viewer;
 pub mod files_panel;
+pub mod git_changes_view;
+pub mod git_diff_view;
+pub mod git_file_row;
+pub mod git_header;
+pub mod git_history_view;
+pub mod git_ops;
+pub mod git_panel;
+pub mod git_presenter;
+pub mod git_state;
 pub mod gorilla;
 pub mod island;
 pub mod labels;
 pub mod pane_chrome;
 pub mod pane_model;
+pub mod panel_widgets;
 pub mod rail;
 pub mod terminal_canvas;
 pub mod terminal_grid;
@@ -65,6 +75,8 @@ enum Msg {
     Terminal(TerminalMsg),
     Chat(ChatId, ChatMsg),
     Files(FilesMsg),
+    Git(git_panel::GitMsg),
+    GitResult(git_state::ResultMsg),
     StatusTick,
     SelectTab(usize),
     CloseTab(usize),
@@ -87,6 +99,7 @@ struct Shell {
     file_viewers: BTreeMap<PathBuf, FileViewerState>,
     workspaces: WorkspaceList,
     file_tree: FileTree,
+    git: git_state::GitState,
     rail_open: bool,
     files_open: bool,
     static_test_mode: bool,
@@ -112,7 +125,9 @@ impl Default for Shell {
         );
 
         let mut file_tree = FileTree::new();
-        file_tree.set_root(active_path);
+        file_tree.set_root(active_path.clone());
+        let mut git = git_state::GitState::default();
+        git.set_repo(active_path);
         Self {
             status_runtime,
             island,
@@ -122,6 +137,7 @@ impl Default for Shell {
             file_viewers: BTreeMap::new(),
             workspaces,
             file_tree,
+            git,
             rail_open: true,
             files_open: true,
             static_test_mode: false,
@@ -215,6 +231,7 @@ impl Shell {
 
     fn activate_workspace_path(&mut self, next_path: Option<PathBuf>) {
         self.file_tree.set_root(next_path.clone());
+        self.git.set_repo(next_path.clone());
         if let Some(dir) = next_path.as_deref() {
             for term in self.terminals.values_mut() {
                 term.respawn_in_dir(Some(dir));
@@ -245,6 +262,12 @@ impl Shell {
                 }
                 for chat in self.chats.values_mut() {
                     chat.poll_events();
+                }
+                if self.git.should_refresh() {
+                    return self
+                        .git
+                        .start(git_state::Action::Refresh)
+                        .map(Msg::GitResult);
                 }
                 Task::none()
             }
@@ -325,9 +348,70 @@ impl Shell {
                         self.pane_model.open_file(target);
                     }
                     FilesMsg::CollapseAll => self.file_tree.collapse_all(),
-                    FilesMsg::Refresh => self.file_tree.refresh(),
+                    FilesMsg::Refresh => {
+                        self.file_tree.refresh();
+                        return self
+                            .git
+                            .start(git_state::Action::Refresh)
+                            .map(Msg::GitResult);
+                    }
+                    FilesMsg::OpenGit => {
+                        self.git.git_open = true;
+                        if self.git.busy {
+                            return Task::none();
+                        }
+                        return self
+                            .git
+                            .start(git_state::Action::Refresh)
+                            .map(Msg::GitResult);
+                    }
                 }
                 Task::none()
+            }
+            Msg::GitResult(result) => {
+                if self.git.finish(result) {
+                    self.git
+                        .start(git_state::Action::Refresh)
+                        .map(Msg::GitResult)
+                } else {
+                    Task::none()
+                }
+            }
+            Msg::Git(msg) => {
+                use git_panel::GitMsg;
+                let action = match msg {
+                    GitMsg::CloseDiff => {
+                        self.git.diff = None;
+                        None
+                    }
+                    GitMsg::Files => {
+                        self.git.git_open = false;
+                        None
+                    }
+                    GitMsg::Changes => {
+                        self.git.history_open = false;
+                        None
+                    }
+                    GitMsg::History => {
+                        self.git.history_open = true;
+                        None
+                    }
+                    GitMsg::Message(value) => {
+                        self.git.message = value;
+                        None
+                    }
+                    GitMsg::Refresh => Some(git_state::Action::Refresh),
+                    GitMsg::Stage(path) => Some(git_state::Action::Stage(path)),
+                    GitMsg::Unstage(path) => Some(git_state::Action::Unstage(path)),
+                    GitMsg::Diff(path, staged) => Some(git_state::Action::Diff(path, staged)),
+                    GitMsg::Commit if self.git.can_commit() => {
+                        Some(git_state::Action::Commit(self.git.message.clone()))
+                    }
+                    GitMsg::Commit => None,
+                };
+                action.map_or_else(Task::none, |action| {
+                    self.git.start(action).map(Msg::GitResult)
+                })
             }
             Msg::SelectTab(idx) => {
                 if let Some(tab) = self.pane_model.activate(idx).cloned() {
@@ -506,7 +590,19 @@ impl Shell {
         }
         body = body.push(center_pane);
         if self.files_open {
-            body = body.push(files_panel::view(&self.file_tree).map(Msg::Files));
+            if self.git.git_open {
+                body = body.push(git_panel::view(&self.git).map(Msg::Git));
+            } else {
+                body = body.push(
+                    files_panel::view(
+                        &self.file_tree,
+                        self.git.status.as_ref(),
+                        self.git.root.as_deref(),
+                        self.git.busy,
+                    )
+                    .map(Msg::Files),
+                );
+            }
         }
 
         let base = container(column![top, body].width(Fill).height(Fill))
@@ -595,6 +691,7 @@ mod tests {
             file_viewers: BTreeMap::new(),
             workspaces,
             file_tree: FileTree::new(),
+            git: git_state::GitState::default(),
             rail_open: true,
             files_open: true,
             static_test_mode: true,

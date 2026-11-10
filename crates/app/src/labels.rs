@@ -95,6 +95,39 @@ pub const ICON_CHAT: &str = "✦";
 pub const ICON_SEND: &str = "↵";
 pub const ICON_STOP: &str = "■";
 pub const ICON_TOOL_RUNNING: &str = "◌";
+pub const ICON_GIT_BRANCH: &str = "⎇";
+pub const ICON_DIFF: &str = "±";
+pub const ICON_MINUS: &str = "−";
+
+// Controle de versão (Git) — painel lateral, histórico e diff (`pt_BR.i18n.json` -> `gsh.fileTreePanel`)
+pub const SOURCE_CONTROL_HEADER: &str = "Controle de versão";
+pub const SOURCE_CONTROL_SECTION_UPPER: &str = "CONTROLE DE VERSÃO";
+pub const GIT_TAB_CHANGES: &str = "Alterações";
+pub const GIT_TAB_HISTORY: &str = "Histórico";
+pub const GIT_NO_CHANGES: &str = "Nenhuma alteração.";
+pub const GIT_NO_REPO: &str = "Nenhum repositório Git disponível.";
+pub const GIT_COMMIT_PLACEHOLDER: &str = "Mensagem do commit";
+pub const GIT_COMMIT_BUTTON: &str = "Commit";
+pub const GIT_COMMITTING_BUTTON: &str = "Comitando…";
+pub const GIT_HISTORY_EMPTY: &str = "Nenhum commit encontrado.";
+pub const GIT_HISTORY_UNTITLED: &str = "Commit sem título";
+pub const GIT_DIFF_TAB_PREFIX: &str = "Diff: ";
+pub const GIT_DIFF_STAGED_BADGE: &str = "STAGED";
+pub const GIT_DIFF_WORKTREE_BADGE: &str = "WORKING TREE";
+pub const GIT_DIFF_BINARY: &str = "Arquivo binário — sem diff de texto.";
+pub const GIT_RENAMED_FROM: &str = "Renomeado de: ";
+pub const GIT_ELLIPSIS: &str = "…";
+pub const GIT_DIFF_TRUNCATED: &str = "Diff limitado a 2000 linhas.";
+pub const GIT_DIFF_UNCHANGED: &str = "Sem alterações.";
+pub const GIT_DIFF_PREFIX_ADD: &str = "+";
+pub const GIT_DIFF_PREFIX_DEL: &str = "-";
+pub const GIT_DIFF_PREFIX_CTX: &str = " ";
+pub const GIT_ERR_NOT_INSTALLED_PREFIX: &str = "Git não instalado: ";
+pub const GIT_ERR_NOT_A_REPO: &str = "Esta pasta não é um repositório Git.";
+pub const GIT_ERR_EMPTY_MESSAGE: &str = "Digite uma mensagem de commit.";
+pub const GIT_ERR_EMPTY_PATHS: &str = "Nenhum arquivo selecionado para a operação Git.";
+pub const GIT_ERR_CMD_PREFIX: &str = "Erro do Git: ";
+pub const GIT_ERR_IO_PREFIX: &str = "Falha de I/O no Git: ";
 
 // Ilha de agentes — seções do painel (na ordem exata de `agent_island_panel.dart`)
 pub const SECTION_STATUS_ERROR: &str = "Erro no servidor de status";
@@ -249,5 +282,51 @@ pub fn format_chat_tool_detail(name: &str, summary: &str, command: Option<&str>)
         Some(cmd) => format!("{CHAT_CMD_PREFIX}{cmd}"),
         None if summary.is_empty() => name.to_string(),
         None => format!("{name} {summary}"),
+    }
+}
+
+/// Cabeçalho da seção de alterações em stage (`ALTERAÇÕES EM STAGE (N)`).
+pub fn format_staged_header(count: usize) -> String {
+    format!("ALTERAÇÕES EM STAGE ({count})")
+}
+
+/// Cabeçalho da seção de alterações no working tree (`ALTERAÇÕES (N)`).
+pub fn format_changes_header(count: usize) -> String {
+    format!("ALTERAÇÕES ({count})")
+}
+
+/// Título de uma aba de diff no pane central (`Diff: <nome>`).
+pub fn format_diff_tab_title(file_name: &str) -> String {
+    format!("{GIT_DIFF_TAB_PREFIX}{file_name}")
+}
+
+/// Linha de metadados de um commit no histórico (`data · autor · hash`).
+pub fn format_commit_meta(short_hash: &str, author: &str, date_label: &str) -> String {
+    let mut parts = Vec::with_capacity(3);
+    if !date_label.is_empty() {
+        parts.push(date_label);
+    }
+    if !author.is_empty() {
+        parts.push(author);
+    }
+    if !short_hash.is_empty() {
+        parts.push(short_hash);
+    }
+    parts.join(SUMMARY_SEPARATOR)
+}
+
+/// Converte um [`gsh_git::GitError`] em mensagem amigável para exibição na UI.
+pub fn format_git_error(err: &gsh_git::GitError) -> String {
+    match err {
+        gsh_git::GitError::GitNotInstalled { binary } => {
+            format!("{GIT_ERR_NOT_INSTALLED_PREFIX}{binary}")
+        }
+        gsh_git::GitError::NotARepository { .. } => GIT_ERR_NOT_A_REPO.to_string(),
+        gsh_git::GitError::EmptyCommitMessage => GIT_ERR_EMPTY_MESSAGE.to_string(),
+        gsh_git::GitError::EmptyPaths => GIT_ERR_EMPTY_PATHS.to_string(),
+        gsh_git::GitError::CommandFailed { stderr, .. } => {
+            format!("{GIT_ERR_CMD_PREFIX}{stderr}")
+        }
+        gsh_git::GitError::Io { detail } => format!("{GIT_ERR_IO_PREFIX}{detail}"),
     }
 }

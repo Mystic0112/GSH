@@ -20,3 +20,4 @@ iced = { version = "0.14", features = ["canvas", "tokio"] }
 rfd.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
