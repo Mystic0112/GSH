@@ -10,11 +10,15 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
     on_close: M,
 ) -> Element<'a, M> {
     let icon_color = if is_active {
-        theme::ACCENT_TEXT
+        theme::palette().accent_text
     } else {
-        theme::TEXT3
+        theme::palette().text3
     };
-    let title_color = if is_active { theme::TEXT } else { theme::TEXT3 };
+    let title_color = if is_active {
+        theme::palette().text
+    } else {
+        theme::palette().text3
+    };
 
     let mut tab_label = row![
         text(tab.icon())
@@ -36,7 +40,7 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         tab_label = tab_label.push(iced::widget::tooltip(
             text(labels::EDITOR_DIRTY)
                 .size(theme::SIZE_TAB)
-                .color(theme::ACCENT),
+                .color(theme::palette().accent),
             text(labels::EDITOR_DIRTY_TOOLTIP),
             iced::widget::tooltip::Position::Bottom,
         ));
@@ -49,11 +53,11 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         .style(move |_: &Theme, status| {
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
             let bg = if hovered {
-                theme::PANEL3
+                theme::palette().panel3
             } else if is_active {
-                theme::PANEL
+                theme::palette().panel
             } else {
-                theme::BG
+                theme::palette().bg
             };
             button::Style {
                 background: Some(Background::Color(bg)),
@@ -68,7 +72,7 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
             text(labels::ICON_CLOSE)
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_TITLE)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         )
         .width(Fill)
         .height(Fill)
@@ -83,11 +87,15 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
             background: if hovered {
-                Some(Background::Color(theme::PANEL3))
+                Some(Background::Color(theme::palette().panel3))
             } else {
                 None
             },
-            text_color: if hovered { theme::TEXT } else { theme::TEXT3 },
+            text_color: if hovered {
+                theme::palette().text
+            } else {
+                theme::palette().text3
+            },
             border: Border {
                 radius: theme::RADIUS_BADGE.into(),
                 ..Default::default()
@@ -106,9 +114,9 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
     .height(Fill)
     .style(move |_: &Theme| container::Style {
         background: Some(Background::Color(if is_active {
-            theme::PANEL
+            theme::palette().panel
         } else {
-            theme::BG
+            theme::palette().bg
         })),
         ..Default::default()
     });
@@ -118,7 +126,7 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
             .width(Fill)
             .height(Length::Fixed(2.0))
             .style(|_: &Theme| container::Style {
-                background: Some(Background::Color(theme::ACCENT)),
+                background: Some(Background::Color(theme::palette().accent)),
                 ..Default::default()
             })
             .into()

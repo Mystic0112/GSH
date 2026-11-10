@@ -22,9 +22,9 @@ pub fn save(path: &Path, settings: &Settings) -> Result<gsh_config::Config, Erro
             )?;
             doc.as_table_mut()
                 .insert("interfaceSize", toml_edit::value(size));
-            if settings.theme_mode == gsh_config::schema::AppThemeMode::Dark {
+            if let Ok(mode) = super::appearance::parse_theme(settings.theme_mode.name()) {
                 doc.as_table_mut()
-                    .insert("themeMode", toml_edit::value("dark"));
+                    .insert("themeMode", toml_edit::value(mode.name()));
             }
         }
         Section::Terminal => {

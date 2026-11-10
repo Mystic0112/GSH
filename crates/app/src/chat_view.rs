@@ -51,7 +51,7 @@ pub fn view(pane: &ChatPane) -> Element<'_, ChatMsg> {
     .width(Fill)
     .height(Fill)
     .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(theme::PANEL)),
+        background: Some(Background::Color(theme::palette().panel)),
         ..Default::default()
     })
     .into()
@@ -62,22 +62,22 @@ fn view_header(pane: &ChatPane) -> Element<'_, ChatMsg> {
         text(labels::ICON_CHAT)
             .font(theme::FONT_MONO)
             .size(theme::SIZE_TITLE)
-            .color(theme::TEXT2),
+            .color(theme::palette().text2),
         Space::new().width(8.0),
         text(pane.conversation_title())
             .font(theme::FONT_BODY_MEDIUM)
             .size(theme::SIZE_RAIL_ITEM)
-            .color(theme::TEXT),
+            .color(theme::palette().text),
         Space::new().width(10.0),
         container(
             text(pane.folder_label())
                 .font(theme::FONT_BODY)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT2),
+                .color(theme::palette().text2),
         )
         .padding([2, 6])
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::PANEL3)),
+            background: Some(Background::Color(theme::palette().panel3)),
             border: Border {
                 radius: theme::RADIUS_BADGE.into(),
                 ..Default::default()
@@ -94,7 +94,7 @@ fn view_header(pane: &ChatPane) -> Element<'_, ChatMsg> {
         .width(Fill)
         .height(Length::Fixed(1.0))
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::BORDER)),
+            background: Some(Background::Color(theme::palette().border)),
             ..Default::default()
         });
 
@@ -117,7 +117,7 @@ fn view_empty(pane: &ChatPane) -> Element<'_, ChatMsg> {
             text(labels::ICON_CHAT)
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_DISPLAY)
-                .color(theme::TEXT4),
+                .color(theme::palette().text4),
         )
         .width(Fill)
         .center_x(Fill),
@@ -126,7 +126,7 @@ fn view_empty(pane: &ChatPane) -> Element<'_, ChatMsg> {
             text(labels::CHAT_EMPTY_TITLE)
                 .font(theme::FONT_DISPLAY)
                 .size(18.0)
-                .color(theme::TEXT),
+                .color(theme::palette().text),
         )
         .width(Fill)
         .center_x(Fill),
@@ -135,7 +135,7 @@ fn view_empty(pane: &ChatPane) -> Element<'_, ChatMsg> {
             text(subtitle)
                 .font(theme::FONT_BODY)
                 .size(theme::SIZE_TITLE)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         )
         .width(Fill)
         .center_x(Fill),
@@ -150,12 +150,12 @@ fn view_empty(pane: &ChatPane) -> Element<'_, ChatMsg> {
                 text(labels::ICON_CHEVRON_RIGHT)
                     .font(theme::FONT_MONO)
                     .size(theme::SIZE_LABEL)
-                    .color(theme::TEXT3),
+                    .color(theme::palette().text3),
                 Space::new().width(8.0),
                 text(hint)
                     .font(theme::FONT_BODY)
                     .size(theme::SIZE_TITLE)
-                    .color(theme::TEXT2),
+                    .color(theme::palette().text2),
             ]
             .padding(Padding {
                 top: 0.0,
@@ -219,12 +219,12 @@ fn view_user_bubble(msg: &str) -> Element<'_, ChatMsg> {
         text(msg)
             .font(theme::FONT_BODY)
             .size(theme::SIZE_BODY)
-            .color(theme::TEXT),
+            .color(theme::palette().text),
     )
     .max_width(USER_BUBBLE_MAX_WIDTH)
     .padding([7, 12])
     .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(theme::PANEL3)),
+        background: Some(Background::Color(theme::palette().panel3)),
         border: Border {
             radius: 12.0.into(),
             ..Default::default()
@@ -246,7 +246,7 @@ fn view_assistant_text(msg: &str, streaming: bool) -> Element<'_, ChatMsg> {
         text(display)
             .font(theme::FONT_BODY)
             .size(theme::SIZE_BODY)
-            .color(theme::TEXT),
+            .color(theme::palette().text),
     )
     .width(Fill)
     .into()
@@ -254,9 +254,9 @@ fn view_assistant_text(msg: &str, streaming: bool) -> Element<'_, ChatMsg> {
 
 fn view_tool_line(idx: usize, tool: &ChatToolEntry) -> Element<'_, ChatMsg> {
     let fg = if tool.is_error {
-        theme::ERROR
+        theme::palette().error
     } else {
-        theme::TEXT3
+        theme::palette().text3
     };
     let chevron = if tool.expanded {
         labels::ICON_CHEVRON_DOWN
@@ -271,7 +271,7 @@ fn view_tool_line(idx: usize, tool: &ChatToolEntry) -> Element<'_, ChatMsg> {
                 text(labels::ICON_TOOL_RUNNING)
                     .font(theme::FONT_MONO)
                     .size(theme::SIZE_SECTION_HEADER)
-                    .color(theme::TEXT3),
+                    .color(theme::palette().text3),
             )
             .push(Space::new().width(6.0));
     }
@@ -281,7 +281,7 @@ fn view_tool_line(idx: usize, tool: &ChatToolEntry) -> Element<'_, ChatMsg> {
             text(&tool.name)
                 .font(theme::FONT_BODY_MEDIUM)
                 .size(theme::SIZE_BODY)
-                .color(theme::TEXT2),
+                .color(theme::palette().text2),
         )
         .push(
             text(labels::CHAT_TOOL_NAME_PAD)
@@ -309,11 +309,11 @@ fn view_tool_line(idx: usize, tool: &ChatToolEntry) -> Element<'_, ChatMsg> {
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
             button::Style {
                 background: if hovered {
-                    Some(Background::Color(theme::PANEL2))
+                    Some(Background::Color(theme::palette().panel2))
                 } else {
                     None
                 },
-                text_color: theme::TEXT2,
+                text_color: theme::palette().text2,
                 border: Border {
                     radius: theme::RADIUS_BUTTON.into(),
                     ..Default::default()
@@ -331,7 +331,7 @@ fn view_tool_line(idx: usize, tool: &ChatToolEntry) -> Element<'_, ChatMsg> {
     let mut details_col = column![text(detail_header)
         .font(theme::FONT_MONO)
         .size(theme::SIZE_LABEL)
-        .color(theme::TEXT2)];
+        .color(theme::palette().text2)];
 
     let trimmed_res = tool.result.trim();
     if !trimmed_res.is_empty() {
@@ -345,9 +345,9 @@ fn view_tool_line(idx: usize, tool: &ChatToolEntry) -> Element<'_, ChatMsg> {
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_LABEL)
                 .color(if tool.is_error {
-                    theme::ERROR
+                    theme::palette().error
                 } else {
-                    theme::TEXT3
+                    theme::palette().text3
                 }),
         );
     }
@@ -356,9 +356,9 @@ fn view_tool_line(idx: usize, tool: &ChatToolEntry) -> Element<'_, ChatMsg> {
         .width(Fill)
         .padding([10, 12])
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::PANEL2)),
+            background: Some(Background::Color(theme::palette().panel2)),
             border: Border {
-                color: theme::BORDER,
+                color: theme::palette().border,
                 width: 1.0,
                 radius: theme::RADIUS_CARD.into(),
             },
@@ -375,7 +375,7 @@ fn view_error_notice(message: &str) -> Element<'_, ChatMsg> {
         text(message)
             .font(theme::FONT_BODY)
             .size(theme::SIZE_LABEL)
-            .color(theme::ERROR),
+            .color(theme::palette().error),
     )
     .width(Fill)
     .into()

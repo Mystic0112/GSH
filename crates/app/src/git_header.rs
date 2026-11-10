@@ -8,13 +8,17 @@ fn tab<'a>(label: &'static str, active: bool, msg: GitMsg) -> Element<'a, GitMsg
         .on_press(msg)
         .style(move |_: &Theme, status| button::Style {
             background: if active {
-                Some(theme::ACCENT_SOFT.into())
+                Some(theme::palette().accent_soft.into())
             } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
-                Some(theme::PANEL3.into())
+                Some(theme::palette().panel3.into())
             } else {
                 None
             },
-            text_color: if active { theme::TEXT } else { theme::TEXT3 },
+            text_color: if active {
+                theme::palette().text
+            } else {
+                theme::palette().text3
+            },
             border: Border {
                 radius: theme::RADIUS_BUTTON.into(),
                 ..Default::default()
@@ -38,7 +42,7 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
         text(labels::SOURCE_CONTROL_SECTION_UPPER)
             .font(theme::FONT_TITLE)
             .size(theme::SIZE_SECTION_HEADER)
-            .color(theme::TEXT3),
+            .color(theme::palette().text3),
         Space::new().width(Fill),
         panel_widgets::ghost(
             labels::ICON_REFRESH,

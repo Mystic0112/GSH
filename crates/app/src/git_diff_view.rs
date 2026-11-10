@@ -31,11 +31,11 @@ pub fn view<'a>(diff: &'a gsh_git::FileDiff, original: Option<&'a str>) -> Eleme
         text(labels::ICON_DIFF)
             .font(theme::FONT_MONO)
             .size(theme::SIZE_LABEL)
-            .color(theme::TEXT3),
+            .color(theme::palette().text3),
         text(labels::format_diff_tab_title(&diff.path))
             .font(theme::FONT_TITLE)
             .size(theme::SIZE_LABEL)
-            .color(theme::TEXT),
+            .color(theme::palette().text),
         Space::new().width(Fill),
         panel_widgets::ghost(labels::ICON_CLOSE, Some(GitMsg::CloseDiff), false)
     ]
@@ -43,14 +43,14 @@ pub fn view<'a>(diff: &'a gsh_git::FileDiff, original: Option<&'a str>) -> Eleme
     let mut lines = column![text(badge)
         .font(theme::FONT_BODY_MEDIUM)
         .size(theme::SIZE_BADGE)
-        .color(theme::TEXT3)]
+        .color(theme::palette().text3)]
     .spacing(1);
     if let Some(original) = original {
         lines = lines.push(
             text(format!("{}{original}", labels::GIT_RENAMED_FROM))
                 .font(theme::FONT_BODY)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         );
     }
     if diff.kind == gsh_git::FileDiffKind::Binary {
@@ -58,7 +58,7 @@ pub fn view<'a>(diff: &'a gsh_git::FileDiff, original: Option<&'a str>) -> Eleme
             text(labels::GIT_DIFF_BINARY)
                 .font(theme::FONT_BODY)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         );
     }
     if diff.kind == gsh_git::FileDiffKind::Unchanged {
@@ -66,7 +66,7 @@ pub fn view<'a>(diff: &'a gsh_git::FileDiff, original: Option<&'a str>) -> Eleme
             text(labels::GIT_DIFF_UNCHANGED)
                 .font(theme::FONT_BODY)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         );
     }
     let mut remaining = MAX_DIFF_LINES;
@@ -79,7 +79,7 @@ pub fn view<'a>(diff: &'a gsh_git::FileDiff, original: Option<&'a str>) -> Eleme
             text(&hunk.header)
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         );
         for line in hunk.lines.iter().take(remaining) {
             let (color, background) = git_presenter::diff_style(line.kind);
@@ -88,7 +88,7 @@ pub fn view<'a>(diff: &'a gsh_git::FileDiff, original: Option<&'a str>) -> Eleme
             let gutter = text(format!("{old:>4} {new:>4} "))
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT4);
+                .color(theme::palette().text4);
             let body = text(git_presenter::diff_line(line))
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_LABEL)
@@ -107,7 +107,7 @@ pub fn view<'a>(diff: &'a gsh_git::FileDiff, original: Option<&'a str>) -> Eleme
             text(labels::GIT_DIFF_TRUNCATED)
                 .font(theme::FONT_BODY)
                 .size(theme::SIZE_LABEL)
-                .color(theme::WARN),
+                .color(theme::palette().warn),
         );
     }
     column![

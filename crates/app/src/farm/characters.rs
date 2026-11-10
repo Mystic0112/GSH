@@ -49,7 +49,7 @@ pub fn draw(frame: &mut canvas::Frame, agents: &[Agent], mode: Mode, camera: Cam
         let color = theme::FARM_AGENTS
             .get(agent.slot % theme::FARM_AGENTS.len())
             .copied()
-            .unwrap_or(theme::ONLINE);
+            .unwrap_or(theme::palette().online);
         let mut pixel = |x: f32, y: f32, w: f32, h: f32, color| {
             frame.fill_rectangle(
                 Point::new(p.x + x * z, p.y + y * z),
@@ -75,7 +75,7 @@ pub fn draw(frame: &mut canvas::Frame, agents: &[Agent], mode: Mode, camera: Cam
             pixel(3.0, 7.0, 4.0, 1.0, theme::scene::MONITOR);
         }
         if pose == Pose::Alert {
-            pixel(7.0, -5.0, 4.0, 6.0, theme::WARN);
+            pixel(7.0, -5.0, 4.0, 6.0, theme::palette().warn);
             frame.fill_text(Text {
                 content: labels::FARM_ALERT.into(),
                 position: Point::new(p.x + 8.0 * z, p.y - 5.0 * z),

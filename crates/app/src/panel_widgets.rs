@@ -19,16 +19,16 @@ pub fn ghost<'a, M: Clone + 'a>(
     .on_press_maybe(message)
     .style(move |_: &Theme, status| button::Style {
         background: if active {
-            Some(Background::Color(theme::ACCENT_SOFT))
+            Some(Background::Color(theme::palette().accent_soft))
         } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
-            Some(Background::Color(theme::PANEL3))
+            Some(Background::Color(theme::palette().panel3))
         } else {
             None
         },
         text_color: if matches!(status, button::Status::Disabled) && !active {
-            theme::TEXT4
+            theme::palette().text4
         } else {
-            theme::TEXT2
+            theme::palette().text2
         },
         border: Border {
             radius: theme::RADIUS_BUTTON.into(),
@@ -43,7 +43,7 @@ pub fn hairline_h<'a, M: 'a>() -> Element<'a, M> {
         .width(Fill)
         .height(1)
         .style(|_| container::Style {
-            background: Some(theme::BORDER.into()),
+            background: Some(theme::palette().border.into()),
             ..Default::default()
         })
         .into()
@@ -53,7 +53,7 @@ pub fn frame<'a, M: 'a>(content: Element<'a, M>) -> Element<'a, M> {
         .width(1)
         .height(Fill)
         .style(|_| container::Style {
-            background: Some(theme::BORDER.into()),
+            background: Some(theme::palette().border.into()),
             ..Default::default()
         });
     row![
@@ -62,7 +62,7 @@ pub fn frame<'a, M: 'a>(content: Element<'a, M>) -> Element<'a, M> {
             .width(Length::Fixed(theme::FILES_PANEL_WIDTH - 1.0))
             .height(Fill)
             .style(|_| container::Style {
-                background: Some(theme::BG.into()),
+                background: Some(theme::palette().bg.into()),
                 ..Default::default()
             })
     ]

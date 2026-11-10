@@ -23,14 +23,14 @@ pub fn view(
         text(git_presenter::shorten(name, 18))
             .font(theme::FONT_BODY_MEDIUM)
             .size(theme::SIZE_LABEL)
-            .color(theme::TEXT)
+            .color(theme::palette().text)
     ];
     if let Some(dir) = dir {
         content = content.push(
             text(format!(" {}", git_presenter::shorten(dir, 12)))
                 .font(theme::FONT_BODY)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         );
     }
     let select = button(content.clip(true))
@@ -40,13 +40,13 @@ pub fn view(
         .on_press_maybe((!busy).then(|| GitMsg::Diff(path.to_owned(), staged)))
         .style(move |_: &Theme, state| button::Style {
             background: if selected {
-                Some(theme::PANEL2.into())
+                Some(theme::palette().panel2.into())
             } else if matches!(state, button::Status::Hovered | button::Status::Pressed) {
-                Some(theme::PANEL3.into())
+                Some(theme::palette().panel3.into())
             } else {
                 None
             },
-            text_color: theme::TEXT,
+            text_color: theme::palette().text,
             border: Border {
                 radius: theme::RADIUS_BUTTON.into(),
                 ..Default::default()

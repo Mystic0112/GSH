@@ -14,9 +14,9 @@ use iced::{
 
 use crate::agent_status::IslandServerError;
 use crate::island::{
-    IslandAgent, IslandAgentState, IslandMsg, PermissionDecision, COLOR_ACCENT, COLOR_BORDER2,
-    COLOR_ERROR, COLOR_ONLINE, COLOR_PANEL, COLOR_PANEL2, COLOR_PANEL3, COLOR_SHADOW, COLOR_TEXT,
-    COLOR_TEXT2, COLOR_TEXT3, COLOR_WARN, PANEL_WIDTH,
+    color_accent, color_border2, color_error, color_online, color_panel, color_panel2,
+    color_panel3, color_text, color_text2, color_text3, color_warn, IslandAgent, IslandAgentState,
+    IslandMsg, PermissionDecision, COLOR_SHADOW, PANEL_WIDTH,
 };
 use crate::{labels, theme};
 
@@ -46,41 +46,41 @@ pub fn view_panel<'a>(
     let mut sections: Vec<Element<'_, IslandMsg>> = Vec::new();
 
     if let Some(err) = server_error {
-        sections.push(section_header(labels::SECTION_STATUS_ERROR, COLOR_ERROR));
+        sections.push(section_header(labels::SECTION_STATUS_ERROR, color_error()));
         sections.push(error_card(err));
     }
 
     if !asking.is_empty() {
-        sections.push(section_header(labels::SECTION_ASKS, COLOR_WARN));
+        sections.push(section_header(labels::SECTION_ASKS, color_warn()));
         for agent in asking {
             sections.push(ask_card(agent));
         }
     }
 
     if !waiting.is_empty() {
-        sections.push(section_header(labels::SECTION_WAITING, COLOR_WARN));
+        sections.push(section_header(labels::SECTION_WAITING, color_warn()));
         for agent in waiting {
-            sections.push(agent_row(agent, COLOR_WARN, true, false));
+            sections.push(agent_row(agent, color_warn(), true, false));
         }
     }
 
     if !finished.is_empty() {
-        sections.push(section_header(labels::SECTION_FINISHED, COLOR_ONLINE));
+        sections.push(section_header(labels::SECTION_FINISHED, color_online()));
         for agent in finished {
-            sections.push(agent_row(agent, COLOR_ONLINE, false, false));
+            sections.push(agent_row(agent, color_online(), false, false));
         }
     }
 
     if !working.is_empty() {
-        sections.push(section_header(labels::SECTION_WORKING, COLOR_ACCENT));
+        sections.push(section_header(labels::SECTION_WORKING, color_accent()));
         for agent in working {
-            sections.push(agent_row(agent, COLOR_ACCENT, false, true));
+            sections.push(agent_row(agent, color_accent(), false, true));
         }
     }
 
     if sections.is_empty() {
         sections.push(
-            container(text(labels::ISLAND_EMPTY).size(13).color(COLOR_TEXT3))
+            container(text(labels::ISLAND_EMPTY).size(13).color(color_text3()))
                 .padding(8)
                 .into(),
         );
@@ -91,9 +91,9 @@ pub fn view_panel<'a>(
     let panel_box = container(content)
         .width(Length::Fixed(PANEL_WIDTH))
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(COLOR_PANEL)),
+            background: Some(Background::Color(color_panel())),
             border: Border {
-                color: COLOR_BORDER2,
+                color: color_border2(),
                 width: 1.0,
                 radius: 12.0.into(),
             },
@@ -109,14 +109,14 @@ pub fn view_panel<'a>(
     mouse_area(panel_box).into()
 }
 
-/// Card de erro tipado do servidor de status na ilha (`theme::ERROR`).
+/// Card de erro tipado do servidor de status na ilha (`theme::palette().error`).
 fn error_card<'a>(error: &IslandServerError) -> Element<'a, IslandMsg> {
     let line = row![
-        status_dot(COLOR_ERROR),
+        status_dot(color_error()),
         container(
             text(error.display_message())
                 .size(theme::SIZE_LABEL)
-                .color(COLOR_TEXT2)
+                .color(color_text2())
         )
         .width(Fill),
     ]
@@ -127,9 +127,9 @@ fn error_card<'a>(error: &IslandServerError) -> Element<'a, IslandMsg> {
         .width(Fill)
         .padding([8, 10])
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(COLOR_PANEL2)),
+            background: Some(Background::Color(color_panel2())),
             border: Border {
-                color: COLOR_ERROR,
+                color: color_error(),
                 width: 1.0,
                 radius: 8.0.into(),
             },
@@ -173,14 +173,14 @@ fn status_dot<'a>(color: Color) -> Element<'a, IslandMsg> {
 /// Linha com nome do agente e workspace (`_Title` em `agent_island_panel.dart`).
 fn title_row<'a>(title: &str, workspace: &str, compact: bool) -> Element<'a, IslandMsg> {
     let title_size = if compact { 12.5 } else { 13.0 };
-    let title_color = if compact { COLOR_TEXT2 } else { COLOR_TEXT };
+    let title_color = if compact { color_text2() } else { color_text() };
     let mut r =
         row![container(text(title.to_string()).size(title_size).color(title_color)).width(Fill)]
             .align_y(Alignment::Center);
 
     if !workspace.is_empty() {
         r = r.push(
-            container(text(workspace.to_string()).size(11.5).color(COLOR_TEXT3)).padding([0, 4]),
+            container(text(workspace.to_string()).size(11.5).color(color_text3())).padding([0, 4]),
         );
     }
     r.into()
@@ -202,7 +202,7 @@ fn agent_row<'a>(
     .align_y(Alignment::Center);
 
     if show_go_to_tab {
-        line = line.push(text(labels::ACTION_GO_TO_TAB).size(12).color(COLOR_WARN));
+        line = line.push(text(labels::ACTION_GO_TO_TAB).size(12).color(color_warn()));
     }
 
     let v_pad = if compact { 4 } else { 7 };
@@ -213,13 +213,13 @@ fn agent_row<'a>(
         .style(|_: &Theme, status| {
             let bg = match status {
                 button::Status::Hovered | button::Status::Pressed => {
-                    Some(Background::Color(COLOR_PANEL3))
+                    Some(Background::Color(color_panel3()))
                 }
                 _ => None,
             };
             button::Style {
                 background: bg,
-                text_color: COLOR_TEXT,
+                text_color: color_text(),
                 border: Border {
                     radius: 7.0.into(),
                     ..Default::default()
@@ -234,7 +234,7 @@ fn agent_row<'a>(
 /// `agent_island_panel.dart`).
 fn ask_card<'a>(agent: &IslandAgent) -> Element<'a, IslandMsg> {
     let header = row![
-        status_dot(COLOR_WARN),
+        status_dot(color_warn()),
         title_row(&agent.name, &agent.workspace, false),
     ]
     .spacing(8)
@@ -252,12 +252,12 @@ fn ask_card<'a>(agent: &IslandAgent) -> Element<'a, IslandMsg> {
         text(tool_line)
             .font(theme::FONT_MONO)
             .size(theme::SIZE_LABEL)
-            .color(COLOR_TEXT2),
+            .color(color_text2()),
     )
     .width(Fill)
     .padding([6, 8])
     .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(COLOR_PANEL3)),
+        background: Some(Background::Color(color_panel3())),
         border: Border {
             radius: 6.0.into(),
             ..Default::default()
@@ -309,7 +309,7 @@ fn ask_card<'a>(agent: &IslandAgent) -> Element<'a, IslandMsg> {
         .width(Fill)
         .padding(10)
         .style(move |_: &Theme| container::Style {
-            background: Some(Background::Color(COLOR_PANEL2)),
+            background: Some(Background::Color(color_panel2())),
             border: Border {
                 color: theme::WARN_BORDER,
                 width: 1.0,
@@ -343,7 +343,7 @@ fn action_button<'a>(
                     background: Some(Background::Color(if hovered {
                         theme::ACCENT_HOVER
                     } else {
-                        COLOR_ACCENT
+                        color_accent()
                     })),
                     text_color: theme::ON_ACCENT,
                     border: Border {
@@ -354,13 +354,13 @@ fn action_button<'a>(
                 },
                 AskButtonKind::Outline => button::Style {
                     background: Some(Background::Color(if hovered {
-                        COLOR_PANEL3
+                        color_panel3()
                     } else {
-                        COLOR_PANEL2
+                        color_panel2()
                     })),
-                    text_color: COLOR_TEXT,
+                    text_color: color_text(),
                     border: Border {
-                        color: COLOR_BORDER2,
+                        color: color_border2(),
                         width: 1.0,
                         radius: 6.0.into(),
                     },
@@ -368,11 +368,11 @@ fn action_button<'a>(
                 },
                 AskButtonKind::Ghost => button::Style {
                     background: if hovered {
-                        Some(Background::Color(COLOR_PANEL3))
+                        Some(Background::Color(color_panel3()))
                     } else {
                         None
                     },
-                    text_color: COLOR_TEXT2,
+                    text_color: color_text2(),
                     border: Border {
                         radius: 6.0.into(),
                         ..Default::default()

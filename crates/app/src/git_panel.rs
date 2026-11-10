@@ -25,7 +25,7 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
                 text(labels::format_git_error(error))
                     .font(theme::FONT_BODY)
                     .size(theme::SIZE_LABEL)
-                    .color(theme::ERROR),
+                    .color(theme::palette().error),
             )
             .padding([4, 14]),
         );
@@ -35,7 +35,7 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
             text(labels::GIT_NO_REPO)
                 .font(theme::FONT_BODY)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         )
         .padding(14)
         .into()

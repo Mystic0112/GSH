@@ -40,7 +40,7 @@ pub fn view<'a, M: Clone + 'a>(
             text(labels::ICON_PLUS)
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_TOPBAR_TITLE)
-                .color(theme::TEXT2),
+                .color(theme::palette().text2),
         )
         .width(Fill)
         .height(Fill)
@@ -55,11 +55,15 @@ pub fn view<'a, M: Clone + 'a>(
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
             background: if hovered {
-                Some(Background::Color(theme::PANEL3))
+                Some(Background::Color(theme::palette().panel3))
             } else {
                 None
             },
-            text_color: if hovered { theme::TEXT } else { theme::TEXT2 },
+            text_color: if hovered {
+                theme::palette().text
+            } else {
+                theme::palette().text2
+            },
             border: Border {
                 radius: theme::RADIUS_BUTTON.into(),
                 ..Default::default()
@@ -73,12 +77,12 @@ pub fn view<'a, M: Clone + 'a>(
             text(labels::ICON_LAYERS)
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_TITLE)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
             Space::new().width(7.0),
             text(labels::WORKSPACES_HEADER)
                 .font(theme::FONT_TITLE)
                 .size(theme::SIZE_TITLE)
-                .color(theme::TEXT),
+                .color(theme::palette().text),
             Space::new().width(Fill),
             add_button,
         ]
@@ -103,22 +107,22 @@ pub fn view<'a, M: Clone + 'a>(
             text(labels::ICON_LAYERS)
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
             Space::new().width(6.0),
             text(labels::DEFAULT_REALM)
                 .font(theme::FONT_BODY_MEDIUM)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT2),
+                .color(theme::palette().text2),
             Space::new().width(4.0),
             text(labels::ICON_CHEVRON_DOWN)
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
             Space::new().width(Fill),
             text(labels::ICON_SETTINGS)
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_TITLE)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         ]
         .align_y(Alignment::Center),
     )
@@ -135,7 +139,7 @@ pub fn view<'a, M: Clone + 'a>(
     .width(Length::Fixed(theme::RAIL_WIDTH - 1.0))
     .height(Fill)
     .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(theme::BG)),
+        background: Some(Background::Color(theme::palette().bg)),
         ..Default::default()
     });
 
@@ -155,9 +159,9 @@ fn workspace_row<'a, M: Clone + 'a>(
             .font(theme::FONT_TITLE)
             .size(theme::SIZE_LABEL)
             .color(if selected {
-                theme::ACCENT_TEXT
+                theme::palette().accent_text
             } else {
-                theme::TEXT2
+                theme::palette().text2
             }),
     )
     .width(Length::Fixed(30.0))
@@ -165,12 +169,12 @@ fn workspace_row<'a, M: Clone + 'a>(
     .center_x(Length::Fixed(30.0))
     .center_y(Length::Fixed(30.0))
     .style(move |_: &Theme| container::Style {
-        background: Some(Background::Color(theme::PANEL)),
+        background: Some(Background::Color(theme::palette().panel)),
         border: Border {
             color: if selected {
-                theme::BORDER2
+                theme::palette().border2
             } else {
-                theme::BORDER
+                theme::palette().border
             },
             width: 1.0,
             radius: theme::RADIUS_CARD.into(),
@@ -188,7 +192,7 @@ fn workspace_row<'a, M: Clone + 'a>(
                     theme::FONT_BODY
                 })
                 .size(theme::SIZE_RAIL_ITEM)
-                .color(theme::TEXT),
+                .color(theme::palette().text),
         )
         .width(Fill),
     ]
@@ -200,11 +204,11 @@ fn workspace_row<'a, M: Clone + 'a>(
             text(branch)
                 .font(theme::FONT_MONO)
                 .size(theme::SIZE_BADGE)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
         )
         .padding([2, 6])
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::PANEL3)),
+            background: Some(Background::Color(theme::palette().panel3)),
             border: Border {
                 radius: theme::RADIUS_BADGE.into(),
                 ..Default::default()
@@ -221,20 +225,20 @@ fn workspace_row<'a, M: Clone + 'a>(
         .style(move |_: &Theme, status| {
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
             let bg = if selected {
-                Some(Background::Color(theme::PANEL2))
+                Some(Background::Color(theme::palette().panel2))
             } else if hovered {
-                Some(Background::Color(theme::PANEL3))
+                Some(Background::Color(theme::palette().panel3))
             } else {
                 None
             };
             button::Style {
                 background: bg,
-                text_color: theme::TEXT,
+                text_color: theme::palette().text,
                 border: Border {
                     color: if selected {
-                        theme::ACCENT
+                        theme::palette().accent
                     } else {
-                        theme::BORDER
+                        theme::palette().border
                     },
                     width: if selected { 1.0 } else { 0.0 },
                     radius: theme::RADIUS_CARD.into(),
@@ -250,7 +254,7 @@ fn hairline_h<'a, M: 'a>() -> Element<'a, M> {
         .width(Fill)
         .height(Length::Fixed(1.0))
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::BORDER)),
+            background: Some(Background::Color(theme::palette().border)),
             ..Default::default()
         })
         .into()
@@ -261,7 +265,7 @@ fn hairline_v<'a, M: 'a>() -> Element<'a, M> {
         .width(Length::Fixed(1.0))
         .height(Fill)
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::BORDER)),
+            background: Some(Background::Color(theme::palette().border)),
             ..Default::default()
         })
         .into()

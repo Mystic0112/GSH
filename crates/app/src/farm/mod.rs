@@ -107,10 +107,18 @@ impl FarmPane {
                 .color(color)
         };
         let hud = row![
-            stat(labels::FARM_WORKING, AgentState::Working, theme::OK),
-            stat(labels::FARM_WAITING, AgentState::Waiting, theme::WARN),
-            stat(labels::FARM_IDLE, AgentState::Idle, theme::ONLINE),
-            stat(labels::FARM_DONE, AgentState::Done, theme::ERROR),
+            stat(
+                labels::FARM_WORKING,
+                AgentState::Working,
+                theme::palette().ok
+            ),
+            stat(
+                labels::FARM_WAITING,
+                AgentState::Waiting,
+                theme::palette().warn
+            ),
+            stat(labels::FARM_IDLE, AgentState::Idle, theme::palette().online),
+            stat(labels::FARM_DONE, AgentState::Done, theme::palette().error),
         ]
         .spacing(16)
         .padding(6);
@@ -231,11 +239,11 @@ impl canvas::Program<Message> for Program<'_> {
                     (point.x + 10.0).min((bounds.width - width).max(0.0)),
                     (point.y - 22.0).max(0.0),
                 );
-                overlay.fill_rectangle(pos, iced::Size::new(width, 20.0), theme::PANEL);
+                overlay.fill_rectangle(pos, iced::Size::new(width, 20.0), theme::palette().panel);
                 overlay.fill_text(canvas::Text {
                     content: agent.input.name.clone(),
                     position: Point::new(pos.x + 5.0, pos.y + 2.0),
-                    color: theme::TEXT,
+                    color: theme::palette().text,
                     size: iced::Pixels(13.0),
                     ..canvas::Text::default()
                 });

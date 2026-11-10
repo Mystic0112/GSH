@@ -20,8 +20,8 @@ pub enum EditorNotice {
 impl EditorNotice {
     pub fn color(&self) -> iced::Color {
         match self {
-            Self::SaveError(_) => crate::theme::ERROR,
-            Self::ConfirmClose | Self::ModifiedOnDisk => crate::theme::WARN,
+            Self::SaveError(_) => crate::theme::palette().error,
+            Self::ConfirmClose | Self::ModifiedOnDisk => crate::theme::palette().warn,
         }
     }
 }

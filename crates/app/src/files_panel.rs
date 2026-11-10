@@ -74,7 +74,7 @@ fn view_section_header<'a>(busy: bool) -> Element<'a, FilesMsg> {
             text(labels::FILES_SECTION_UPPER)
                 .font(theme::FONT_TITLE)
                 .size(theme::SIZE_SECTION_HEADER)
-                .color(theme::TEXT3),
+                .color(theme::palette().text3),
             Space::new().width(Fill),
             crate::panel_widgets::ghost(labels::ICON_COLLAPSE, Some(FilesMsg::CollapseAll), false),
             Space::new().width(4.0),
@@ -130,7 +130,7 @@ fn view_tree_body<'a>(
                         text(error.ui_message())
                             .font(theme::FONT_BODY)
                             .size(theme::SIZE_LABEL)
-                            .color(theme::ERROR),
+                            .color(theme::palette().error),
                     )
                     .padding(Padding {
                         top: 4.0,
@@ -164,11 +164,11 @@ fn view_entry_row<'a>(
         labels::ICON_FILE_ITEM
     };
     let icon_color = if entry.is_dir {
-        theme::ACCENT_TEXT
+        theme::palette().accent_text
     } else if selected {
-        theme::TEXT
+        theme::palette().text
     } else {
-        theme::TEXT3
+        theme::palette().text3
     };
     let name_font = if entry.is_dir || selected {
         theme::FONT_BODY_MEDIUM
@@ -178,9 +178,9 @@ fn view_entry_row<'a>(
     let name_color = if let Some(status) = git_status {
         crate::git_presenter::status_color(status)
     } else if selected || entry.is_dir {
-        theme::TEXT
+        theme::palette().text
     } else {
-        theme::TEXT2
+        theme::palette().text2
     };
     let msg = if entry.is_dir {
         FilesMsg::ToggleDir(entry.path)
@@ -216,9 +216,9 @@ fn view_entry_row<'a>(
         .style(move |_: &Theme, status| {
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
             let bg = if selected {
-                Some(Background::Color(theme::PANEL2))
+                Some(Background::Color(theme::palette().panel2))
             } else if hovered {
-                Some(Background::Color(theme::PANEL3))
+                Some(Background::Color(theme::palette().panel3))
             } else {
                 None
             };
@@ -227,9 +227,9 @@ fn view_entry_row<'a>(
                 text_color: name_color,
                 border: Border {
                     color: if selected {
-                        theme::ACCENT
+                        theme::palette().accent
                     } else {
-                        theme::BORDER
+                        theme::palette().border
                     },
                     width: if selected { 1.0 } else { 0.0 },
                     radius: theme::RADIUS_BUTTON.into(),
@@ -245,7 +245,7 @@ fn empty_state_label<'a>(msg: &'static str) -> Element<'a, FilesMsg> {
         text(msg)
             .font(theme::FONT_BODY)
             .size(theme::SIZE_LABEL)
-            .color(theme::TEXT3),
+            .color(theme::palette().text3),
     )
     .width(Fill)
     .height(Fill)
@@ -259,7 +259,7 @@ fn view_footer<'a>() -> Element<'a, FilesMsg> {
             text(labels::NO_LSP_AVAILABLE)
                 .font(theme::FONT_BODY)
                 .size(theme::SIZE_LABEL)
-                .color(theme::TEXT4),
+                .color(theme::palette().text4),
             Space::new().width(Fill),
         ]
         .align_y(Alignment::Center),

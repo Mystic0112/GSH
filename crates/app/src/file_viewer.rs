@@ -255,7 +255,8 @@ pub fn view<'a, M: 'a>(state: &'a FileViewerState) -> Element<'a, M> {
             max_bytes,
             document,
         } => column![
-            text(labels::format_viewer_large_preview(*size_bytes, *max_bytes)).color(theme::WARN),
+            text(labels::format_viewer_large_preview(*size_bytes, *max_bytes))
+                .color(theme::palette().warn),
             view_document(document),
         ]
         .into(),
@@ -264,12 +265,12 @@ pub fn view<'a, M: 'a>(state: &'a FileViewerState) -> Element<'a, M> {
             max_bytes,
         } => view_status_notice(
             labels::format_viewer_too_large(*size_bytes, *max_bytes),
-            theme::WARN,
+            theme::palette().warn,
         ),
         FileViewerState::Binary(kind) => {
-            view_status_notice(kind.ui_message().to_string(), theme::TEXT2)
+            view_status_notice(kind.ui_message().to_string(), theme::palette().text2)
         }
-        FileViewerState::Error(err) => view_status_notice(err.ui_message(), theme::ERROR),
+        FileViewerState::Error(err) => view_status_notice(err.ui_message(), theme::palette().error),
     }
 }
 
@@ -279,7 +280,7 @@ fn view_document<'a, M: 'a>(doc: &'a TextDocument) -> Element<'a, M> {
             .font(theme::FONT_MONO)
             .size(theme::SIZE_MONO)
             .line_height(theme::LINE_HEIGHT_MONO)
-            .color(theme::TEXT2)
+            .color(theme::palette().text2)
             .wrapping(text::Wrapping::None),
     )
     .padding([0, 14]);
@@ -288,7 +289,7 @@ fn view_document<'a, M: 'a>(doc: &'a TextDocument) -> Element<'a, M> {
         .width(Length::Fixed(1.0))
         .height(Fill)
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::BORDER)),
+            background: Some(Background::Color(theme::palette().border)),
             ..Default::default()
         });
 
@@ -297,7 +298,7 @@ fn view_document<'a, M: 'a>(doc: &'a TextDocument) -> Element<'a, M> {
             .font(theme::FONT_MONO)
             .size(theme::SIZE_MONO)
             .line_height(theme::LINE_HEIGHT_MONO)
-            .color(theme::TEXT)
+            .color(theme::palette().text)
             .wrapping(text::Wrapping::None),
     )
     .padding([0, 14]);
@@ -314,7 +315,7 @@ fn view_document<'a, M: 'a>(doc: &'a TextDocument) -> Element<'a, M> {
         .width(Fill)
         .height(Fill)
         .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::PANEL)),
+            background: Some(Background::Color(theme::palette().panel)),
             ..Default::default()
         })
         .into()
@@ -331,7 +332,7 @@ fn view_status_notice<'a, M: 'a>(message: String, color: Color) -> Element<'a, M
     .width(Fill)
     .height(Fill)
     .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(theme::PANEL)),
+        background: Some(Background::Color(theme::palette().panel)),
         ..Default::default()
     })
     .into()

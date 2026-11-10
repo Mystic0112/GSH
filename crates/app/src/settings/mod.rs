@@ -4,12 +4,14 @@ mod appearance;
 mod controls;
 pub mod view;
 
+use crate::theme::{self, ThemeVariant};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub enum Error {
     InvalidLocale,
     InvalidInterfaceSize,
+    InvalidTheme,
     InvalidShell,
     InvalidScrollback,
     InvalidTerminalSize,
@@ -35,7 +37,7 @@ pub enum Message {
     HighlightChanged(bool),
     WrapChanged(bool),
     NotificationsChanged(bool),
-    DarkSelected,
+    ThemeSelected(gsh_config::schema::AppThemeMode),
     SaveControls,
 }
 
@@ -111,6 +113,7 @@ impl Settings {
                     self.wrap = config.editor.word_wrap;
                     self.notifications = config.notifications_enabled;
                     self.theme_mode = config.theme_mode;
+                    theme::set_active(ThemeVariant::from_mode(config.theme_mode));
                     self.current = config.clone();
                     self.interface_size = config.interface_size.to_string();
                     self.scale = (config.interface_size.clamp(10.0, 20.0) / 14.0) as f32;
@@ -120,6 +123,21 @@ impl Settings {
             },
             Err(_) => self.error = Some(Error::Config(gsh_config::ConfigError::NoHome)),
         }
+    }
+
+    /// Grava o tema escolhido e o aplica ao vivo; se não gravar, mantém o anterior.
+    fn select_theme(&mut self, mode: gsh_config::schema::AppThemeMode) {
+        let result = match &self.path {
+            Ok(path) => appearance::save_theme(path, mode.name()),
+            Err(_) => Err(Error::Config(gsh_config::ConfigError::NoHome)),
+        };
+        if let Ok(saved) = &result {
+            self.theme_mode = *saved;
+            self.current.theme_mode = *saved;
+            theme::set_active(ThemeVariant::from_mode(*saved));
+        }
+        self.saved = result.is_ok();
+        self.error = result.err();
     }
 
     pub fn update(&mut self, message: Message) {
@@ -164,10 +182,7 @@ impl Settings {
                 self.saved = false;
                 self.error = None;
             }
-            Message::DarkSelected => {
-                self.theme_mode = gsh_config::schema::AppThemeMode::Dark;
-                self.saved = false;
-            }
+            Message::ThemeSelected(mode) => self.select_theme(mode),
             Message::SaveControls => {
                 let result = match &self.path {
                     Ok(path) => controls::save(path, self),
@@ -304,6 +319,47 @@ mod tests {
             Err(Error::InvalidLocale)
         ));
         assert_eq!(std::fs::read(&path).unwrap(), original);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn selected_theme_is_saved_applied_and_survives_reload() {
+        use gsh_config::schema::AppThemeMode;
+        let _guard = crate::theme::test_guard();
+        let dir = std::env::temp_dir().join(format!("gsh-settings-reload-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "futureKey = 'keep'\n").unwrap();
+        let mut settings = Settings {
+            path: Ok(path.clone()),
+            ..Settings::default()
+        };
+        settings.update(Message::ThemeSelected(AppThemeMode::Light));
+        assert!(settings.saved && settings.error.is_none());
+        assert_eq!(settings.theme_mode, AppThemeMode::Light);
+        assert_eq!(crate::theme::active(), ThemeVariant::Light);
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("futureKey = 'keep'"));
+
+        crate::theme::set_active(ThemeVariant::Dark);
+        let mut reloaded = Settings {
+            path: Ok(path.clone()),
+            ..Settings::default()
+        };
+        reloaded.reload();
+        assert_eq!(reloaded.theme_mode, AppThemeMode::Light);
+        assert_eq!(crate::theme::active(), ThemeVariant::Light);
+
+        reloaded.update(Message::ThemeSelected(AppThemeMode::System));
+        assert!(matches!(reloaded.error, Some(Error::InvalidTheme)));
+        assert_eq!(reloaded.theme_mode, AppThemeMode::Light);
+        assert_eq!(
+            gsh_config::load(&path).unwrap().theme_mode,
+            AppThemeMode::Light
+        );
+
+        crate::theme::set_active(ThemeVariant::Dark);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
