@@ -104,7 +104,6 @@ enum Msg {
     SelectOther(usize),
     CloseOther(usize),
     NewTerminalOther,
-    NewChatOther,
     OpenFarm,
     OpenSettings,
     Settings(settings::Message),
@@ -717,10 +716,6 @@ impl Shell {
                 self.focus_other();
                 self.update(Msg::NewTerminalTab)
             }
-            Msg::NewChatOther => {
-                self.focus_other();
-                self.update(Msg::NewChatTab)
-            }
             Msg::NewTerminalTab => {
                 let cwd = self.active_workspace_dir().map(Path::to_path_buf);
                 let id = self.pane_model.open_terminal();
@@ -871,8 +866,6 @@ impl Shell {
                     on_select_tab: Msg::SelectTab,
                     on_close_tab: Msg::CloseTab,
                     on_new_terminal: Msg::NewTerminalTab,
-                    on_new_chat: Msg::NewChatTab,
-                    on_farm: Msg::OpenFarm,
                     noop_msg: Msg::Noop,
                     on_split: (!split_open).then_some(Msg::SplitRight),
                     on_close_split: split_open.then_some(Msg::CloseSplit),
@@ -887,8 +880,6 @@ impl Shell {
                     on_select_tab: Msg::SelectOther,
                     on_close_tab: Msg::CloseOther,
                     on_new_terminal: Msg::NewTerminalOther,
-                    on_new_chat: Msg::NewChatOther,
-                    on_farm: Msg::Noop,
                     noop_msg: Msg::Noop,
                     on_split: None,
                     on_close_split: None,
@@ -913,8 +904,14 @@ impl Shell {
                 files_open: self.files_open,
             },
             island_pill,
-            Msg::ToggleRail,
-            Msg::ToggleFiles,
+            topbar::TopbarActions {
+                on_toggle_rail: Msg::ToggleRail,
+                on_toggle_files: Msg::ToggleFiles,
+                on_chat: Msg::NewChatTab,
+                on_farm: Msg::OpenFarm,
+                on_database: Msg::OpenDatabase,
+                on_settings: Msg::OpenSettings,
+            },
         );
 
         let window_controls = row![
@@ -925,12 +922,6 @@ impl Shell {
         .spacing(2);
         let top = row![
             mouse_area(container(top).width(Fill)).on_press(Msg::WindowDrag),
-            iced::widget::button(iced::widget::text(labels::ICON_DATABASE).font(theme::FONT_ICON))
-                .style(theme::ghost_button)
-                .on_press(Msg::OpenDatabase),
-            iced::widget::button(iced::widget::text(labels::ICON_SETTINGS).font(theme::FONT_ICON))
-                .style(theme::ghost_button)
-                .on_press(Msg::OpenSettings),
             window_controls,
         ]
         .align_y(iced::Alignment::Center);

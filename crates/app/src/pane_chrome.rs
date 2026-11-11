@@ -18,8 +18,6 @@ pub struct ChromeCallbacks<M, FSelect, FClose> {
     pub on_select_tab: FSelect,
     pub on_close_tab: FClose,
     pub on_new_terminal: M,
-    pub on_new_chat: M,
-    pub on_farm: M,
     pub noop_msg: M,
     /// Divide o pane à direita; `None` quando o pane não pode dividir (ex.: é o lado não focado).
     pub on_split: Option<M>,

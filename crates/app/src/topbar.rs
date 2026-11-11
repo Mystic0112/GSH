@@ -18,16 +18,29 @@ pub struct TopbarProps<'a> {
     pub files_open: bool,
 }
 
+/// Ações dos botões da topbar (mensagens do shell).
+pub struct TopbarActions<M> {
+    pub on_toggle_rail: M,
+    pub on_toggle_files: M,
+    pub on_chat: M,
+    pub on_farm: M,
+    pub on_database: M,
+    pub on_settings: M,
+}
+
 /// Renderiza a barra superior do shell com a pílula da ilha centralizada.
 pub fn view<'a, M: Clone + 'a>(
     props: TopbarProps<'a>,
     island_pill: Element<'a, M>,
-    on_toggle_rail: M,
-    on_toggle_files: M,
+    actions: TopbarActions<M>,
 ) -> Element<'a, M> {
     let left = row![
         Space::new().width(12.0),
-        icon_toggle_button(labels::ICON_SIDEBAR_LEFT, props.rail_open, on_toggle_rail),
+        icon_toggle_button(
+            labels::ICON_SIDEBAR_LEFT,
+            props.rail_open,
+            actions.on_toggle_rail
+        ),
         Space::new().width(8.0),
         text(props.workspace_title)
             .font(theme::FONT_TITLE)
@@ -37,13 +50,19 @@ pub fn view<'a, M: Clone + 'a>(
     .align_y(Alignment::Center);
 
     let right = row![
+        icon_toggle_button(labels::ICON_CHAT, false, actions.on_chat),
+        icon_toggle_button(labels::ICON_FARM, false, actions.on_farm),
+        icon_toggle_button(labels::ICON_DATABASE, false, actions.on_database),
+        icon_toggle_button(labels::ICON_SETTINGS, false, actions.on_settings),
+        Space::new().width(4.0),
         icon_toggle_button(
             labels::ICON_SIDEBAR_RIGHT,
             props.files_open,
-            on_toggle_files
+            actions.on_toggle_files
         ),
         Space::new().width(12.0),
     ]
+    .spacing(4)
     .align_y(Alignment::Center);
 
     let chrome_row = container(

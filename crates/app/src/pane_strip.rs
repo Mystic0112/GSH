@@ -32,14 +32,6 @@ where
     }
 
     let add_tab = view_add_tab_button(callbacks.on_new_terminal);
-    let add_chat = view_add_chat_button(callbacks.on_new_chat);
-    let farm = button(
-        text(labels::ICON_FARM)
-            .font(theme::FONT_ICON)
-            .size(theme::SIZE_TOPBAR_TITLE),
-    )
-    .on_press(callbacks.on_farm)
-    .style(theme::ghost_button);
     let noop = callbacks.noop_msg;
 
     let right_tools = row![
@@ -52,17 +44,10 @@ where
     .align_y(Alignment::Center);
 
     let bar = container(
-        row![
-            tabs_row,
-            add_tab,
-            add_chat,
-            farm,
-            Space::new().width(Fill),
-            right_tools
-        ]
-        .width(Fill)
-        .height(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
-        .align_y(Alignment::Center),
+        row![tabs_row, add_tab, Space::new().width(Fill), right_tools]
+            .width(Fill)
+            .height(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
+            .align_y(Alignment::Center),
     )
     .width(Fill)
     .height(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
@@ -124,26 +109,6 @@ fn view_add_tab_button<'a, M: Clone + 'a>(on_new_terminal: M) -> Element<'a, M> 
         .width(Length::Fixed(34.0))
         .height(Fill)
         .into()
-}
-
-fn view_add_chat_button<'a, M: Clone + 'a>(on_new_chat: M) -> Element<'a, M> {
-    let btn = button(
-        container(
-            text(labels::ICON_CHAT)
-                .font(theme::FONT_ICON)
-                .size(theme::SIZE_TOPBAR_TITLE),
-        )
-        .width(Fill)
-        .height(Fill)
-        .center_x(Fill)
-        .center_y(Fill),
-    )
-    .width(Length::Fixed(33.0))
-    .height(Fill)
-    .padding(0)
-    .on_press(on_new_chat)
-    .style(theme::ghost_button);
-    btn.into()
 }
 
 fn pane_tool_button<'a, M: Clone + 'a>(glyph: &'static str, noop_msg: M) -> Element<'a, M> {
