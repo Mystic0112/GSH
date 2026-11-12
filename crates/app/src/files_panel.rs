@@ -64,8 +64,8 @@ pub fn view<'a>(
 fn view_mode_bar<'a>() -> Element<'a, FilesMsg> {
     container(
         row![
-            crate::panel_widgets::ghost(labels::ICON_FOLDER, None, true),
-            crate::panel_widgets::ghost(labels::ICON_GIT_BRANCH, Some(FilesMsg::OpenGit), false),
+            mode_icon(labels::ICON_FOLDER, None, true),
+            mode_icon(labels::ICON_GIT_BRANCH, Some(FilesMsg::OpenGit), false),
             Space::new().width(Fill)
         ]
         .align_y(Alignment::Center)
@@ -80,36 +80,89 @@ fn view_section_header<'a>(busy: bool, has_root: bool, creating: bool) -> Elemen
     container(
         row![
             text(labels::FILES_SECTION_UPPER)
-                .font(theme::FONT_TITLE)
-                .size(theme::SIZE_SECTION_HEADER)
+                .font(theme::FONT_BODY)
+                .size(theme::FILE_PANEL_HEADER_TITLE_SIZE)
                 .color(theme::palette().text3),
             Space::new().width(Fill),
-            crate::panel_widgets::ghost(
-                labels::ICON_NEW_FOLDER,
-                (has_root && !creating).then_some(FilesMsg::StartCreate(CreateKind::Folder)),
-                false
-            ),
-            crate::panel_widgets::ghost(
+            header_action(
                 labels::ICON_NEW_FILE,
-                (has_root && !creating).then_some(FilesMsg::StartCreate(CreateKind::File)),
-                false
+                (has_root && !creating).then_some(FilesMsg::StartCreate(CreateKind::File))
             ),
-            crate::panel_widgets::ghost(labels::ICON_COLLAPSE, Some(FilesMsg::CollapseAll), false),
-            Space::new().width(4.0),
-            crate::panel_widgets::ghost(
-                labels::ICON_REFRESH,
-                (!busy).then_some(FilesMsg::Refresh),
-                false
+            header_action(
+                labels::ICON_NEW_FOLDER,
+                (has_root && !creating).then_some(FilesMsg::StartCreate(CreateKind::Folder))
             ),
+            header_action(labels::ICON_COLLAPSE, Some(FilesMsg::CollapseAll)),
+            header_action(labels::ICON_REFRESH, (!busy).then_some(FilesMsg::Refresh)),
         ]
         .align_y(Alignment::Center),
     )
     .width(Fill)
     .padding(Padding {
-        top: 10.0,
-        right: 12.0,
-        bottom: 6.0,
-        left: 14.0,
+        top: theme::FILE_PANEL_HEADER_TOP,
+        right: theme::FILE_PANEL_HEADER_RIGHT,
+        bottom: theme::FILE_PANEL_HEADER_BOTTOM,
+        left: theme::FILE_PANEL_HEADER_LEFT,
+    })
+    .into()
+}
+
+fn mode_icon<'a>(
+    glyph: &'static str,
+    message: Option<FilesMsg>,
+    active: bool,
+) -> Element<'a, FilesMsg> {
+    button(
+        container(text(glyph).font(theme::FONT_ICON).size(theme::SIZE_ICON))
+            .center_x(Fill)
+            .center_y(Fill),
+    )
+    .width(28)
+    .height(28)
+    .padding(0)
+    .on_press_maybe(message)
+    .style(move |_, status| button::Style {
+        background: if active {
+            Some(theme::palette().panel2.into())
+        } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+            Some(theme::palette().panel3.into())
+        } else {
+            None
+        },
+        text_color: if active {
+            theme::palette().text
+        } else {
+            theme::palette().text3
+        },
+        border: Border {
+            radius: theme::RADIUS_BUTTON.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+fn header_action<'a>(glyph: &'static str, message: Option<FilesMsg>) -> Element<'a, FilesMsg> {
+    button(
+        text(glyph)
+            .font(theme::FONT_ICON)
+            .size(theme::FILE_PANEL_HEADER_ACTION_SIZE),
+    )
+    .padding(theme::FILE_PANEL_HEADER_ACTION_PADDING)
+    .on_press_maybe(message)
+    .style(|_, status| button::Style {
+        background: if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+            Some(theme::palette().panel3.into())
+        } else {
+            None
+        },
+        text_color: theme::palette().text3,
+        border: Border {
+            radius: theme::RADIUS_BADGE.into(),
+            ..Default::default()
+        },
+        ..Default::default()
     })
     .into()
 }

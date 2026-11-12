@@ -1,7 +1,7 @@
 //! Moldura do pane central (`pane_view.dart` e `pane_tab_leading.dart` do Flutter).
 //!
 //! Barra de abas de 40px em `BG` com divisória inferior `BORDER` (aba ativa em
-//! `BG` com indicador inferior `ACCENT` de 2px e hover `PANEL3`, abas
+//! `PANEL` com indicador inferior `ACCENT` de 2px, abas
 //! inativas em `BG` com texto `TEXT3`, botão `×` por aba, botão `+` que abre
 //! novo terminal e controles de split/fechar) e corpo em `PANEL` com borda `BORDER`.
 
@@ -68,14 +68,18 @@ fn split_controls<'a, M: Clone + 'a>(
     on_split: Option<M>,
     on_close_split: Option<M>,
 ) -> Element<'a, M> {
-    let mut controls = row![].spacing(4).padding([0, 6]);
+    let mut controls = row![].spacing(theme::PANE_TOOL_GAP).padding(iced::Padding {
+        right: theme::PANE_TOOL_SIZE,
+        ..iced::Padding::ZERO
+    });
     if let Some(msg) = on_split {
         controls = controls.push(
             button(
                 text(labels::ICON_SPLIT_H)
                     .font(theme::FONT_ICON)
-                    .size(theme::SIZE_LABEL),
+                    .size(theme::PANE_TOOL_SIZE),
             )
+            .padding(0)
             .on_press(msg)
             .style(theme::ghost_button),
         );
@@ -85,8 +89,9 @@ fn split_controls<'a, M: Clone + 'a>(
             button(
                 text(labels::ICON_CLOSE)
                     .font(theme::FONT_ICON)
-                    .size(theme::SIZE_LABEL),
+                    .size(theme::PANE_TOOL_SIZE),
             )
+            .padding(0)
             .on_press(msg)
             .style(theme::ghost_button),
         );

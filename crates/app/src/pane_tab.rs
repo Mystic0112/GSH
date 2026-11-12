@@ -15,7 +15,7 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         theme::palette().text3
     };
     let title_color = if is_active {
-        theme::palette().accent_text
+        theme::palette().text
     } else {
         theme::palette().text3
     };
@@ -27,9 +27,13 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
             } else {
                 theme::FONT_ICON
             })
-            .size(theme::SIZE_SECTION_HEADER)
+            .size(if tab.is_file() {
+                theme::PANE_FILE_TAB_ICON_SIZE
+            } else {
+                theme::PANE_TAB_ICON_SIZE
+            })
             .color(icon_color),
-        Space::new().width(8.0),
+        Space::new().width(theme::PANE_TAB_ICON_GAP),
         container(
             text(tab.title())
                 .font(theme::FONT_TAB)
@@ -49,15 +53,14 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
             iced::widget::tooltip::Position::Bottom,
         ));
     }
-    let select_btn = button(tab_label.padding([0, 10]).align_y(Alignment::Center))
+    let select_btn = button(tab_label.align_y(Alignment::Center))
         .width(Fill)
         .height(Fill)
         .padding(0)
         .on_press(on_select)
-        .style(move |_: &Theme, status| {
-            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let bg = if hovered {
-                theme::palette().panel3
+        .style(move |_: &Theme, _status| {
+            let bg = if is_active {
+                theme::palette().panel
             } else {
                 theme::palette().bg
             };
@@ -73,7 +76,7 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         container(
             text(labels::ICON_CLOSE)
                 .font(theme::FONT_ICON)
-                .size(theme::SIZE_TITLE)
+                .size(theme::PANE_TAB_CLOSE_ICON_SIZE)
                 .color(theme::palette().text3),
         )
         .width(Fill)
@@ -81,8 +84,12 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         .center_x(Fill)
         .center_y(Fill),
     )
-    .width(Length::Fixed(24.0))
-    .height(Length::Fixed(24.0))
+    .width(Length::Fixed(
+        theme::PANE_TAB_CLOSE_ICON_SIZE + 2.0 * theme::PANE_TAB_CLOSE_PADDING,
+    ))
+    .height(Length::Fixed(
+        theme::PANE_TAB_CLOSE_ICON_SIZE + 2.0 * theme::PANE_TAB_CLOSE_PADDING,
+    ))
     .padding(0)
     .on_press(on_close)
     .style(|_: &Theme, status| {
@@ -107,29 +114,55 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
     });
 
     let top_area = container(
-        row![select_btn, close_btn, Space::new().width(6.0)]
-            .width(Fill)
-            .height(Fill)
-            .align_y(Alignment::Center),
+        row![
+            select_btn,
+            Space::new().width(theme::PANE_TAB_CLOSE_GAP),
+            close_btn
+        ]
+        .width(Fill)
+        .height(Fill)
+        .padding(iced::Padding {
+            left: theme::PANE_TAB_LEFT_PADDING,
+            right: theme::PANE_TAB_RIGHT_PADDING,
+            ..iced::Padding::ZERO
+        })
+        .align_y(Alignment::Center),
     )
     .width(Fill)
     .height(Fill)
     .style(move |_: &Theme| container::Style {
-        background: Some(Background::Color(theme::palette().bg)),
+        background: Some(Background::Color(if is_active {
+            theme::palette().panel
+        } else {
+            theme::palette().bg
+        })),
         ..Default::default()
     });
 
     let bottom_bar: Element<'a, M> = if is_active {
-        container(Space::new().width(Fill).height(2.0))
-            .width(Fill)
-            .height(Length::Fixed(2.0))
-            .style(|_: &Theme| container::Style {
-                background: Some(Background::Color(theme::palette().accent)),
-                ..Default::default()
-            })
-            .into()
+        container(
+            Space::new()
+                .width(Fill)
+                .height(theme::PANE_TAB_INDICATOR_HEIGHT),
+        )
+        .width(Fill)
+        .height(Length::Fixed(theme::PANE_TAB_INDICATOR_HEIGHT))
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(theme::palette().accent)),
+            ..Default::default()
+        })
+        .into()
     } else {
-        Space::new().width(Fill).height(2.0).into()
+        container(
+            Space::new()
+                .width(Fill)
+                .height(theme::PANE_TAB_INDICATOR_HEIGHT),
+        )
+        .style(|_| container::Style {
+            background: Some(theme::palette().bg.into()),
+            ..Default::default()
+        })
+        .into()
     };
 
     let tab_col = column![top_area, bottom_bar]

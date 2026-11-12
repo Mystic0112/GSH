@@ -32,19 +32,8 @@ where
     }
 
     let add_tab = view_add_tab_button(callbacks.on_new_terminal);
-    let noop = callbacks.noop_msg;
-
-    let right_tools = row![
-        pane_tool_button(labels::ICON_SPLIT_H, noop.clone()),
-        pane_tool_button(labels::ICON_SPLIT_V, noop.clone()),
-        pane_tool_button(labels::ICON_CLOSE, noop),
-        Space::new().width(6.0),
-    ]
-    .spacing(2.0)
-    .align_y(Alignment::Center);
-
     let bar = container(
-        row![tabs_row, add_tab, Space::new().width(Fill), right_tools]
+        row![tabs_row, Space::new().width(Fill), add_tab]
             .width(Fill)
             .height(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
             .align_y(Alignment::Center),
@@ -75,7 +64,7 @@ fn view_add_tab_button<'a, M: Clone + 'a>(on_new_terminal: M) -> Element<'a, M> 
         container(
             text(labels::ICON_PLUS)
                 .font(theme::FONT_ICON)
-                .size(theme::SIZE_TOPBAR_TITLE)
+                .size(theme::PANE_TAB_ADD_ICON_SIZE)
                 .color(theme::palette().text4),
         )
         .width(Fill)
@@ -83,7 +72,7 @@ fn view_add_tab_button<'a, M: Clone + 'a>(on_new_terminal: M) -> Element<'a, M> 
         .center_x(Fill)
         .center_y(Fill),
     )
-    .width(Length::Fixed(33.0))
+    .width(Length::Fixed(theme::PANE_TAB_ADD_WIDTH))
     .height(Fill)
     .padding(0)
     .on_press(on_new_terminal)
@@ -106,49 +95,9 @@ fn view_add_tab_button<'a, M: Clone + 'a>(on_new_terminal: M) -> Element<'a, M> 
     });
 
     row![btn, hairline_v()]
-        .width(Length::Fixed(34.0))
+        .width(Length::Fixed(theme::PANE_TAB_ADD_WIDTH + 1.0))
         .height(Fill)
         .into()
-}
-
-fn pane_tool_button<'a, M: Clone + 'a>(glyph: &'static str, noop_msg: M) -> Element<'a, M> {
-    button(
-        container(
-            text(glyph)
-                .font(theme::FONT_ICON)
-                .size(theme::SIZE_LABEL)
-                .color(theme::palette().text3),
-        )
-        .width(Fill)
-        .height(Fill)
-        .center_x(Fill)
-        .center_y(Fill),
-    )
-    .width(Length::Fixed(24.0))
-    .height(Length::Fixed(24.0))
-    .padding(0)
-    .on_press(noop_msg)
-    .style(|_: &Theme, status| {
-        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        button::Style {
-            background: if hovered {
-                Some(Background::Color(theme::palette().panel3))
-            } else {
-                None
-            },
-            text_color: if hovered {
-                theme::palette().text2
-            } else {
-                theme::palette().text4
-            },
-            border: Border {
-                radius: theme::RADIUS_BADGE.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    })
-    .into()
 }
 
 pub(crate) fn hairline_v<'a, M: 'a>() -> Element<'a, M> {
