@@ -3,6 +3,7 @@ mod camera;
 mod characters;
 pub mod crops;
 pub mod icons;
+mod layout;
 pub mod office;
 mod paint;
 mod raster;
