@@ -26,21 +26,24 @@ pub struct ChromeCallbacks<M, FSelect, FClose> {
 }
 
 /// Envolve o conteúdo ativo do pane (terminal ou viewer) com a barra de abas.
-pub fn view<'a, M, FSelect, FClose>(
+pub fn view<'a, M, FSelect, FClose, FHover>(
     model: &'a PaneModel,
     active_content: Element<'a, M>,
     callbacks: ChromeCallbacks<M, FSelect, FClose>,
     dirty: &dyn Fn(&std::path::Path) -> bool,
+    hovered: Option<usize>,
+    on_hover: FHover,
 ) -> Element<'a, M>
 where
     M: Clone + 'a,
     FSelect: Fn(usize) -> M + 'a,
     FClose: Fn(usize) -> M + 'a,
+    FHover: Fn(Option<usize>) -> M,
 {
     let split_controls =
         split_controls(callbacks.on_split.clone(), callbacks.on_close_split.clone());
     let tab_strip = row![
-        container(view_tab_strip(model, callbacks, dirty)).width(Fill),
+        container(view_tab_strip(model, callbacks, dirty, hovered, on_hover)).width(Fill),
         split_controls
     ]
     .align_y(iced::Alignment::Center)

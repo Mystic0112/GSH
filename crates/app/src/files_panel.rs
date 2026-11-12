@@ -303,12 +303,15 @@ fn view_entry_row<'a>(
         Space::new().width(theme::FILE_TREE_CHEVRON_GAP),
         icon,
         Space::new().width(theme::FILE_TREE_ICON_GAP),
-        text(entry.name)
-            .font(theme::FONT_BODY)
-            .size(theme::FILE_TREE_NAME_SIZE)
-            .color(name_color)
-            .width(Fill)
-            .wrapping(iced::widget::text::Wrapping::None),
+        container(
+            text(entry.name)
+                .font(theme::FONT_BODY)
+                .size(theme::FILE_TREE_NAME_SIZE)
+                .color(name_color)
+                .wrapping(iced::widget::text::Wrapping::None)
+        )
+        .width(Fill)
+        .clip(true),
     ]
     .align_y(Alignment::Center);
 

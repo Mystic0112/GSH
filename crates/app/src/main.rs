@@ -97,6 +97,7 @@ enum Msg {
     CancelWindowClose,
     WindowUnfocused,
     StatusTick,
+    TabHover(Option<(bool, usize)>),
     SelectTab(usize),
     CloseTab(usize),
     NewTerminalTab,
@@ -135,6 +136,7 @@ struct Shell {
     split_pane: Option<PaneModel>,
     /// `true` quando o pane focado está à direita (o outro, à esquerda).
     split_focus_right: bool,
+    hovered_tab: Option<(bool, usize)>,
     terminals: BTreeMap<TermId, TerminalPane>,
     chats: BTreeMap<ChatId, ChatPane>,
     file_viewers: BTreeMap<PathBuf, FileViewerState>,
@@ -189,6 +191,7 @@ impl Default for Shell {
             pane_model,
             split_pane: None,
             split_focus_right: false,
+            hovered_tab: None,
             terminals,
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
@@ -388,6 +391,10 @@ impl Shell {
             }
         }
         match msg {
+            Msg::TabHover(tab) => {
+                self.hovered_tab = tab;
+                Task::none()
+            }
             Msg::WindowCloseRequested(id) => {
                 if self.editors.values().any(|e| e.state.buffer.is_dirty()) {
                     self.pending_window_close = Some(id);
@@ -406,6 +413,7 @@ impl Shell {
             }
             Msg::WindowUnfocused => {
                 self.pending_window_close = None;
+                self.hovered_tab = None;
                 Task::none()
             }
             Msg::StatusTick => {
@@ -953,6 +961,10 @@ impl Shell {
                 .is_some_and(|editor| editor.state.buffer.is_dirty())
         };
         let split_open = self.split_pane.is_some();
+        let right = split_open && (focused == self.split_focus_right);
+        let hovered = self
+            .hovered_tab
+            .and_then(|(side, index)| (side == right).then_some(index));
         if focused {
             pane_chrome::view(
                 model,
@@ -966,6 +978,8 @@ impl Shell {
                     on_close_split: split_open.then_some(Msg::CloseSplit),
                 },
                 &dirty,
+                hovered,
+                move |index| Msg::TabHover(index.map(|index| (right, index))),
             )
         } else {
             pane_chrome::view(
@@ -980,6 +994,8 @@ impl Shell {
                     on_close_split: None,
                 },
                 &dirty,
+                hovered,
+                move |index| Msg::TabHover(index.map(|index| (right, index))),
             )
         }
     }
@@ -1175,6 +1191,7 @@ mod tests {
             pane_model: PaneModel::new(),
             split_pane: None,
             split_focus_right: false,
+            hovered_tab: None,
             terminals,
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),

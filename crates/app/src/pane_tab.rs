@@ -1,13 +1,15 @@
 use crate::{labels, pane_model::PaneTab, pane_strip::hairline_v, theme};
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
 
 pub(crate) fn view_tab<'a, M: Clone + 'a>(
     tab: &PaneTab,
     is_active: bool,
     dirty: bool,
+    hovered: bool,
     on_select: M,
     on_close: M,
+    hover_messages: (M, M),
 ) -> Element<'a, M> {
     let icon_color = if is_active {
         theme::palette().accent_text
@@ -20,7 +22,7 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         theme::palette().text3
     };
 
-    let mut tab_label = row![
+    let tab_label = row![
         text(tab.icon())
             .font(if tab.is_file() {
                 theme::FONT_MONO_BOLD
@@ -44,15 +46,6 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         .width(Fill)
         .clip(true),
     ];
-    if dirty {
-        tab_label = tab_label.push(iced::widget::tooltip(
-            text(labels::EDITOR_DIRTY)
-                .size(theme::SIZE_TAB)
-                .color(theme::palette().accent),
-            text(labels::EDITOR_DIRTY_TOOLTIP),
-            iced::widget::tooltip::Position::Bottom,
-        ));
-    }
     let select_btn = button(tab_label.align_y(Alignment::Center))
         .width(Fill)
         .height(Fill)
@@ -72,17 +65,34 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
             }
         });
 
-    let close_btn = button(
+    let close_icon: Element<'a, M> = if show_dirty_dot(dirty, hovered) {
         container(
-            text(labels::ICON_CLOSE)
-                .font(theme::FONT_ICON)
-                .size(theme::PANE_TAB_CLOSE_ICON_SIZE)
-                .color(theme::palette().text3),
+            Space::new()
+                .width(theme::PANE_TAB_DIRTY_DOT_SIZE)
+                .height(theme::PANE_TAB_DIRTY_DOT_SIZE),
         )
-        .width(Fill)
-        .height(Fill)
-        .center_x(Fill)
-        .center_y(Fill),
+        .style(|_: &Theme| container::Style {
+            background: Some(theme::palette().accent.into()),
+            border: Border {
+                radius: (theme::PANE_TAB_DIRTY_DOT_SIZE / 2.0).into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into()
+    } else {
+        text(labels::ICON_CLOSE)
+            .font(theme::FONT_ICON)
+            .size(theme::PANE_TAB_CLOSE_ICON_SIZE)
+            .color(theme::palette().text3)
+            .into()
+    };
+    let close_btn = button(
+        container(close_icon)
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill),
     )
     .width(Length::Fixed(
         theme::PANE_TAB_CLOSE_ICON_SIZE + 2.0 * theme::PANE_TAB_CLOSE_PADDING,
@@ -117,7 +127,9 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         row![
             select_btn,
             Space::new().width(theme::PANE_TAB_CLOSE_GAP),
-            close_btn
+            mouse_area(close_btn)
+                .on_enter(hover_messages.0)
+                .on_exit(hover_messages.1)
         ]
         .width(Fill)
         .height(Fill)
@@ -173,4 +185,21 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         .width(Length::Fixed(theme::TAB_WIDTH))
         .height(Fill)
         .into()
+}
+
+fn show_dirty_dot(dirty: bool, hovered: bool) -> bool {
+    dirty && !hovered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::show_dirty_dot;
+
+    #[test]
+    fn dirty_dot_only_appears_without_hover() {
+        assert!(show_dirty_dot(true, false));
+        assert!(!show_dirty_dot(true, true));
+        assert!(!show_dirty_dot(false, false));
+        assert!(!show_dirty_dot(false, true));
+    }
 }

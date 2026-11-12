@@ -8,15 +8,18 @@ use crate::{
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
 
-pub(crate) fn view_tab_strip<'a, M, FSelect, FClose>(
+pub(crate) fn view_tab_strip<'a, M, FSelect, FClose, FHover>(
     model: &'a PaneModel,
     callbacks: ChromeCallbacks<M, FSelect, FClose>,
     dirty: &dyn Fn(&std::path::Path) -> bool,
+    hovered: Option<usize>,
+    on_hover: FHover,
 ) -> Element<'a, M>
 where
     M: Clone + 'a,
     FSelect: Fn(usize) -> M + 'a,
     FClose: Fn(usize) -> M + 'a,
+    FHover: Fn(Option<usize>) -> M,
 {
     let active_idx = model.active_index();
     let mut tabs_row = row![].height(Fill).align_y(Alignment::Center);
@@ -26,8 +29,10 @@ where
             tab,
             is_active,
             matches!(tab, PaneTab::File(path) if dirty(path)),
+            hovered == Some(idx),
             (callbacks.on_select_tab)(idx),
             (callbacks.on_close_tab)(idx),
+            (on_hover(Some(idx)), on_hover(None)),
         ));
     }
 

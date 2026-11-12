@@ -433,6 +433,7 @@ pub const PANE_TAB_ICON_GAP: f32 = 7.0;
 pub const PANE_TAB_CLOSE_GAP: f32 = 10.0;
 pub const PANE_TAB_CLOSE_ICON_SIZE: f32 = 12.0;
 pub const PANE_TAB_CLOSE_PADDING: f32 = 3.0;
+pub const PANE_TAB_DIRTY_DOT_SIZE: f32 = 8.0;
 pub const PANE_TAB_INDICATOR_HEIGHT: f32 = 2.0;
 pub const PANE_TAB_ADD_WIDTH: f32 = 32.0;
 pub const PANE_TAB_ADD_ICON_SIZE: f32 = 14.0;
