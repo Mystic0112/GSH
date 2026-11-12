@@ -221,11 +221,10 @@ fn view_tree_body<'a>(
     }
 
     let rows = tree.visible_rows();
-    if rows.is_empty() {
-        return empty_state_label(labels::FILES_EMPTY_FOLDER);
-    }
-
-    let mut list = column![].spacing(0).padding([4, 6]);
+    let mut list = column![].spacing(0).padding([
+        theme::FILE_TREE_SCROLL_PADDING_VERTICAL,
+        theme::FILE_TREE_ROW_PADDING,
+    ]);
     for item in rows {
         match item {
             TreeRow::Entry {
@@ -268,7 +267,7 @@ fn view_entry_row<'a>(
     selected: bool,
     git_status: Option<gsh_git::GitFileStatus>,
 ) -> Element<'a, FilesMsg> {
-    let indent = (depth as f32) * 12.0 + 6.0;
+    let indent = (depth as f32) * theme::FILE_TREE_ROW_INDENT;
     let chevron = if entry.is_dir {
         if expanded {
             labels::ICON_CHEVRON_DOWN
@@ -296,45 +295,41 @@ fn view_entry_row<'a>(
         FilesMsg::SelectFile(entry.path)
     };
 
-    let mut row_content = row![
+    let row_content = row![
         Space::new().width(indent),
         container(
             text(chevron)
                 .font(theme::FONT_ICON)
-                .size(theme::SIZE_TOPBAR_TITLE)
-                .color(theme::palette().text3)
+                .size(theme::FILE_TREE_CHEVRON_SIZE)
+                .color(theme::palette().text4)
         )
-        .width(14),
+        .width(theme::FILE_TREE_CHEVRON_WIDTH),
+        Space::new().width(theme::FILE_TREE_CHEVRON_GAP),
         text(icon)
             .font(theme::FONT_ICON)
-            .size(theme::SIZE_TOPBAR_TITLE)
+            .size(theme::FILE_TREE_ICON_SIZE)
             .color(theme::palette().text3),
-        Space::new().width(6.0),
+        Space::new().width(theme::FILE_TREE_ICON_GAP),
         text(entry.name)
             .font(theme::FONT_BODY)
-            .size(theme::SIZE_LABEL)
-            .color(name_color),
+            .size(theme::FILE_TREE_NAME_SIZE)
+            .color(name_color)
+            .width(Fill)
+            .wrapping(iced::widget::text::Wrapping::None),
     ]
     .align_y(Alignment::Center);
-    if let Some(status) = git_status {
-        row_content = row_content.push(Space::new().width(Fill)).push(
-            text(status.badge_code())
-                .color(crate::git_presenter::status_color(status))
-                .size(theme::SIZE_LABEL),
-        );
-    }
 
     button(row_content)
         .width(Fill)
-        .height(22)
-        .padding([0, 6])
+        .height(theme::FILE_TREE_ROW_HEIGHT)
+        .padding([0.0, theme::FILE_TREE_ROW_PADDING])
         .on_press(msg)
         .style(move |_: &Theme, status| {
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
             let bg = if selected {
                 Some(Background::Color(theme::palette().panel2))
             } else if hovered {
-                Some(Background::Color(theme::palette().panel3))
+                Some(Background::Color(theme::palette().panel))
             } else {
                 None
             };
@@ -344,7 +339,7 @@ fn view_entry_row<'a>(
                 border: Border {
                     color: theme::palette().border,
                     width: 0.0,
-                    radius: theme::RADIUS_BUTTON.into(),
+                    radius: theme::FILE_TREE_ROW_RADIUS.into(),
                 },
                 ..Default::default()
             }
@@ -359,9 +354,8 @@ fn empty_state_label<'a>(msg: &'static str) -> Element<'a, FilesMsg> {
             .size(theme::SIZE_LABEL)
             .color(theme::palette().text3),
     )
-    .width(Fill)
-    .height(Fill)
-    .padding([8, 14])
+    .center_x(Fill)
+    .center_y(Fill)
     .into()
 }
 
