@@ -455,3 +455,9 @@ pub const DB_ERR_CONNECT: &str = "Não foi possível conectar ao banco.";
 pub const DB_ERR_QUERY: &str = "Erro na consulta";
 pub const DB_ERR_TIMEOUT: &str = "A consulta demorou demais e foi cancelada.";
 pub const DB_ERR_RUNTIME: &str = "Falha interna ao executar a consulta.";
+
+pub const SETTINGS_NAV_SEARCH: &str = "Buscar configurações";
+pub const SETTINGS_NAV_NO_RESULTS: &str = "Nenhum resultado";
+pub const SETTINGS_NAV_CLAUDE: &str = "Claude";
+pub const SETTINGS_CLAUDE_UNAVAILABLE: &str =
+    "As configurações do Claude ainda não estão disponíveis neste app.";

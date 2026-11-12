@@ -32,42 +32,8 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
         AppThemeMode::Light => AppThemeMode::Light,
         AppThemeMode::Dark | AppThemeMode::System => AppThemeMode::Dark,
     };
-    let navigation = column![
-        nav_item(
-            labels::ICON_SETTINGS,
-            labels::SETTINGS_GENERAL,
-            Section::General,
-            s.section
-        ),
-        nav_item(
-            labels::ICON_LAYERS,
-            labels::SETTINGS_APPEARANCE,
-            Section::Appearance,
-            s.section
-        ),
-        nav_item(
-            labels::ICON_TERMINAL,
-            labels::SETTINGS_TERMINAL,
-            Section::Terminal,
-            s.section
-        ),
-        nav_item(
-            labels::ICON_FILE_ITEM,
-            labels::SETTINGS_EDITOR,
-            Section::Editor,
-            s.section
-        ),
-        nav_item(
-            labels::ICON_CHAT,
-            labels::SETTINGS_NOTIFICATIONS,
-            Section::Notifications,
-            s.section
-        ),
-    ]
-    .spacing(theme::SETTINGS_NAV_ITEM_SPACING)
-    .padding([theme::SETTINGS_NAV_PADDING, theme::SETTINGS_NAV_PADDING])
-    .width(theme::SETTINGS_NAV_WIDTH);
-    let mut content = match s.section {
+    let navigation = navigation(s);
+    let content = match s.section {
         Section::General => column![
             text(labels::SETTINGS_APPEARANCE)
                 .font(theme::FONT_BODY_SEMIBOLD)
@@ -245,6 +211,12 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
     }
     .spacing(theme::SETTINGS_SECTION_TITLE_GAP)
     .width(Fill);
+    // ponytail: o lado Claude lê ~/.claude (fora do escopo); mostra o aviso até portar
+    let mut content = if s.nav_claude {
+        column![text(labels::SETTINGS_CLAUDE_UNAVAILABLE).color(theme::palette().text3)].width(Fill)
+    } else {
+        content
+    };
     if let Some(error) = &s.error {
         let message = match error {
             Error::InvalidLocale => labels::SETTINGS_INVALID_LOCALE,
@@ -315,6 +287,164 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
     .width(Fill)
     .height(Fill)
     .into()
+}
+
+fn matches_search(label: &str, query: &str) -> bool {
+    label.to_lowercase().contains(&query.trim().to_lowercase())
+}
+
+fn navigation(s: &Settings) -> Element<'_, Message> {
+    let entries = [
+        (
+            labels::ICON_SETTINGS,
+            labels::SETTINGS_GENERAL,
+            Section::General,
+        ),
+        ("", labels::SETTINGS_APPEARANCE, Section::Appearance),
+        (
+            labels::ICON_TERMINAL,
+            labels::SETTINGS_TERMINAL,
+            Section::Terminal,
+        ),
+        (
+            labels::ICON_FILE_ITEM,
+            labels::SETTINGS_EDITOR,
+            Section::Editor,
+        ),
+        ("", labels::SETTINGS_NOTIFICATIONS, Section::Notifications),
+    ];
+    let mut items = column![].spacing(theme::SETTINGS_NAV_ITEM_SPACING);
+    let mut found = false;
+    for (icon, label, section) in entries {
+        if !s.nav_claude && matches_search(label, &s.nav_search) {
+            found = true;
+            items = items.push(nav_item(icon, label, section, s.section));
+        }
+    }
+    let group = if s.nav_claude {
+        labels::SETTINGS_NAV_CLAUDE
+    } else if found {
+        labels::SETTINGS_GSH_DESKTOP
+    } else {
+        labels::SETTINGS_NAV_NO_RESULTS
+    };
+    let heading = container(
+        text(group)
+            .font(theme::FONT_BODY)
+            .size(theme::SETTINGS_NAV_GROUP_SIZE)
+            .color(theme::palette().text3),
+    )
+    .padding(iced::Padding {
+        top: theme::SETTINGS_NAV_GROUP_TOP,
+        right: f32::from(theme::SETTINGS_NAV_ITEM_HORIZONTAL),
+        bottom: theme::SETTINGS_NAV_GROUP_BOTTOM,
+        left: f32::from(theme::SETTINGS_NAV_ITEM_HORIZONTAL),
+    });
+    let search = text_input(labels::SETTINGS_NAV_SEARCH, &s.nav_search)
+        .on_input(Message::SearchChanged)
+        .padding([
+            theme::SETTINGS_NAV_SEARCH_VERTICAL,
+            theme::SETTINGS_NAV_SEARCH_HORIZONTAL,
+        ])
+        .size(theme::SETTINGS_NAV_TEXT_SIZE)
+        .style(nav_search_style);
+    let segments = container(row![
+        segment(labels::SETTINGS_GSH_DESKTOP, false, s.nav_claude),
+        segment(labels::SETTINGS_NAV_CLAUDE, true, s.nav_claude)
+    ])
+    .padding(theme::SETTINGS_NAV_SEGMENT_PADDING)
+    .style(|_| container::Style {
+        background: Some(theme::palette().panel2.into()),
+        border: Border {
+            radius: theme::SETTINGS_NAV_SEARCH_RADIUS.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let list =
+        iced::widget::scrollable(column![heading, items].padding([0, theme::SETTINGS_NAV_PADDING]))
+            .height(Fill);
+    container(column![
+        container(segments).padding(iced::Padding {
+            top: f32::from(theme::SETTINGS_NAV_PADDING),
+            right: f32::from(theme::SETTINGS_NAV_PADDING),
+            bottom: theme::SETTINGS_NAV_SEGMENT_BOTTOM,
+            left: f32::from(theme::SETTINGS_NAV_PADDING)
+        }),
+        container(search).padding(iced::Padding {
+            top: 0.0,
+            right: f32::from(theme::SETTINGS_NAV_PADDING),
+            bottom: theme::SETTINGS_NAV_SEARCH_BOTTOM,
+            left: f32::from(theme::SETTINGS_NAV_PADDING)
+        }),
+        list,
+        container(
+            text(concat!("GSH Desktop ", env!("CARGO_PKG_VERSION")))
+                .font(theme::FONT_BODY)
+                .size(theme::SIZE_LABEL)
+                .color(theme::palette().text4)
+        )
+        .padding([
+            theme::SETTINGS_NAV_FOOTER_VERTICAL,
+            theme::SETTINGS_NAV_FOOTER_HORIZONTAL
+        ])
+    ])
+    .width(theme::SETTINGS_NAV_WIDTH)
+    .height(Fill)
+    .style(|_| container::Style {
+        background: Some(theme::palette().bg.into()),
+        ..Default::default()
+    })
+    .into()
+}
+
+fn segment(label: &'static str, claude: bool, current: bool) -> Element<'static, Message> {
+    let selected = claude == current;
+    button(
+        text(label)
+            .font(if selected {
+                theme::FONT_BODY_MEDIUM
+            } else {
+                theme::FONT_BODY
+            })
+            .size(theme::SETTINGS_NAV_SEGMENT_TEXT),
+    )
+    .padding([
+        theme::SETTINGS_NAV_SEGMENT_VERTICAL,
+        theme::SETTINGS_NAV_SEGMENT_HORIZONTAL,
+    ])
+    .on_press(Message::SideChanged(claude))
+    .style(move |_, status| button::Style {
+        background: if selected {
+            Some(theme::palette().panel3.into())
+        } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+            Some(theme::palette().panel.into())
+        } else {
+            None
+        },
+        text_color: if selected {
+            theme::palette().text
+        } else {
+            theme::palette().text2
+        },
+        border: Border {
+            color: if selected {
+                theme::palette().border2
+            } else {
+                theme::palette().panel2
+            },
+            width: if selected { 1.0 } else { 0.0 },
+            radius: theme::SETTINGS_NAV_SEGMENT_RADIUS.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+fn nav_search_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let mut style = input_style(theme, status);
+    style.border.radius = theme::SETTINGS_NAV_SEARCH_RADIUS.into();
+    style
 }
 
 fn nav_item(
@@ -449,4 +579,15 @@ fn setting_row<'a>(label: &'static str, control: Element<'a, Message>) -> Elemen
         crate::panel_widgets::hairline_h()
     ]
     .into()
+}
+
+#[cfg(test)]
+mod nav_tests {
+    use super::matches_search;
+    #[test]
+    fn filter_matches_case_insensitively_and_trims_query() {
+        assert!(matches_search("Aparência", "  ARÊN  "));
+        assert!(matches_search("Terminal", "  "));
+        assert!(!matches_search("Terminal", "editor"));
+    }
 }

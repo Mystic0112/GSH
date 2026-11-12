@@ -25,6 +25,8 @@ pub enum Error {
 #[derive(Debug, Clone)]
 pub enum Message {
     Back,
+    SearchChanged(String),
+    SideChanged(bool),
     LocaleChanged(String),
     Save,
     ShowAppearance(bool),
@@ -55,6 +57,8 @@ pub enum Section {
 
 pub struct Settings {
     path: Result<PathBuf, gsh_config::ConfigError>,
+    pub nav_search: String,
+    pub nav_claude: bool,
     pub locale: String,
     pub appearance: bool,
     pub section: Section,
@@ -79,6 +83,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             path: gsh_config::default_path(),
+            nav_search: String::new(),
+            nav_claude: false,
             locale: String::new(),
             appearance: false,
             section: Section::General,
@@ -157,6 +163,13 @@ impl Settings {
     pub fn update(&mut self, message: Message) {
         match message {
             Message::Back => {}
+            Message::SearchChanged(value) => self.nav_search = value,
+            Message::SideChanged(claude) => {
+                if self.nav_claude && !claude {
+                    self.section = Section::General;
+                }
+                self.nav_claude = claude;
+            }
             Message::Select(section) => {
                 self.section = section;
                 self.error = None;
