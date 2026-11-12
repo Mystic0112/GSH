@@ -117,7 +117,7 @@ fn pane_tool_button<'a, M: Clone + 'a>(glyph: &'static str, noop_msg: M) -> Elem
             text(glyph)
                 .font(theme::FONT_ICON)
                 .size(theme::SIZE_LABEL)
-                .color(theme::palette().text4),
+                .color(theme::palette().text3),
         )
         .width(Fill)
         .height(Fill)
@@ -148,7 +148,6 @@ fn pane_tool_button<'a, M: Clone + 'a>(glyph: &'static str, noop_msg: M) -> Elem
             ..Default::default()
         }
     })
-    .style(theme::ghost_button)
     .into()
 }
 

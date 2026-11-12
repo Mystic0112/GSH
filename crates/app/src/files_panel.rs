@@ -154,30 +154,23 @@ fn view_entry_row<'a>(
     git_status: Option<gsh_git::GitFileStatus>,
 ) -> Element<'a, FilesMsg> {
     let indent = (depth as f32) * 14.0 + 6.0;
-    let icon = if entry.is_dir {
+    let chevron = if entry.is_dir {
         if expanded {
             labels::ICON_CHEVRON_DOWN
         } else {
             labels::ICON_CHEVRON_RIGHT
         }
     } else {
+        ""
+    };
+    let icon = if entry.is_dir {
+        labels::ICON_FOLDER
+    } else {
         labels::ICON_FILE_ITEM
-    };
-    let icon_color = if entry.is_dir {
-        theme::palette().accent_text
-    } else if selected {
-        theme::palette().text
-    } else {
-        theme::palette().text3
-    };
-    let name_font = if entry.is_dir || selected {
-        theme::FONT_BODY_MEDIUM
-    } else {
-        theme::FONT_BODY
     };
     let name_color = if let Some(status) = git_status {
         crate::git_presenter::status_color(status)
-    } else if selected || entry.is_dir {
+    } else if selected {
         theme::palette().text
     } else {
         theme::palette().text2
@@ -190,13 +183,20 @@ fn view_entry_row<'a>(
 
     let mut row_content = row![
         Space::new().width(indent),
+        container(
+            text(chevron)
+                .font(theme::FONT_ICON)
+                .size(theme::SIZE_TOPBAR_TITLE)
+                .color(theme::palette().text3)
+        )
+        .width(14),
         text(icon)
-            .font(theme::FONT_MONO)
-            .size(theme::SIZE_LABEL)
-            .color(icon_color),
+            .font(theme::FONT_ICON)
+            .size(theme::SIZE_TOPBAR_TITLE)
+            .color(theme::palette().text3),
         Space::new().width(6.0),
         text(entry.name)
-            .font(name_font)
+            .font(theme::FONT_BODY)
             .size(theme::SIZE_LABEL)
             .color(name_color),
     ]
@@ -211,7 +211,8 @@ fn view_entry_row<'a>(
 
     button(row_content)
         .width(Fill)
-        .padding([4, 6])
+        .height(22)
+        .padding([0, 6])
         .on_press(msg)
         .style(move |_: &Theme, status| {
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
@@ -226,12 +227,8 @@ fn view_entry_row<'a>(
                 background: bg,
                 text_color: name_color,
                 border: Border {
-                    color: if selected {
-                        theme::palette().accent
-                    } else {
-                        theme::palette().border
-                    },
-                    width: if selected { 1.0 } else { 0.0 },
+                    color: theme::palette().border,
+                    width: 0.0,
                     radius: theme::RADIUS_BUTTON.into(),
                 },
                 ..Default::default()

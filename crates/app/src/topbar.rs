@@ -109,7 +109,7 @@ fn icon_toggle_button<'a, M: Clone + 'a>(
         container(
             text(glyph)
                 .font(theme::FONT_ICON)
-                .size(theme::SIZE_TITLE)
+                .size(17)
                 .color(if selected {
                     theme::palette().accent_text
                 } else {
@@ -128,7 +128,7 @@ fn icon_toggle_button<'a, M: Clone + 'a>(
     .style(move |_: &Theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         let bg = if selected {
-            Some(Background::Color(theme::palette().accent_soft))
+            Some(Background::Color(theme::palette().panel2))
         } else if hovered {
             Some(Background::Color(theme::palette().panel3))
         } else {
