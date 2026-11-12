@@ -4,7 +4,7 @@
 //! botão de recolher o rail à esquerda + título do workspace ativo, pílula da
 //! `AgentIsland` centralizada e botão do painel de arquivos à direita.
 
-use iced::widget::{button, column, container, row, stack, text, tooltip, Space};
+use iced::widget::{button, column, container, responsive, row, text, tooltip, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
 
 use crate::labels;
@@ -30,7 +30,7 @@ pub struct TopbarActions<M> {
 /// Renderiza a barra superior do shell com a pílula da ilha centralizada.
 pub fn view<'a, M: Clone + 'a>(
     props: TopbarProps<'a>,
-    island_pill: Element<'a, M>,
+    island_pill: impl Fn() -> Element<'a, M> + 'a,
     actions: TopbarActions<M>,
 ) -> Element<'a, M> {
     let left = row![
@@ -63,22 +63,25 @@ pub fn view<'a, M: Clone + 'a>(
     .spacing(4)
     .align_y(Alignment::Center);
 
-    let chrome_row = container(
-        row![left, Space::new().width(Fill), right]
+    let center_island = responsive(move |size| {
+        if island_fits(size.width) {
+            container(island_pill())
+                .center_x(Fill)
+                .center_y(Fill)
+                .into()
+        } else {
+            Space::new().into()
+        }
+    });
+
+    let bar = container(
+        row![left, center_island, right]
             .width(Fill)
             .height(Fill)
             .align_y(Alignment::Center),
     )
     .width(Fill)
     .height(Length::Fixed(theme::TOPBAR_HEIGHT - 1.0));
-
-    let center_island = container(island_pill)
-        .width(Fill)
-        .height(Length::Fixed(theme::TOPBAR_HEIGHT - 1.0))
-        .center_x(Fill)
-        .center_y(Length::Fixed(theme::TOPBAR_HEIGHT - 1.0));
-
-    let bar = stack![chrome_row, center_island];
 
     let bottom_hairline = container(Space::new().width(Fill).height(1.0))
         .width(Fill)
@@ -96,6 +99,10 @@ pub fn view<'a, M: Clone + 'a>(
             ..Default::default()
         })
         .into()
+}
+
+fn island_fits(width: f32) -> bool {
+    width >= theme::TOPBAR_CENTER_MIN_WIDTH
 }
 
 fn icon_toggle_button<'a, M: Clone + 'a>(
@@ -255,4 +262,14 @@ fn counter_dot<'a, M: 'a>(color: iced::Color) -> Element<'a, M> {
             ..Default::default()
         })
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn island_requires_160_pixels_of_free_width() {
+        assert!(!super::island_fits(159.99));
+        assert!(super::island_fits(160.0));
+        assert!(super::island_fits(161.0));
+    }
 }

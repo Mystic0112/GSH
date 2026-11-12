@@ -186,10 +186,18 @@ fn workspace_row<'a, M: Clone + 'a>(
 
     if let Some(branch) = &item.git_branch {
         let branch_badge = container(
-            text(branch)
-                .font(theme::FONT_MONO)
-                .size(theme::SIZE_BADGE)
-                .color(theme::palette().text3),
+            row![
+                text(labels::ICON_GIT_BRANCH)
+                    .font(theme::FONT_ICON)
+                    .size(theme::GIT_BADGE_ICON_SIZE)
+                    .color(theme::palette().text3),
+                text(branch)
+                    .font(theme::FONT_MONO)
+                    .size(theme::SIZE_BADGE)
+                    .color(theme::palette().text3)
+            ]
+            .spacing(theme::GIT_BADGE_ICON_GAP)
+            .align_y(Alignment::Center),
         )
         .padding(Padding {
             top: 1.0,

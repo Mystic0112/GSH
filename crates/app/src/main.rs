@@ -990,8 +990,6 @@ impl Shell {
             .active()
             .map(|ws| ws.name.as_str())
             .unwrap_or(labels::WORKSPACE_GSH);
-        let island_pill = self.island.view_pill().map(Msg::Island);
-
         let top = topbar::view(
             TopbarProps {
                 workspace_title,
@@ -999,7 +997,7 @@ impl Shell {
                 files_open: self.files_open,
                 counts: self.island.counts(),
             },
-            island_pill,
+            || self.island.view_pill().map(Msg::Island),
             topbar::TopbarActions {
                 on_toggle_rail: Msg::ToggleRail,
                 on_toggle_files: Msg::ToggleFiles,
