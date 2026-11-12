@@ -27,6 +27,7 @@ pub mod editor_scroll;
 pub mod editor_state;
 pub mod editor_view;
 pub mod farm;
+pub mod file_ops;
 pub mod file_tree;
 pub mod file_viewer;
 pub mod files_panel;
@@ -140,6 +141,8 @@ struct Shell {
     pending_window_close: Option<iced::window::Id>,
     workspaces: WorkspaceList,
     file_tree: FileTree,
+    file_create: Option<file_ops::CreateForm>,
+    file_create_generation: u64,
     git: git_state::GitState,
     rail_open: bool,
     files_open: bool,
@@ -192,6 +195,8 @@ impl Default for Shell {
             pending_window_close: None,
             workspaces,
             file_tree,
+            file_create: None,
+            file_create_generation: 0,
             git,
             rail_open: true,
             files_open: true,
@@ -311,6 +316,7 @@ impl Shell {
     }
 
     fn activate_workspace_path(&mut self, next_path: Option<PathBuf>) {
+        self.file_create = None;
         self.file_tree.set_root(next_path.clone());
         self.git.set_repo(next_path.clone());
         if let Some(dir) = next_path.as_deref() {
@@ -525,6 +531,64 @@ impl Shell {
                             .git
                             .start(git_state::Action::Refresh)
                             .map(Msg::GitResult);
+                    }
+                    FilesMsg::StartCreate(kind) => {
+                        if self.file_tree.root().is_some() && self.file_create.is_none() {
+                            self.file_create_generation =
+                                self.file_create_generation.wrapping_add(1);
+                            self.file_create = Some(file_ops::CreateForm::new(kind));
+                            return iced::widget::operation::focus("files-create");
+                        }
+                    }
+                    FilesMsg::CreateNameChanged(name) => {
+                        if let Some(form) = self.file_create.as_mut().filter(|form| !form.busy) {
+                            form.name = name;
+                            form.error = None;
+                        }
+                    }
+                    FilesMsg::CancelCreate => {
+                        if self.file_create.as_ref().is_some_and(|form| !form.busy) {
+                            self.file_create = None;
+                        }
+                    }
+                    FilesMsg::SubmitCreate => {
+                        if let (Some(root), Some(form)) = (
+                            self.file_tree.root(),
+                            self.file_create.as_mut().filter(|form| !form.busy),
+                        ) {
+                            form.busy = true;
+                            form.error = None;
+                            let generation = self.file_create_generation;
+                            return Task::perform(
+                                file_ops::create_async(
+                                    root.to_path_buf(),
+                                    form.name.clone(),
+                                    form.kind,
+                                ),
+                                move |(root, result)| {
+                                    Msg::Files(FilesMsg::CreateFinished(generation, root, result))
+                                },
+                            );
+                        }
+                    }
+                    FilesMsg::CreateFinished(generation, root, result) => {
+                        if generation == self.file_create_generation
+                            && self.file_tree.root() == Some(root.as_path())
+                        {
+                            if let Some(form) = self.file_create.as_mut() {
+                                match result {
+                                    Ok(()) => {
+                                        self.file_create = None;
+                                        self.file_tree.refresh();
+                                    }
+                                    Err(error) => {
+                                        form.busy = false;
+                                        form.error = Some(error);
+                                        return iced::widget::operation::focus("files-create");
+                                    }
+                                }
+                            }
+                        }
                     }
                     FilesMsg::OpenGit => {
                         self.git.git_open = true;
@@ -796,7 +860,21 @@ impl Shell {
             iced::window::Event::Unfocused => Some(Msg::WindowUnfocused),
             _ => None,
         });
-        Subscription::batch([status_sub, active_sub, other_sub, windows])
+        let cancel_create = if self.files_open
+            && !self.git.git_open
+            && self.file_create.as_ref().is_some_and(|form| !form.busy)
+        {
+            iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Msg::Files(FilesMsg::CancelCreate)),
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
+        Subscription::batch([status_sub, active_sub, other_sub, windows, cancel_create])
     }
 
     /// Assinatura de atualização da aba ativa de um pane (terminal ou chat).
@@ -844,7 +922,20 @@ impl Shell {
             }
             Some(PaneTab::Farm) => self.farm.view().map(Msg::Farm),
             Some(PaneTab::Database) => self.database.view().map(Msg::Database),
-            Some(PaneTab::Settings) => settings::view::view(&self.settings).map(Msg::Settings),
+            Some(PaneTab::Settings) => {
+                let index = model.active_index().unwrap_or(0);
+                let focused = std::ptr::eq(model, &self.pane_model);
+                settings::view::view(&self.settings).map(move |message| match message {
+                    settings::Message::Back => {
+                        if focused {
+                            Msg::CloseTab(index)
+                        } else {
+                            Msg::CloseOther(index)
+                        }
+                    }
+                    other => Msg::Settings(other),
+                })
+            }
             None => pane_chrome::view_empty_body(),
         }
     }
@@ -902,6 +993,7 @@ impl Shell {
                 workspace_title,
                 rail_open: self.rail_open,
                 files_open: self.files_open,
+                counts: self.island.counts(),
             },
             island_pill,
             topbar::TopbarActions {
@@ -966,6 +1058,7 @@ impl Shell {
                         self.git.status.as_ref(),
                         self.git.root.as_deref(),
                         self.git.busy,
+                        self.file_create.as_ref(),
                     )
                     .map(Msg::Files),
                 );
@@ -1018,15 +1111,7 @@ impl Shell {
 
 /// Botão de controle de janela (minimizar, maximizar, fechar) da barra própria.
 fn window_button<'a>(glyph: &'static str, msg: Msg) -> Element<'a, Msg> {
-    iced::widget::button(
-        iced::widget::text(glyph)
-            .font(theme::FONT_ICON)
-            .size(theme::SIZE_TITLE),
-    )
-    .style(theme::ghost_button)
-    .padding([4, 10])
-    .on_press(msg)
-    .into()
+    crate::panel_widgets::ghost(glyph, Some(msg), false)
 }
 
 fn main() -> iced::Result {
@@ -1095,6 +1180,8 @@ mod tests {
             pending_window_close: None,
             workspaces,
             file_tree: FileTree::new(),
+            file_create: None,
+            file_create_generation: 0,
             git: git_state::GitState::default(),
             rail_open: true,
             files_open: true,

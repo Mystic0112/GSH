@@ -213,10 +213,15 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
     let body = row![navigation, iced::widget::scrollable(content).height(Fill)].spacing(32);
     container(
         column![
-            text(labels::SETTINGS_TITLE)
-                .font(theme::FONT_TITLE)
-                .size(theme::SIZE_TOPBAR_TITLE)
-                .color(theme::palette().text),
+            row![
+                crate::panel_widgets::ghost(labels::ICON_BACK, Some(Message::Back), false),
+                text(labels::SETTINGS_TITLE)
+                    .font(theme::FONT_TITLE)
+                    .size(theme::SIZE_TOPBAR_TITLE)
+                    .color(theme::palette().text)
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
             crate::panel_widgets::hairline_h(),
             body
         ]

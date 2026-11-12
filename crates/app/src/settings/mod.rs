@@ -24,6 +24,7 @@ pub enum Error {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    Back,
     LocaleChanged(String),
     Save,
     ShowAppearance(bool),
@@ -142,6 +143,7 @@ impl Settings {
 
     pub fn update(&mut self, message: Message) {
         match message {
+            Message::Back => {}
             Message::Select(section) => {
                 self.section = section;
                 self.error = None;

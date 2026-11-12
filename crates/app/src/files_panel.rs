@@ -7,9 +7,10 @@
 
 use std::path::PathBuf;
 
-use iced::widget::{button, column, container, row, scrollable, text, Space};
+use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Padding, Theme};
 
+use crate::file_ops::{CreateForm, CreateKind, FileOpError};
 use crate::file_tree::{FileEntry, FileTree, TreeRow};
 use crate::labels;
 use crate::theme;
@@ -26,6 +27,11 @@ pub enum FilesMsg {
     /// Atualiza os diretórios abertos no painel.
     Refresh,
     OpenGit,
+    StartCreate(CreateKind),
+    CreateNameChanged(String),
+    SubmitCreate,
+    CancelCreate,
+    CreateFinished(u64, PathBuf, Result<(), FileOpError>),
 }
 
 /// Renderiza o painel de arquivos à direita com a divisória esquerda de 1px `BORDER`.
@@ -34,9 +40,10 @@ pub fn view<'a>(
     status: Option<&'a gsh_git::GitRepoStatus>,
     repo_root: Option<&'a std::path::Path>,
     busy: bool,
+    form: Option<&'a CreateForm>,
 ) -> Element<'a, FilesMsg> {
     let mode_bar = view_mode_bar();
-    let section_header = view_section_header(busy);
+    let section_header = view_section_header(busy, tree.root().is_some(), form.is_some());
     let tree_body = view_tree_body(tree, status, repo_root);
     let footer = view_footer();
 
@@ -45,6 +52,7 @@ pub fn view<'a>(
             mode_bar,
             crate::panel_widgets::hairline_h(),
             section_header,
+            create_input(form),
             tree_body,
             crate::panel_widgets::hairline_h(),
             footer
@@ -68,7 +76,7 @@ fn view_mode_bar<'a>() -> Element<'a, FilesMsg> {
     .into()
 }
 
-fn view_section_header<'a>(busy: bool) -> Element<'a, FilesMsg> {
+fn view_section_header<'a>(busy: bool, has_root: bool, creating: bool) -> Element<'a, FilesMsg> {
     container(
         row![
             text(labels::FILES_SECTION_UPPER)
@@ -76,6 +84,16 @@ fn view_section_header<'a>(busy: bool) -> Element<'a, FilesMsg> {
                 .size(theme::SIZE_SECTION_HEADER)
                 .color(theme::palette().text3),
             Space::new().width(Fill),
+            crate::panel_widgets::ghost(
+                labels::ICON_NEW_FOLDER,
+                (has_root && !creating).then_some(FilesMsg::StartCreate(CreateKind::Folder)),
+                false
+            ),
+            crate::panel_widgets::ghost(
+                labels::ICON_NEW_FILE,
+                (has_root && !creating).then_some(FilesMsg::StartCreate(CreateKind::File)),
+                false
+            ),
             crate::panel_widgets::ghost(labels::ICON_COLLAPSE, Some(FilesMsg::CollapseAll), false),
             Space::new().width(4.0),
             crate::panel_widgets::ghost(
@@ -94,6 +112,50 @@ fn view_section_header<'a>(busy: bool) -> Element<'a, FilesMsg> {
         left: 14.0,
     })
     .into()
+}
+
+fn create_input(form: Option<&CreateForm>) -> Element<'_, FilesMsg> {
+    let Some(form) = form else {
+        return Space::new().height(0).into();
+    };
+    let hint = match form.kind {
+        CreateKind::Folder => labels::FILES_NEW_FOLDER_HINT,
+        CreateKind::File => labels::FILES_NEW_FILE_HINT,
+    };
+    let input = text_input(hint, &form.name)
+        .id("files-create")
+        .on_input_maybe(
+            (!form.busy).then_some(FilesMsg::CreateNameChanged as fn(String) -> FilesMsg),
+        )
+        .on_submit_maybe((!form.busy).then_some(FilesMsg::SubmitCreate))
+        .style(|_, status| {
+            let p = theme::palette();
+            text_input::Style {
+                background: p.panel2.into(),
+                border: Border {
+                    color: if matches!(status, text_input::Status::Focused { .. }) {
+                        p.accent
+                    } else {
+                        p.border2
+                    },
+                    width: 1.0,
+                    radius: theme::RADIUS_BUTTON.into(),
+                },
+                icon: p.text3,
+                placeholder: p.text3,
+                value: p.text,
+                selection: p.accent_soft,
+            }
+        });
+    let mut content = column![input].spacing(4);
+    if let Some(error) = form.error {
+        content = content.push(
+            text(error.label())
+                .size(theme::SIZE_LABEL)
+                .color(theme::palette().error),
+        );
+    }
+    container(content).padding([0, 12]).width(Fill).into()
 }
 
 fn view_tree_body<'a>(

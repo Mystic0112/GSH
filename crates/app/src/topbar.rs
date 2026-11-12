@@ -16,6 +16,7 @@ pub struct TopbarProps<'a> {
     pub workspace_title: &'a str,
     pub rail_open: bool,
     pub files_open: bool,
+    pub counts: crate::island::IslandCounts,
 }
 
 /// Ações dos botões da topbar (mensagens do shell).
@@ -50,6 +51,10 @@ pub fn view<'a, M: Clone + 'a>(
     .align_y(Alignment::Center);
 
     let right = row![
+        counter(props.counts.finished, theme::palette().ok),
+        counter(props.counts.waiting_badge(), theme::palette().warn),
+        counter(props.counts.working, theme::palette().accent),
+        Space::new().width(4),
         icon_toggle_button(labels::ICON_CHAT, false, actions.on_chat),
         icon_toggle_button(labels::ICON_FARM, false, actions.on_farm),
         icon_toggle_button(labels::ICON_DATABASE, false, actions.on_database),
@@ -150,5 +155,21 @@ fn icon_toggle_button<'a, M: Clone + 'a>(
             ..Default::default()
         }
     })
+    .into()
+}
+
+fn counter<'a, M: 'a>(count: usize, color: iced::Color) -> Element<'a, M> {
+    row![
+        text(labels::ICON_DOT)
+            .font(theme::FONT_ICON)
+            .size(theme::SIZE_LABEL)
+            .color(color),
+        text(count.to_string())
+            .font(theme::FONT_BODY)
+            .size(theme::SIZE_LABEL)
+            .color(theme::palette().text2)
+    ]
+    .spacing(3)
+    .align_y(Alignment::Center)
     .into()
 }

@@ -76,7 +76,8 @@ fn split_controls<'a, M: Clone + 'a>(
                     .font(theme::FONT_ICON)
                     .size(theme::SIZE_LABEL),
             )
-            .on_press(msg),
+            .on_press(msg)
+            .style(theme::ghost_button),
         );
     }
     if let Some(msg) = on_close_split {
@@ -86,7 +87,8 @@ fn split_controls<'a, M: Clone + 'a>(
                     .font(theme::FONT_ICON)
                     .size(theme::SIZE_LABEL),
             )
-            .on_press(msg),
+            .on_press(msg)
+            .style(theme::ghost_button),
         );
     }
     controls.into()
