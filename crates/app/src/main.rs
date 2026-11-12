@@ -102,6 +102,8 @@ enum Msg {
     CloseTab(usize),
     NewTerminalTab,
     NewChatTab,
+    // ponytail: sem botão na barra; o menu do `+` volta a construir esta mensagem
+    #[allow(dead_code)]
     SplitRight,
     CloseSplit,
     SelectOther(usize),
@@ -974,7 +976,8 @@ impl Shell {
                     on_close_tab: Msg::CloseTab,
                     on_new_terminal: Msg::NewTerminalTab,
                     noop_msg: Msg::Noop,
-                    on_split: (!split_open).then_some(Msg::SplitRight),
+                    // ponytail: botão de dividir sai da barra a pedido; volta no menu do `+`
+                    on_split: None,
                     on_close_split: split_open.then_some(Msg::CloseSplit),
                 },
                 &dirty,
