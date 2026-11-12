@@ -805,6 +805,41 @@ pub mod scene {
     pub const STANDBY: Color = Color::from_rgb8(0xb0, 0x7a, 0x2a);
     pub const MONITOR_STAND: Color = Color::from_rgb8(0x5a, 0x60, 0x6c);
     pub const METAL: Color = Color::from_rgb8(0x7c, 0x82, 0x8e);
+
+    // ARGB do campo e das árvores de farm_world.dart e farm_world_paint.dart (usado por farm/world_paint.rs).
+    pub mod field {
+        pub const G0: u32 = 0xff4a6524;
+        pub const G1: u32 = 0xff577530;
+        pub const G2: u32 = 0xff648436;
+        pub const G3: u32 = 0xff71923c;
+        pub const G4: u32 = 0xff80a246;
+        pub const WORN: u32 = 0xff8ea456;
+        pub const GRASS_TUFT: u32 = 0xff93b552;
+        pub const T0: u32 = 0xff1c3519;
+        pub const T1: u32 = 0xff28501f;
+        pub const T2: u32 = 0xff346a27;
+        pub const T3: u32 = 0xff468a31;
+        pub const T4: u32 = 0xff63a93f;
+        pub const T5: u32 = 0xff8cc65a;
+        pub const TRUNK: u32 = 0xff4b3421;
+        pub const BARK_LIGHT: u32 = 0xff5e4330;
+        pub const BARK_DARK: u32 = 0xff35241a;
+        pub const R0: u32 = 0xff34343c;
+        pub const R1: u32 = 0xff55555e;
+        pub const R2: u32 = 0xff6f6f78;
+        pub const R3: u32 = 0xff8d8d96;
+        pub const R4: u32 = 0xffaeaeb5;
+        pub const ROCK_MOSS: u32 = 0xff5f8a34;
+        pub const ROCK_MOSS_LIGHT: u32 = 0xff86b04a;
+        pub const ROCK_SPARK: u32 = 0xff45454e;
+        // rgba(20, 32, 10, .32) e rgba(20, 32, 10, .38): alpha arredondado para 0..255.
+        pub const SHADOW32: u32 = 0x5214_200a;
+        pub const SHADOW38: u32 = 0x6114_200a;
+        pub const FLOWER_C: [u32; 6] = [
+            0xfff4f1e8, 0xfff5c542, 0xfff59cc0, 0xffb9d9ff, 0xffff8f6b, 0xffc99bf0,
+        ];
+        pub const FLOWER_CENTER: u32 = 0xfff5e27a;
+    }
 }
 
 /// Cores fixas dos agentes na cena.

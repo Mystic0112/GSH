@@ -5,8 +5,10 @@ pub mod crops;
 pub mod icons;
 pub mod office;
 mod paint;
+mod raster;
 mod sprites;
 mod world;
+mod world_paint;
 
 use crate::{labels, theme};
 use agents::Agents;
