@@ -905,7 +905,10 @@ impl Shell {
             Some(&PaneTab::Chat(id)) => self
                 .chats
                 .get(&id)
-                .map(|chat| chat.view().map(move |m| Msg::Chat(id, m)))
+                .map(|chat| {
+                    chat.view(self.settings.current.chat.transcript_width.px() as f32)
+                        .map(move |m| Msg::Chat(id, m))
+                })
                 .unwrap_or_else(pane_chrome::view_empty_body),
             Some(PaneTab::File(path)) => {
                 if let Some(editor) = self.editors.get(path) {

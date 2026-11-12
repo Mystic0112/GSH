@@ -22,6 +22,11 @@ pub fn save(path: &Path, settings: &Settings) -> Result<gsh_config::Config, Erro
             )?;
             doc.as_table_mut()
                 .insert("interfaceSize", toml_edit::value(size));
+            let chat = table(&mut doc, "chat")?;
+            chat.insert(
+                "transcriptWidth",
+                toml_edit::value(settings.transcript_width.name()),
+            );
             if let Ok(mode) = super::appearance::parse_theme(settings.theme_mode.name()) {
                 doc.as_table_mut()
                     .insert("themeMode", toml_edit::value(mode.name()));
@@ -70,6 +75,18 @@ pub fn save(path: &Path, settings: &Settings) -> Result<gsh_config::Config, Erro
             doc.as_table_mut().insert(
                 "notificationsEnabled",
                 toml_edit::value(settings.notifications),
+            );
+            let sound = table(&mut doc, "sound")?;
+            if !sound.contains_key("events") {
+                sound.insert("events", toml_edit::Item::Table(toml_edit::Table::new()));
+            }
+            let events = sound
+                .get_mut("events")
+                .and_then(toml_edit::Item::as_table_like_mut)
+                .ok_or(Error::InvalidSection)?;
+            events.insert(
+                "actionRequired",
+                toml_edit::value(settings.permission_sound),
             );
         }
         Section::General => return gsh_config::load(path).map_err(Error::Config),
@@ -125,6 +142,11 @@ mod tests {
         let config = save(&path, &s).unwrap();
         assert_eq!(config.interface_size, 18.0);
         assert_eq!(config.theme_mode, AppThemeMode::Dark);
+        s.transcript_width = gsh_config::schema::TranscriptWidth::Wide;
+        assert_eq!(
+            save(&path, &s).unwrap().chat.transcript_width,
+            gsh_config::schema::TranscriptWidth::Wide
+        );
         s.section = Section::Terminal;
         s.shell = "/bin/sh".into();
         s.scrollback = "1234".into();
@@ -143,6 +165,7 @@ mod tests {
         assert!(config.editor.word_wrap);
         s.section = Section::Notifications;
         s.notifications = false;
+        s.permission_sound = false;
         assert!(!save(&path, &s).unwrap().notifications_enabled);
         let saved = std::fs::read_to_string(&path).unwrap();
         assert!(saved.contains("future = 'keep'"));
@@ -168,6 +191,17 @@ mod tests {
         assert_eq!(reread.terminal.scrollback, 1234);
         assert_eq!(reread.editor.tab_size, 2);
         assert!(!reread.notifications_enabled);
+        assert_eq!(
+            reread.chat.transcript_width,
+            gsh_config::schema::TranscriptWidth::Wide
+        );
+        assert_eq!(
+            reread
+                .sound
+                .events
+                .get(&gsh_config::schema::SoundEvent::ActionRequired),
+            Some(&false)
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]

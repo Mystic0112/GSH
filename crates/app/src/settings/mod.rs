@@ -38,6 +38,8 @@ pub enum Message {
     HighlightChanged(bool),
     WrapChanged(bool),
     NotificationsChanged(bool),
+    PermissionSoundChanged(bool),
+    TranscriptWidthChanged(gsh_config::schema::TranscriptWidth),
     ThemeSelected(gsh_config::schema::AppThemeMode),
     SaveControls,
 }
@@ -63,6 +65,8 @@ pub struct Settings {
     pub highlight: bool,
     pub wrap: bool,
     pub notifications: bool,
+    pub permission_sound: bool,
+    pub transcript_width: gsh_config::schema::TranscriptWidth,
     pub theme_mode: gsh_config::schema::AppThemeMode,
     pub current: gsh_config::Config,
     pub interface_size: String,
@@ -85,6 +89,8 @@ impl Default for Settings {
             highlight: true,
             wrap: false,
             notifications: true,
+            permission_sound: true,
+            transcript_width: gsh_config::schema::TranscriptWidth::Medium,
             theme_mode: gsh_config::schema::AppThemeMode::System,
             current: gsh_config::Config::default(),
             interface_size: String::from("14"),
@@ -113,6 +119,13 @@ impl Settings {
                     self.highlight = config.editor.syntax_highlight;
                     self.wrap = config.editor.word_wrap;
                     self.notifications = config.notifications_enabled;
+                    self.permission_sound = config
+                        .sound
+                        .events
+                        .get(&gsh_config::schema::SoundEvent::ActionRequired)
+                        .copied()
+                        .unwrap_or(true);
+                    self.transcript_width = config.chat.transcript_width;
                     self.theme_mode = config.theme_mode;
                     theme::set_active(ThemeVariant::from_mode(config.theme_mode));
                     self.current = config.clone();
@@ -181,6 +194,16 @@ impl Settings {
             }
             Message::NotificationsChanged(v) => {
                 self.notifications = v;
+                self.saved = false;
+                self.error = None;
+            }
+            Message::PermissionSoundChanged(v) => {
+                self.permission_sound = v;
+                self.saved = false;
+                self.error = None;
+            }
+            Message::TranscriptWidthChanged(v) => {
+                self.transcript_width = v;
                 self.saved = false;
                 self.error = None;
             }

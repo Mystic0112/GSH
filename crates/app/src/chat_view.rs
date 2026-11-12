@@ -20,18 +20,18 @@ const USER_BUBBLE_MAX_WIDTH: f32 = 580.0;
 const MAX_TOOL_RESULT_LINES: usize = 14;
 
 /// Renderiza o [`ChatPane`] completo (cabeçalho + transcrição/vazio + composer).
-pub fn view(pane: &ChatPane) -> Element<'_, ChatMsg> {
+pub fn view(pane: &ChatPane, transcript_width: f32) -> Element<'_, ChatMsg> {
     let header = view_header(pane);
 
     let center: Element<'_, ChatMsg> = if pane.items().is_empty() {
         view_empty(pane)
     } else {
-        view_transcript(pane)
+        view_transcript(pane, transcript_width)
     };
 
     let composer_wrap = container(
         container(chat_composer::view(pane))
-            .max_width(TRANSCRIPT_MAX_WIDTH)
+            .max_width(transcript_width)
             .width(Fill),
     )
     .width(Fill)
@@ -176,8 +176,8 @@ fn view_empty(pane: &ChatPane) -> Element<'_, ChatMsg> {
         .into()
 }
 
-fn view_transcript(pane: &ChatPane) -> Element<'_, ChatMsg> {
-    let mut list = column![].max_width(TRANSCRIPT_MAX_WIDTH).width(Fill);
+fn view_transcript(pane: &ChatPane, transcript_width: f32) -> Element<'_, ChatMsg> {
+    let mut list = column![].max_width(transcript_width).width(Fill);
     let items = pane.items();
 
     for (idx, item) in items.iter().enumerate() {

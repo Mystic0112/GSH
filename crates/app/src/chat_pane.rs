@@ -358,8 +358,8 @@ impl ChatPane {
     }
 
     /// Renderiza o pane de chat.
-    pub fn view(&self) -> Element<'_, ChatMsg> {
-        chat_view::view(self)
+    pub fn view(&self, transcript_width: f32) -> Element<'_, ChatMsg> {
+        chat_view::view(self, transcript_width)
     }
 
     fn ensure_engine_and_send(&mut self, text: &str) -> Result<(), ChatError> {

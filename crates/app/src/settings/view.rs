@@ -1,7 +1,7 @@
 //! Interface da aba de configurações.
 use super::{Error, Message, Section, Settings};
 use crate::{labels, theme};
-use gsh_config::schema::AppThemeMode;
+use gsh_config::schema::{AppThemeMode, TranscriptWidth};
 use iced::widget::{button, checkbox, column, container, radio, row, text, text_input};
 use iced::{Alignment, Background, Border, Element, Fill, Theme};
 
@@ -11,17 +11,19 @@ fn theme_choice(
     selected: AppThemeMode,
 ) -> Element<'static, Message> {
     radio(label, mode, Some(selected), Message::ThemeSelected)
-        .style(|_, _| {
-            let p = theme::palette();
-            radio::Style {
-                background: p.panel2.into(),
-                dot_color: p.accent,
-                border_width: 1.0,
-                border_color: p.border2,
-                text_color: Some(p.text2),
-            }
-        })
+        .style(radio_style)
         .into()
+}
+
+fn radio_style(_: &Theme, _: radio::Status) -> radio::Style {
+    let p = theme::palette();
+    radio::Style {
+        background: p.panel2.into(),
+        dot_color: p.accent,
+        border_width: 1.0,
+        border_color: p.border2,
+        text_color: Some(p.text2),
+    }
 }
 
 pub fn view(s: &Settings) -> Element<'_, Message> {
@@ -119,6 +121,34 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
                     .width(240)
                     .into()
             ),
+            setting_row(
+                labels::SETTINGS_TRANSCRIPT_WIDTH,
+                row![
+                    radio(
+                        labels::SETTINGS_WIDTH_NARROW,
+                        TranscriptWidth::Narrow,
+                        Some(s.transcript_width),
+                        Message::TranscriptWidthChanged
+                    )
+                    .style(radio_style),
+                    radio(
+                        labels::SETTINGS_WIDTH_MEDIUM,
+                        TranscriptWidth::Medium,
+                        Some(s.transcript_width),
+                        Message::TranscriptWidthChanged
+                    )
+                    .style(radio_style),
+                    radio(
+                        labels::SETTINGS_WIDTH_WIDE,
+                        TranscriptWidth::Wide,
+                        Some(s.transcript_width),
+                        Message::TranscriptWidthChanged
+                    )
+                    .style(radio_style)
+                ]
+                .spacing(theme::SETTINGS_NAV_ITEM_GAP)
+                .into()
+            ),
             button(labels::SETTINGS_SAVE)
                 .on_press(Message::SaveControls)
                 .style(primary_button)
@@ -194,9 +224,16 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
                 .size(theme::SIZE_TITLE)
                 .color(theme::palette().text),
             setting_row(
-                labels::SETTINGS_AGENT_NOTIFICATIONS,
+                labels::SETTINGS_NOTIFY_TURN_DONE,
                 checkbox(s.notifications)
                     .on_toggle(Message::NotificationsChanged)
+                    .style(check_style)
+                    .into()
+            ),
+            setting_row(
+                labels::SETTINGS_NOTIFY_PERMISSION,
+                checkbox(s.permission_sound)
+                    .on_toggle(Message::PermissionSoundChanged)
                     .style(check_style)
                     .into()
             ),

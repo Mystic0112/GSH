@@ -415,6 +415,12 @@ pub const SETTINGS_INTERFACE_SIZE: &str = "Tamanho da interface";
 pub const SETTINGS_INTERFACE_SIZE_HINT: &str = "De 10 a 20";
 pub const SETTINGS_INVALID_INTERFACE_SIZE: &str = "Informe um tamanho entre 10 e 20.";
 
+pub const SETTINGS_TRANSCRIPT_WIDTH: &str = "Largura da transcrição";
+pub const SETTINGS_WIDTH_NARROW: &str = "Estreito";
+pub const SETTINGS_WIDTH_MEDIUM: &str = "Médio";
+pub const SETTINGS_WIDTH_WIDE: &str = "Largo";
+pub const SETTINGS_NOTIFY_TURN_DONE: &str = "Conclusão de respostas";
+pub const SETTINGS_NOTIFY_PERMISSION: &str = "Solicitações de permissão do Code";
 pub const SETTINGS_THEME: &str = "Tema";
 pub const SETTINGS_DARK: &str = "Escuro";
 pub const SETTINGS_LIGHT: &str = "Claro";
