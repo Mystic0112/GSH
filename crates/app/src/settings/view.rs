@@ -300,7 +300,11 @@ fn navigation(s: &Settings) -> Element<'_, Message> {
             labels::SETTINGS_GENERAL,
             Section::General,
         ),
-        ("", labels::SETTINGS_APPEARANCE, Section::Appearance),
+        (
+            labels::ICON_APPEARANCE,
+            labels::SETTINGS_APPEARANCE,
+            Section::Appearance,
+        ),
         (
             labels::ICON_TERMINAL,
             labels::SETTINGS_TERMINAL,
@@ -311,7 +315,11 @@ fn navigation(s: &Settings) -> Element<'_, Message> {
             labels::SETTINGS_EDITOR,
             Section::Editor,
         ),
-        ("", labels::SETTINGS_NOTIFICATIONS, Section::Notifications),
+        (
+            labels::ICON_NOTIFICATIONS,
+            labels::SETTINGS_NOTIFICATIONS,
+            Section::Notifications,
+        ),
     ];
     let mut items = column![].spacing(theme::SETTINGS_NAV_ITEM_SPACING);
     let mut found = false;
@@ -341,6 +349,13 @@ fn navigation(s: &Settings) -> Element<'_, Message> {
         left: f32::from(theme::SETTINGS_NAV_ITEM_HORIZONTAL),
     });
     let search = text_input(labels::SETTINGS_NAV_SEARCH, &s.nav_search)
+        .icon(text_input::Icon {
+            font: theme::FONT_ICON,
+            code_point: labels::ICON_SEARCH,
+            size: Some(iced::Pixels(theme::SETTINGS_NAV_ICON_SIZE)),
+            spacing: theme::SETTINGS_NAV_SEARCH_ICON_GAP,
+            side: text_input::Side::Left,
+        })
         .on_input(Message::SearchChanged)
         .padding([
             theme::SETTINGS_NAV_SEARCH_VERTICAL,

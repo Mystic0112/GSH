@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use iced::widget::{svg, text};
+use iced::widget::{image, svg, text};
 use iced::Element;
 
 use crate::{labels, theme};
@@ -105,7 +105,14 @@ fn resolve(name: &str, is_dir: bool, open: bool) -> Option<&'static [u8]> {
 }
 
 pub fn view<Message: 'static>(name: &str, is_dir: bool, open: bool) -> Element<'static, Message> {
-    if let Some(bytes) = resolve(name, is_dir, open) {
+    if uses_gsh_logo(name, is_dir) {
+        image(image::Handle::from_bytes(
+            &include_bytes!("../assets/branding/gsh_logo.png")[..],
+        ))
+        .width(theme::FILE_TREE_ICON_SIZE)
+        .height(theme::FILE_TREE_ICON_SIZE)
+        .into()
+    } else if let Some(bytes) = resolve(name, is_dir, open) {
         svg(svg::Handle::from_memory(bytes))
             .width(theme::FILE_TREE_ICON_SIZE)
             .height(theme::FILE_TREE_ICON_SIZE)
@@ -123,9 +130,23 @@ pub fn view<Message: 'static>(name: &str, is_dir: bool, open: bool) -> Element<'
     }
 }
 
+fn uses_gsh_logo(name: &str, is_dir: bool) -> bool {
+    let lower = name.to_lowercase();
+    lower.ends_with(".ckp") || lower == ".env.gsh" || (is_dir && lower == ".gsh")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{folder_name, resolve};
+    use super::{folder_name, resolve, uses_gsh_logo};
+
+    #[test]
+    fn gsh_logo_matches_flutter_special_cases() {
+        assert!(uses_gsh_logo("layout.CKP", false));
+        assert!(uses_gsh_logo(".env.gsh", false));
+        assert!(uses_gsh_logo(".gsh", true));
+        assert!(!uses_gsh_logo(".gsh", false));
+        assert!(!uses_gsh_logo("project.gsh", false));
+    }
 
     #[test]
     fn known_file_has_embedded_svg_and_unknown_file_uses_fallback() {
