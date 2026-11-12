@@ -39,8 +39,8 @@ pub fn view<'a, M: Clone + 'a>(
         container(
             text(labels::ICON_PLUS)
                 .font(theme::FONT_ICON)
-                .size(theme::SIZE_TOPBAR_TITLE)
-                .color(theme::palette().text2),
+                .size(theme::SIZE_ICON)
+                .color(theme::palette().text3),
         )
         .width(Fill)
         .height(Fill)
@@ -76,9 +76,9 @@ pub fn view<'a, M: Clone + 'a>(
         row![
             text(labels::ICON_LAYERS)
                 .font(theme::FONT_ICON)
-                .size(theme::SIZE_TITLE)
-                .color(theme::palette().text3),
-            Space::new().width(7.0),
+                .size(theme::SIZE_ICON)
+                .color(theme::palette().text2),
+            Space::new().width(9.0),
             text(labels::WORKSPACES_HEADER)
                 .font(theme::FONT_TITLE)
                 .size(theme::SIZE_TITLE)
@@ -96,7 +96,7 @@ pub fn view<'a, M: Clone + 'a>(
     });
 
     let selected_idx = workspaces.selected_index();
-    let mut list = column![].spacing(2.0).padding([4, 8]);
+    let mut list = column![].spacing(2.0).padding([0, 8]);
     for (idx, item) in workspaces.items().iter().enumerate() {
         let is_selected = idx == selected_idx;
         list = list.push(workspace_row(item, is_selected, on_select(idx)));
@@ -157,42 +157,31 @@ fn workspace_row<'a, M: Clone + 'a>(
     let avatar = container(
         text(item.initial())
             .font(theme::FONT_TITLE)
-            .size(theme::SIZE_LABEL)
-            .color(if selected {
-                theme::palette().accent_text
-            } else {
-                theme::palette().text2
-            }),
+            .size(theme::WORKSPACE_AVATAR_SIZE * theme::WORKSPACE_AVATAR_INITIAL_SCALE)
+            .color(theme::palette().text),
     )
-    .width(Length::Fixed(30.0))
-    .height(Length::Fixed(30.0))
-    .center_x(Length::Fixed(30.0))
-    .center_y(Length::Fixed(30.0))
+    .width(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
+    .height(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
+    .center_x(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
+    .center_y(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
     .style(move |_: &Theme| container::Style {
         background: Some(Background::Color(theme::palette().panel)),
         border: Border {
-            radius: theme::RADIUS_BUTTON.into(),
+            radius: theme::RADIUS_CARD.into(),
             ..Default::default()
         },
         ..Default::default()
     });
 
-    let mut content = row![
-        avatar,
-        container(
-            text(&item.name)
-                .font(if selected {
-                    theme::FONT_BODY_MEDIUM
-                } else {
-                    theme::FONT_BODY
-                })
-                .size(theme::SIZE_RAIL_ITEM)
-                .color(theme::palette().text2),
-        )
-        .width(Fill),
-    ]
-    .spacing(10.0)
-    .align_y(Alignment::Center);
+    let mut details = column![text(&item.name)
+        .font(if selected {
+            theme::FONT_BODY_MEDIUM
+        } else {
+            theme::FONT_BODY
+        })
+        .size(theme::SIZE_RAIL_ITEM)
+        .color(theme::palette().text),]
+    .spacing(4);
 
     if let Some(branch) = &item.git_branch {
         let branch_badge = container(
@@ -201,7 +190,12 @@ fn workspace_row<'a, M: Clone + 'a>(
                 .size(theme::SIZE_BADGE)
                 .color(theme::palette().text3),
         )
-        .padding([2, 6])
+        .padding(Padding {
+            top: 1.0,
+            right: 5.0,
+            bottom: 1.0,
+            left: 4.0,
+        })
         .style(|_: &Theme| container::Style {
             background: Some(Background::Color(theme::palette().panel3)),
             border: Border {
@@ -210,17 +204,12 @@ fn workspace_row<'a, M: Clone + 'a>(
             },
             ..Default::default()
         });
-        content = content.push(branch_badge);
+        details = details.push(branch_badge);
     }
 
-    let indicator =
-        container(Space::new().width(2).height(20)).style(move |_: &Theme| container::Style {
-            background: selected.then_some(Background::Color(theme::palette().accent)),
-            ..Default::default()
-        });
     button(
-        row![indicator, content]
-            .spacing(7)
+        row![avatar, container(details).width(Fill)]
+            .spacing(10)
             .align_y(Alignment::Center),
     )
     .width(Fill)

@@ -39,7 +39,7 @@ pub fn view<'a, M: Clone + 'a>(
         Space::new().width(12.0),
         icon_toggle_button(
             labels::ICON_SIDEBAR_LEFT,
-            props.rail_open,
+            !props.rail_open,
             actions.on_toggle_rail
         ),
         Space::new().width(8.0),
@@ -58,15 +58,13 @@ pub fn view<'a, M: Clone + 'a>(
         ]
         .spacing(4)
         .align_y(Alignment::Center),
-        Space::new().width(4),
         icon_toggle_button(labels::ICON_CHAT, false, actions.on_chat),
         icon_toggle_button(labels::ICON_FARM, false, actions.on_farm),
         icon_toggle_button(labels::ICON_DATABASE, false, actions.on_database),
         icon_toggle_button(labels::ICON_SETTINGS, false, actions.on_settings),
-        Space::new().width(4.0),
         icon_toggle_button(
             labels::ICON_SIDEBAR_RIGHT,
-            props.files_open,
+            !props.files_open,
             actions.on_toggle_files
         ),
         Space::new().width(12.0),
@@ -130,8 +128,8 @@ fn icon_toggle_button<'a, M: Clone + 'a>(
         .center_x(Fill)
         .center_y(Fill),
     )
-    .width(Length::Fixed(28.0))
-    .height(Length::Fixed(28.0))
+    .width(Length::Fixed(theme::TOPBAR_ICON_BUTTON_SIZE))
+    .height(Length::Fixed(theme::TOPBAR_ICON_BUTTON_SIZE))
     .padding(0)
     .on_press(on_press)
     .style(move |_: &Theme, status| {

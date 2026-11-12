@@ -402,6 +402,9 @@ pub const FOOTER_HEIGHT: f32 = 34.0;
 pub const RADIUS_CARD: f32 = 7.0;
 pub const RADIUS_BUTTON: f32 = 5.0;
 pub const RADIUS_BADGE: f32 = 4.0;
+pub const WORKSPACE_AVATAR_SIZE: f32 = 30.0;
+pub const WORKSPACE_AVATAR_INITIAL_SCALE: f32 = 0.43;
+pub const TOPBAR_ICON_BUTTON_SIZE: f32 = 28.0;
 
 /// Converte um [`Rgb`] do `gsh-term` em [`iced::Color`].
 pub const fn rgb_to_color(rgb: Rgb) -> Color {
