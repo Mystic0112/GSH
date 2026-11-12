@@ -1,24 +1,36 @@
 // Ported from clodfarm (github.com/matank001/clodfarm), MIT License, see third_party/clodfarm/LICENSE.
-//! Fundo da fazenda no canvas: o layout de farm_world.dart, a pintura HD em imagem
-//! e os canteiros, onde os agentes sentam. Coordenadas do canvas: o layout menos
-//! a metade do mundo, então a origem fica no centro da fazenda.
+//! Fundo do cenário no canvas: o layout de farm_world.dart, a pintura HD em imagem
+//! e os canteiros, onde os agentes sentam. Fazenda e escritório usam o mesmo layout;
+//! só a pintura muda. Coordenadas do canvas: o layout menos a metade do mundo, então
+//! a origem fica no centro.
 use super::crops::{self, CropStage};
 use super::layout::{layout_farm, Rect, Viewport};
+use super::office::sprites::{monitor, monitor_off, monitor_wait, MONITOR_HEIGHT, MONITOR_WIDTH};
+use super::office_paint::paint_office;
 use super::raster::{Raster, HD};
-use super::world::{Kind, Prop};
+use super::world::{Kind, Mode, Prop};
 use super::world_paint::paint_farm;
 use iced::widget::image::Handle;
 use iced::Size;
 
-/// Canteiros e curral pedidos ao layout: 3x3 como antes, e um curral mínimo.
+/// Canteiros (ou ilhas do escritório) pedidos ao layout: 3x3 e um curral mínimo.
 const PLOTS: i64 = 9;
 const YARD: i64 = 5;
 /// Semente do fundo: a mesma do `buildWorld` do Flutter.
 const SEED: u32 = 7;
 
+/// Telas das ilhas: apagada, em espera e os três quadros de trabalho por estágio.
+pub struct Screens {
+    off: Handle,
+    wait: Handle,
+    working: Vec<Handle>,
+}
+
 pub struct Backdrop {
     /// Janela em que o layout foi feito: quando muda, o fundo é refeito.
     pub size: Size,
+    /// Modo em que o fundo foi pintado.
+    pub mode: Mode,
     /// Zoom que mostra a fazenda inteira na janela (`layout.z`).
     pub zoom: f32,
     width: i32,
@@ -28,20 +40,30 @@ pub struct Backdrop {
     /// Canteiros: canto superior esquerdo, já no sistema do canvas.
     plots: Vec<(i32, i32)>,
     bg: Handle,
-    fg: Handle,
+    fg: Option<Handle>,
+    screens: Option<Screens>,
 }
 
 impl Backdrop {
-    pub fn build(size: Size) -> Self {
+    pub fn build(size: Size, mode: Mode) -> Self {
         let view = Viewport {
             w: f64::from(size.width),
             h: f64::from(size.height),
             ..Viewport::default()
         };
         let mut layout = layout_farm(PLOTS, YARD, &view, |z| z, None);
-        let (mut bg, fg, fg_y) = paint_farm(&mut layout, SEED);
-        // ponytail: cultivos vão no raster porque o canvas desenha imagens por cima das formas
-        paint_crops(&mut bg, &layout.plots);
+        let (bg, fg, fg_y, screens) = match mode {
+            Mode::Farm => {
+                let (mut bg, fg, fg_y) = paint_farm(&mut layout, SEED);
+                // ponytail: cultivos vão no raster porque o canvas desenha imagens por cima das formas
+                paint_crops(&mut bg, &layout.plots);
+                (bg, Some(fg), fg_y, None)
+            }
+            Mode::Office => {
+                let bg = paint_office(&mut layout, SEED);
+                (bg, None, layout.h, Some(screens()))
+            }
+        };
         let (width, height) = (layout.w as i32, layout.h as i32);
         let (ox, oy) = (width / 2, height / 2);
         let plots = layout
@@ -51,13 +73,15 @@ impl Backdrop {
             .collect();
         Self {
             size,
+            mode,
             zoom: layout.z as f32,
             width,
             height,
             fg_y: fg_y as i32,
             plots,
             bg: Handle::from_rgba(bg.w as u32, bg.h as u32, bg.to_rgba()),
-            fg: Handle::from_rgba(fg.w as u32, fg.h as u32, fg.to_rgba()),
+            fg: fg.map(|fg| Handle::from_rgba(fg.w as u32, fg.h as u32, fg.to_rgba())),
+            screens,
         }
     }
 
@@ -80,11 +104,11 @@ impl Backdrop {
         self.bg.clone()
     }
 
-    pub fn fg(&self) -> Handle {
+    pub fn fg(&self) -> Option<Handle> {
         self.fg.clone()
     }
 
-    /// Os canteiros como props de cultivo, na ordem do layout.
+    /// Canteiros (ou ilhas) como props de cultivo, na ordem do layout.
     pub fn posts(&self) -> Vec<Prop> {
         self.plots
             .iter()
@@ -96,6 +120,32 @@ impl Backdrop {
             })
             .collect()
     }
+
+    /// Canto do canteiro `i` no canvas, em unidades de mundo.
+    pub fn plot_origin(&self, i: usize) -> Option<(f32, f32)> {
+        self.plots.get(i).map(|&(x, y)| (x as f32, y as f32))
+    }
+
+    /// Imagem da tela da ilha `i` no quadro `frame`, conforme o estado do dono.
+    pub fn screen(&self, i: usize, frame: usize, state: ScreenState) -> Option<Handle> {
+        let screens = self.screens.as_ref()?;
+        Some(match state {
+            ScreenState::Off => screens.off.clone(),
+            ScreenState::Waiting => screens.wait.clone(),
+            ScreenState::Working => screens
+                .working
+                .get(stage(i) as usize * 3 + frame % 3)?
+                .clone(),
+        })
+    }
+}
+
+/// Como a tela da ilha aparece: o estado do agente que senta ali.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ScreenState {
+    Off,
+    Waiting,
+    Working,
 }
 
 fn stage(i: usize) -> CropStage {
@@ -103,6 +153,30 @@ fn stage(i: usize) -> CropStage {
         0 => CropStage::Seed,
         1 => CropStage::Sprout,
         _ => CropStage::Grow,
+    }
+}
+
+fn handle(pixels: &[u8]) -> Handle {
+    Handle::from_rgba(MONITOR_WIDTH as u32, MONITOR_HEIGHT as u32, pixels.to_vec())
+}
+
+/// Todas as telas pré-rasterizadas: não se recria imagem a cada quadro.
+fn screens() -> Screens {
+    let stages = [
+        CropStage::Seed,
+        CropStage::Sprout,
+        CropStage::Grow,
+        CropStage::Ripe,
+        CropStage::Wilt,
+    ];
+    let working = stages
+        .iter()
+        .flat_map(|&s| (0..3).map(move |f| handle(&monitor(s, f))))
+        .collect();
+    Screens {
+        off: handle(&monitor_off()),
+        wait: handle(&monitor_wait(0)),
+        working,
     }
 }
 

@@ -69,6 +69,28 @@ pub fn monitor(stage: CropStage, frame: usize) -> [u8; MONITOR_WIDTH * MONITOR_H
     p.0
 }
 
+/// Tela apagada (dono parado, dormindo ou canteiro vago): reflexo e led âmbar de standby.
+/// `monitorOff` de office_sprites.dart.
+pub fn monitor_off() -> [u8; MONITOR_WIDTH * MONITOR_HEIGHT * 4] {
+    let mut p = bezel();
+    p.rect(1, 1, 12, 6, 0xff1b_1f28);
+    p.rect(9, 2, 1, 1, 0xff32_3846);
+    p.rect(10, 2, 1, 1, 0xff32_3846);
+    p.rect(11, 3, 1, 1, 0xff32_3846);
+    p.rect(12, 7, 1, 1, 0xffb0_7a2a);
+    p.0
+}
+
+/// Tela piscando amarela com o "!" (`monitorWait`): `frame` 0 ou 1.
+pub fn monitor_wait(frame: usize) -> [u8; MONITOR_WIDTH * MONITOR_HEIGHT * 4] {
+    let mut p = bezel();
+    let on = frame.is_multiple_of(2);
+    p.rect(1, 1, 12, 6, if on { 0xffff_d75e } else { 0xff6b_5418 });
+    p.rect(6, 2, 2, 2, if on { 0xff3a_2616 } else { 0xffff_d75e });
+    p.rect(6, 5, 2, 1, if on { 0xff3a_2616 } else { 0xffff_d75e });
+    p.0
+}
+
 /// `frame` deve ser 0, 1 ou 2, como no Dart.
 pub fn printer(frame: usize) -> [u8; PRINTER_WIDTH * PRINTER_HEIGHT * 4] {
     let frame = frame % 3;

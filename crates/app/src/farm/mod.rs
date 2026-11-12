@@ -7,9 +7,9 @@ mod dart_sort;
 pub mod icons;
 mod layout;
 pub mod office;
+mod office_paint;
 mod paint;
 mod raster;
-mod sprites;
 mod world;
 mod world_paint;
 mod world_props;
@@ -17,7 +17,7 @@ mod world_props;
 use crate::{labels, theme};
 use agents::Agents;
 pub use agents::{AgentInput, AgentState};
-use backdrop::Backdrop;
+use backdrop::{Backdrop, ScreenState};
 use camera::Camera;
 use iced::widget::{
     button,
@@ -78,7 +78,8 @@ impl FarmPane {
             Message::Focus(_) => {}
             Message::Office => {
                 self.mode = Mode::Office;
-                self.camera = Camera::default();
+                self.refit_backdrop();
+                self.camera = self.fit_camera();
             }
             Message::Farm => {
                 self.mode = Mode::Farm;
@@ -104,8 +105,13 @@ impl FarmPane {
         let Some(size) = self.view_size else {
             return;
         };
-        if self.backdrop.as_ref().is_none_or(|b| b.size != size) {
-            self.backdrop = Some(Backdrop::build(size));
+        let mode = self.mode;
+        if self
+            .backdrop
+            .as_ref()
+            .is_none_or(|b| b.size != size || b.mode != mode)
+        {
+            self.backdrop = Some(Backdrop::build(size, mode));
         }
     }
     /// Câmera da fazenda: o zoom que mostra o layout inteiro; sem fundo, a padrão.
@@ -117,16 +123,30 @@ impl FarmPane {
                 offset: Vector::ZERO,
             })
     }
-    /// Postos dos agentes: canteiros na fazenda, mesas no escritório.
+    /// Postos dos agentes: canteiros na fazenda, ilhas no escritório (mesmo layout).
     fn posts(&self) -> Vec<Prop> {
-        match (self.mode, &self.backdrop) {
-            (Mode::Farm, Some(backdrop)) => backdrop.posts(),
-            (Mode::Farm, None) => Vec::new(),
-            (Mode::Office, _) => world::office_props()
-                .into_iter()
-                .filter(|p| p.kind == world::Kind::Desk)
-                .collect(),
-        }
+        self.backdrop
+            .as_ref()
+            .map_or_else(Vec::new, Backdrop::posts)
+    }
+    /// Estado da tela de cada ilha: o agente que senta nela (slot = índice da ilha).
+    fn screen_states(&self) -> Vec<ScreenState> {
+        let count = self.posts().len();
+        (0..count)
+            .map(|i| {
+                match self
+                    .agents
+                    .items
+                    .iter()
+                    .find(|a| a.slot == i)
+                    .map(|a| a.input.state)
+                {
+                    Some(AgentState::Working) => ScreenState::Working,
+                    Some(AgentState::Waiting) => ScreenState::Waiting,
+                    _ => ScreenState::Off,
+                }
+            })
+            .collect()
     }
     pub fn view(&self) -> Element<'_, Message> {
         let control = |label, msg, active| {
@@ -282,16 +302,28 @@ impl canvas::Program<Message> for Program<'_> {
         let posts = self.0.posts();
         // o canvas desenha as imagens por cima das formas de um mesmo geometry: cada camada vai no seu
         let base = self.0.cache.draw(renderer, size, |frame| {
-            match (self.0.mode, &self.0.backdrop) {
-                (Mode::Farm, Some(backdrop)) => paint::draw_backdrop(frame, size, camera, backdrop),
-                (Mode::Farm, None) => {}
-                (Mode::Office, _) => paint::draw_office(frame, size, camera),
+            if let Some(backdrop) = &self.0.backdrop {
+                paint::draw_backdrop(frame, size, camera, backdrop);
             }
         });
+        let mut layers = vec![base];
+        // telas acesas no escritório: entre o fundo e os agentes
+        if let Some(backdrop) = self.0.backdrop.as_ref().filter(|b| b.mode == Mode::Office) {
+            let mut screens = canvas::Frame::new(renderer, size);
+            paint::draw_screens(
+                &mut screens,
+                size,
+                camera,
+                backdrop,
+                &self.0.screen_states(),
+            );
+            layers.push(screens.into_geometry());
+        }
         let mut agents = canvas::Frame::new(renderer, size);
         characters::draw(&mut agents, &self.0.agents.items, &posts, camera, size);
-        let mut layers = vec![base, agents.into_geometry()];
-        if let (Mode::Farm, Some(backdrop)) = (self.0.mode, &self.0.backdrop) {
+        layers.push(agents.into_geometry());
+        // a faixa da frente da fazenda passa por cima dos bichos
+        if let Some(backdrop) = self.0.backdrop.as_ref().filter(|b| b.mode == Mode::Farm) {
             let mut front = canvas::Frame::new(renderer, size);
             paint::draw_front(&mut front, size, camera, backdrop);
             layers.push(front.into_geometry());

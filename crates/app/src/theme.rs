@@ -854,6 +854,40 @@ pub mod scene {
         // rgba(90, 70, 30, .3): o cercado do curral (_yard).
         pub const YARD_SHADE: u32 = 0x4d5a_461e;
     }
+
+    // Paleta do escritório: office_world_paint.dart (_fl*, _cp*, _wl*, _wd*, _walk*, _asph*).
+    pub mod office_world {
+        pub const FL0: u32 = 0xffebe4d6;
+        pub const FL1: u32 = 0xffe5ddcd;
+        pub const FL_LINE: u32 = 0xffd8cfbd;
+        pub const CP0: u32 = 0xffd5dae0;
+        pub const CP1: u32 = 0xffcbd1d9;
+        pub const CP2: u32 = 0xffdfe3e8;
+        pub const RUG0: u32 = 0xffbfc9d4;
+        pub const RUG_EDGE: u32 = 0xffa9b5c3;
+        pub const WL0: u32 = 0xff3a404c;
+        pub const WL1: u32 = 0xff5d6575;
+        pub const FACE: u32 = 0xffd3cbba;
+        pub const FACE2: u32 = 0xffc6bda9;
+        pub const BASE: u32 = 0xffa99f89;
+        pub const WD0: u32 = 0xffc99c66;
+        pub const WD1: u32 = 0xffb88a55;
+        pub const WD2: u32 = 0xffa47646;
+        pub const WD_EDGE: u32 = 0xff6e4a2a;
+        pub const WALK0: u32 = 0xffc9cbcf;
+        pub const WALK1: u32 = 0xffbcbfc4;
+        pub const ASPH0: u32 = 0xff4a4d55;
+        pub const ASPH1: u32 = 0xff53565e;
+        pub const ASPH2: u32 = 0xff42454c;
+        // rgba(255, 220, 140, .18): o halo da luminária.
+        pub const LAMP_GLOW: u32 = 0x2eff_dc8c;
+        pub const BOOKS: [u32; 7] = [
+            0xffd94b3c, 0xff4f86d9, 0xfff2b43a, 0xff6fbf5a, 0xff8a63c9, 0xffe57fb0, 0xff3fa7a0,
+        ];
+        pub const POUF: [u32; 6] = [
+            0xffe0533f, 0xfff2b43a, 0xff6fbf5a, 0xff4f86d9, 0xffe57fb0, 0xff3fa7a0,
+        ];
+    }
 }
 
 /// Cores fixas dos agentes na cena.

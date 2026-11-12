@@ -283,12 +283,12 @@ pub fn rock(g: &mut Raster, left: f64, top: f64, width: f64, height: f64) {
     }
 }
 
-fn dist(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+pub(super) fn dist(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
     ((ax - bx) * (ax - bx) + (ay - by) * (ay - by)).sqrt()
 }
 
 /// `clear` de `_farmProps`: terra livre para pedra ou flor, com `pad` de folga.
-fn clear(l: &Layout, x: f64, y: f64, pad: f64) -> bool {
+pub(super) fn clear(l: &Layout, x: f64, y: f64, pad: f64) -> bool {
     let c = l.content;
     !l.blocked(x, y)
         && !l.on_path(x, y, pad)

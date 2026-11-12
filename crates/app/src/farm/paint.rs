@@ -1,106 +1,11 @@
 // Ported from clodfarm (github.com/matank001/clodfarm), MIT License, see third_party/clodfarm/LICENSE.
 use super::{
-    backdrop::Backdrop,
+    backdrop::{Backdrop, ScreenState},
     camera::Camera,
-    sprites,
-    world::{self, Kind},
 };
-use crate::theme::scene as c;
 use iced::advanced::image::{FilterMethod, Image};
-use iced::widget::canvas::{self, Path};
-use iced::{Color, Point, Rectangle, Size};
-
-#[allow(clippy::too_many_arguments)]
-fn rect(
-    frame: &mut canvas::Frame,
-    camera: Camera,
-    view: Size,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    color: Color,
-) {
-    let p = camera.to_screen(Point::new(x, y), view);
-    frame.fill(
-        &Path::rectangle(p, Size::new(w * camera.zoom, h * camera.zoom)),
-        color,
-    );
-}
-fn sprite(frame: &mut canvas::Frame, cam: Camera, view: Size, x: f32, y: f32, pixels: &[&str]) {
-    for (dy, row) in pixels.iter().enumerate() {
-        for (dx, ch) in row.chars().enumerate() {
-            let color = match ch {
-                'b' => c::MONITOR,
-                's' => c::SCREEN,
-                'r' => c::REFLECTION,
-                'a' => c::STANDBY,
-                'm' => c::MONITOR_STAND,
-                'n' => c::METAL,
-                'g' => c::LEAF_DARK,
-                'l' => c::LEAF,
-                'h' => c::LEAF_LIGHT,
-                'd' => c::SOIL_DARK,
-                'o' | 'f' => c::CROP,
-                't' => c::CROP_LIGHT,
-                _ => continue,
-            };
-            rect(
-                frame,
-                cam,
-                view,
-                x + dx as f32,
-                y + dy as f32,
-                1.0,
-                1.0,
-                color,
-            );
-        }
-    }
-}
-
-/// Desenha o cenário do escritório: piso, mesas, parede e plantas.
-pub fn draw_office(frame: &mut canvas::Frame, view: Size, camera: Camera) {
-    frame.fill_rectangle(Point::ORIGIN, view, c::FLOOR);
-    for prop in world::office_props() {
-        let (x, y) = (prop.x as f32, prop.y as f32);
-        match prop.kind {
-            Kind::Plot(_) => {}
-            Kind::Desk => {
-                rect(frame, camera, view, x - 8.0, y - 7.0, 48.0, 34.0, c::CARPET);
-                rect(frame, camera, view, x, y, 32.0, 16.0, c::WALL);
-                rect(frame, camera, view, x + 1.0, y + 1.0, 30.0, 14.0, c::DESK);
-                for dx in [2.0, 17.0] {
-                    sprite(frame, camera, view, x + dx, y + 2.0, sprites::MONITOR);
-                }
-                for dx in [4.0, 22.0] {
-                    for dy in [-5.0, 19.0] {
-                        rect(frame, camera, view, x + dx, y + dy, 7.0, 5.0, c::CHAIR);
-                    }
-                }
-            }
-            Kind::Plant => {
-                rect(frame, camera, view, x, y, 8.0, 7.0, c::WOOD);
-                rect(
-                    frame,
-                    camera,
-                    view,
-                    x - 3.0,
-                    y - 9.0,
-                    14.0,
-                    10.0,
-                    c::LEAF_DARK,
-                );
-                rect(frame, camera, view, x, y - 12.0, 8.0, 8.0, c::LEAF);
-            }
-            Kind::Wall => {
-                rect(frame, camera, view, x, y, 330.0, 4.0, c::WALL);
-                rect(frame, camera, view, x, y, 4.0, 200.0, c::WALL);
-                rect(frame, camera, view, x + 326.0, y, 4.0, 200.0, c::WALL);
-            }
-        }
-    }
-}
+use iced::widget::canvas;
+use iced::{Point, Rectangle, Size};
 
 /// Imagem em coordenadas de mundo, com o zoom da câmera e pixel nítido (sem suavizar).
 fn image(
@@ -123,12 +28,41 @@ fn image(
     );
 }
 
-/// Fundo da fazenda: a pintura HD inteira, com os cultivos já compostos nela.
+/// Fundo do cenário: a pintura HD inteira, com os cultivos já compostos nela.
 pub fn draw_backdrop(frame: &mut canvas::Frame, view: Size, camera: Camera, backdrop: &Backdrop) {
     image(frame, view, camera, backdrop.bg_rect(), backdrop.bg());
 }
 
-/// Faixa da frente: as árvores que passam por cima dos bichos.
+/// Faixa da frente da fazenda: as árvores que passam por cima dos bichos.
 pub fn draw_front(frame: &mut canvas::Frame, view: Size, camera: Camera, backdrop: &Backdrop) {
-    image(frame, view, camera, backdrop.fg_rect(), backdrop.fg());
+    if let Some(fg) = backdrop.fg() {
+        image(frame, view, camera, backdrop.fg_rect(), fg);
+    }
+}
+
+/// Telas das ilhas do escritório: seis por ilha, 7 x 5 de mundo cada (`_island`).
+/// `states[i]` é o estado do dono da ilha `i`; a tela acende só com ele trabalhando.
+pub fn draw_screens(
+    frame: &mut canvas::Frame,
+    view: Size,
+    camera: Camera,
+    backdrop: &Backdrop,
+    states: &[ScreenState],
+) {
+    for i in 0..states.len() {
+        let Some((px, py)) = backdrop.plot_origin(i) else {
+            continue;
+        };
+        let state = states.get(i).copied().unwrap_or(ScreenState::Off);
+        for row in 0..2 {
+            for k in 0..3 {
+                let Some(handle) = backdrop.screen(i, k + row * 2, state) else {
+                    continue;
+                };
+                let x = px + 1.5 + k as f32 * 10.0;
+                let y = py - 1.5 + row as f32 * 8.0;
+                image(frame, view, camera, (x, y, 7.0, 5.0), handle);
+            }
+        }
+    }
 }
