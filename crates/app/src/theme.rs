@@ -781,6 +781,11 @@ pub mod scene {
     pub const GRASS_DARK: Color = Color::from_rgb8(0x57, 0x75, 0x30);
     pub const SOIL: Color = Color::from_rgb8(0x6b, 0x4a, 0x2e);
     pub const SOIL_DARK: Color = Color::from_rgb8(0x3f, 0x29, 0x15);
+    pub const SOIL2: Color = Color::from_rgb8(0x57, 0x39, 0x1f);
+    pub const SOIL3: Color = Color::from_rgb8(0x7d, 0x5a, 0x3a);
+    pub const PLOT_EDGE: Color = Color::from_rgb8(0x4f, 0x34, 0x20);
+    pub const PLOT_RIDGE: Color = Color::from_rgb8(0x8e, 0x6a, 0x46);
+    pub const PLOT_FLECK: Color = Color::from_rgb8(0x9a, 0x76, 0x50);
     pub const FLOOR: Color = Color::from_rgb8(0xe5, 0xdd, 0xcd);
     pub const CARPET: Color = Color::from_rgb8(0xbf, 0xc9, 0xd4);
     pub const WALL: Color = Color::from_rgb8(0x3a, 0x40, 0x4c);

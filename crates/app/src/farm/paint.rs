@@ -1,3 +1,4 @@
+// Ported from clodfarm (github.com/matank001/clodfarm), MIT License, see third_party/clodfarm/LICENSE.
 use super::{
     camera::Camera,
     crops, sprites,
@@ -55,6 +56,37 @@ fn sprite(frame: &mut canvas::Frame, cam: Camera, view: Size, x: f32, y: f32, pi
         }
     }
 }
+
+/// Retângulos do canteiro em pixels HD, conforme `_plot` em farm_world_props.dart.
+fn plot_pixels() -> Vec<(f32, f32, f32, f32, Color)> {
+    let mut pixels = vec![
+        (-2.0, 0.0, 64.0, 34.0, c::SOIL_DARK),
+        (0.0, -2.0, 60.0, 38.0, c::SOIL_DARK),
+        (0.0, 0.0, 60.0, 34.0, c::PLOT_EDGE),
+        (0.0, 0.0, 60.0, 32.0, c::SOIL),
+    ];
+    for y in (3..31).step_by(6) {
+        pixels.extend([
+            (2.0, y as f32, 56.0, 2.0, c::SOIL3),
+            (2.0, (y + 2) as f32, 56.0, 2.0, c::SOIL2),
+            (3.0, y as f32, 52.0, 1.0, c::PLOT_RIDGE),
+        ]);
+    }
+    for i in 0..10 {
+        pixels.push((
+            (3 + (i * 17) % 54) as f32,
+            (2 + (i * 11) % 28) as f32,
+            1.0,
+            1.0,
+            if i % 2 == 1 {
+                c::SOIL_DARK
+            } else {
+                c::PLOT_FLECK
+            },
+        ));
+    }
+    pixels
+}
 pub fn draw(frame: &mut canvas::Frame, view: Size, camera: Camera, mode: Mode) {
     frame.fill_rectangle(
         Point::ORIGIN,
@@ -87,8 +119,18 @@ pub fn draw(frame: &mut canvas::Frame, view: Size, camera: Camera, mode: Mode) {
         let (x, y) = (prop.x as f32, prop.y as f32);
         match prop.kind {
             Kind::Plot(stage) => {
-                rect(frame, camera, view, x, y, 30.0, 16.0, c::SOIL_DARK);
-                rect(frame, camera, view, x + 2.0, y + 2.0, 26.0, 12.0, c::SOIL);
+                for (dx, dy, w, h, color) in plot_pixels() {
+                    rect(
+                        frame,
+                        camera,
+                        view,
+                        x + dx / 2.0,
+                        y + dy / 2.0,
+                        w / 2.0,
+                        h / 2.0,
+                        color,
+                    );
+                }
                 let pixels = crops::rgba(stage, 0);
                 for row in 0..2 {
                     for k in 0..3 {
@@ -154,5 +196,18 @@ pub fn draw(frame: &mut canvas::Frame, view: Size, camera: Camera, mode: Mode) {
                 rect(frame, camera, view, x + 3.0, y + 2.0, 42.0, 16.0, c::WATER);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plot_background_matches_hd_geometry() {
+        let pixels = plot_pixels();
+        assert_eq!(pixels.len(), 29);
+        assert_eq!(pixels.first(), Some(&(-2.0, 0.0, 64.0, 34.0, c::SOIL_DARK)));
+        assert_eq!(pixels.last(), Some(&(48.0, 17.0, 1.0, 1.0, c::SOIL_DARK)));
     }
 }
