@@ -397,6 +397,7 @@ pub fn farm_need_you(count: usize) -> String {
 }
 // Configurações
 pub const SETTINGS_TITLE: &str = "Configurações";
+pub const SETTINGS_GSH_DESKTOP: &str = "GSH Desktop";
 pub const SETTINGS_GENERAL: &str = "Geral";
 pub const SETTINGS_APPEARANCE: &str = "Aparência";
 pub const SETTINGS_TERMINAL: &str = "Terminal";

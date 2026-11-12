@@ -364,6 +364,30 @@ pub const FONT_TITLE_BOLD: Font = Font {
 };
 
 // Escala tipográfica (`app_typography.dart`)
+// Medidas de SettingsNav, SettingsPanelBody e _SettingsHeader no Flutter.
+pub const SETTINGS_NAV_WIDTH: f32 = 220.0;
+pub const SETTINGS_NAV_PADDING: u16 = 12;
+pub const SETTINGS_NAV_ITEM_HORIZONTAL: u16 = 9;
+pub const SETTINGS_NAV_ITEM_VERTICAL: u16 = 7;
+pub const SETTINGS_NAV_ITEM_GAP: f32 = 12.0;
+pub const SETTINGS_NAV_ITEM_SPACING: f32 = 1.0;
+pub const SETTINGS_NAV_ICON_SIZE: f32 = 17.0;
+pub const SETTINGS_NAV_TEXT_SIZE: f32 = 14.0;
+pub const SETTINGS_NAV_RADIUS: f32 = 7.0;
+pub const SETTINGS_PANEL_HORIZONTAL: u16 = 28;
+pub const SETTINGS_PANEL_TOP: u16 = 26;
+pub const SETTINGS_PANEL_BOTTOM: u16 = 48;
+pub const SETTINGS_PANEL_MAX_WIDTH: f32 = 1010.0;
+pub const SETTINGS_SECTION_TITLE_SIZE: f32 = 15.0;
+pub const SETTINGS_SECTION_TITLE_GAP: f32 = 14.0;
+pub const SETTINGS_SECTION_GAP: f32 = 36.0;
+pub const SETTINGS_ROW_VERTICAL: u16 = 12;
+pub const SETTINGS_ROW_GAP: f32 = 40.0;
+pub const SETTINGS_HEADER_BUTTON: f32 = 30.0;
+pub const SETTINGS_HEADER_ICON: f32 = 18.0;
+pub const SETTINGS_HEADER_RADIUS: f32 = 6.0;
+pub const SETTINGS_HEADER_GAP: f32 = 8.0;
+
 pub const SIZE_DISPLAY: f32 = 22.0;
 pub const SIZE_TOPBAR_TITLE: f32 = 14.0;
 pub const SIZE_ICON: f32 = 16.0;

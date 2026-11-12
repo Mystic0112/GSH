@@ -62,13 +62,28 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
             s.section
         ),
     ]
-    .spacing(4)
-    .width(200);
+    .spacing(theme::SETTINGS_NAV_ITEM_SPACING)
+    .padding([theme::SETTINGS_NAV_PADDING, theme::SETTINGS_NAV_PADDING])
+    .width(theme::SETTINGS_NAV_WIDTH);
     let mut content = match s.section {
         Section::General => column![
-            text(labels::SETTINGS_GENERAL)
-                .font(theme::FONT_TITLE)
-                .size(theme::SIZE_TITLE)
+            text(labels::SETTINGS_APPEARANCE)
+                .font(theme::FONT_BODY_SEMIBOLD)
+                .size(theme::SETTINGS_SECTION_TITLE_SIZE)
+                .color(theme::palette().text),
+            setting_row(
+                labels::SETTINGS_THEME,
+                row![
+                    theme_choice(labels::SETTINGS_DARK, AppThemeMode::Dark, selected),
+                    theme_choice(labels::SETTINGS_LIGHT, AppThemeMode::Light, selected)
+                ]
+                .spacing(theme::SETTINGS_NAV_ITEM_GAP)
+                .into()
+            ),
+            iced::widget::Space::new().height(theme::SETTINGS_SECTION_GAP),
+            text(labels::SETTINGS_GSH_DESKTOP)
+                .font(theme::FONT_BODY_SEMIBOLD)
+                .size(theme::SETTINGS_SECTION_TITLE_SIZE)
                 .color(theme::palette().text),
             setting_row(
                 labels::SETTINGS_LOCALE,
@@ -191,7 +206,7 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
                 .style(primary_button)
         ],
     }
-    .spacing(16)
+    .spacing(theme::SETTINGS_SECTION_TITLE_GAP)
     .width(Fill);
     if let Some(error) = &s.error {
         let message = match error {
@@ -210,24 +225,56 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
     } else if s.saved {
         content = content.push(text(labels::SETTINGS_SAVED));
     }
-    let body = row![navigation, iced::widget::scrollable(content).height(Fill)].spacing(32);
-    container(
-        column![
-            row![
-                crate::panel_widgets::ghost(labels::ICON_BACK, Some(Message::Back), false),
-                text(labels::SETTINGS_TITLE)
-                    .font(theme::FONT_TITLE)
-                    .size(theme::SIZE_TOPBAR_TITLE)
-                    .color(theme::palette().text)
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-            crate::panel_widgets::hairline_h(),
-            body
+    let panel = container(content)
+        .max_width(theme::SETTINGS_PANEL_MAX_WIDTH)
+        .width(Fill);
+    let panel = container(panel)
+        .width(Fill)
+        .center_x(Fill)
+        .padding(iced::Padding {
+            top: f32::from(theme::SETTINGS_PANEL_TOP),
+            right: f32::from(theme::SETTINGS_PANEL_HORIZONTAL),
+            bottom: f32::from(theme::SETTINGS_PANEL_BOTTOM),
+            left: f32::from(theme::SETTINGS_PANEL_HORIZONTAL),
+        });
+    let nav_border =
+        container(iced::widget::Space::new().width(1).height(Fill)).style(|_| container::Style {
+            background: Some(theme::palette().border.into()),
+            ..Default::default()
+        });
+    let body = row![
+        navigation,
+        nav_border,
+        iced::widget::scrollable(panel).height(Fill)
+    ]
+    .height(Fill);
+    container(column![
+        row![
+            button(
+                container(
+                    text(labels::ICON_BACK)
+                        .font(theme::FONT_ICON)
+                        .size(theme::SETTINGS_HEADER_ICON),
+                )
+                .center_x(Fill)
+                .center_y(Fill)
+            )
+            .width(theme::SETTINGS_HEADER_BUTTON)
+            .height(theme::SETTINGS_HEADER_BUTTON)
+            .padding(0)
+            .on_press(Message::Back)
+            .style(header_button),
+            text(labels::SETTINGS_TITLE)
+                .font(theme::FONT_TITLE)
+                .size(theme::SIZE_TOPBAR_TITLE)
+                .color(theme::palette().text)
         ]
-        .spacing(16),
-    )
-    .padding(24)
+        .spacing(theme::SETTINGS_HEADER_GAP)
+        .padding([0, theme::SETTINGS_NAV_PADDING])
+        .align_y(Alignment::Center),
+        crate::panel_widgets::hairline_h(),
+        body
+    ])
     .width(Fill)
     .height(Fill)
     .into()
@@ -244,35 +291,60 @@ fn nav_item(
         row![
             text(icon)
                 .font(theme::FONT_ICON)
-                .size(theme::SIZE_TOPBAR_TITLE),
-            text(label).font(theme::FONT_BODY).size(theme::SIZE_LABEL)
+                .size(theme::SETTINGS_NAV_ICON_SIZE),
+            text(label)
+                .font(if selected {
+                    theme::FONT_BODY_SEMIBOLD
+                } else {
+                    theme::FONT_BODY
+                })
+                .size(theme::SETTINGS_NAV_TEXT_SIZE)
         ]
-        .spacing(10)
+        .spacing(theme::SETTINGS_NAV_ITEM_GAP)
         .align_y(Alignment::Center),
     )
     .width(Fill)
-    .padding([10, 12])
+    .padding([
+        theme::SETTINGS_NAV_ITEM_VERTICAL,
+        theme::SETTINGS_NAV_ITEM_HORIZONTAL,
+    ])
     .on_press(Message::Select(section))
     .style(move |_, status| button::Style {
-        background: if selected {
-            Some(Background::Color(theme::palette().accent_soft))
-        } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+        background: if selected
+            || matches!(status, button::Status::Hovered | button::Status::Pressed)
+        {
             Some(Background::Color(theme::palette().panel3))
         } else {
             None
         },
         text_color: if selected {
-            theme::palette().accent_text
+            theme::palette().text
         } else {
             theme::palette().text2
         },
         border: Border {
-            radius: theme::RADIUS_BUTTON.into(),
+            radius: theme::SETTINGS_NAV_RADIUS.into(),
             ..Default::default()
         },
         ..Default::default()
     })
     .into()
+}
+
+fn header_button(_: &Theme, status: button::Status) -> button::Style {
+    button::Style {
+        background: if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+            Some(theme::palette().panel3.into())
+        } else {
+            None
+        },
+        text_color: theme::palette().text2,
+        border: Border {
+            radius: theme::SETTINGS_HEADER_RADIUS.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
 }
 
 fn primary_button(_: &Theme, status: button::Status) -> button::Style {
@@ -329,13 +401,14 @@ fn setting_row<'a>(label: &'static str, control: Element<'a, Message>) -> Elemen
         row![
             text(label)
                 .font(theme::FONT_BODY)
-                .size(theme::SIZE_RAIL_ITEM)
+                .size(theme::SETTINGS_NAV_TEXT_SIZE)
                 .color(theme::palette().text)
                 .width(Fill),
+            iced::widget::Space::new().width(theme::SETTINGS_ROW_GAP),
             control
         ]
         .align_y(Alignment::Center)
-        .padding([12, 0]),
+        .padding([theme::SETTINGS_ROW_VERTICAL, 0]),
         crate::panel_widgets::hairline_h()
     ]
     .into()
