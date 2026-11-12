@@ -16,12 +16,16 @@ pub fn save(path: &Path, input: &str) -> Result<f64, Error> {
     Ok(size)
 }
 
-/// Aceita só `dark` ou `light`; `system`, vazio e qualquer outro valor são inválidos.
+/// Aceita os modos de tema oferecidos pela interface.
 pub fn parse_theme(input: &str) -> Result<AppThemeMode, Error> {
-    [AppThemeMode::Dark, AppThemeMode::Light]
-        .into_iter()
-        .find(|mode| mode.name() == input)
-        .ok_or(Error::InvalidTheme)
+    [
+        AppThemeMode::System,
+        AppThemeMode::Light,
+        AppThemeMode::Dark,
+    ]
+    .into_iter()
+    .find(|mode| mode.name() == input)
+    .ok_or(Error::InvalidTheme)
 }
 
 /// Valida e grava `themeMode`, preservando o resto do arquivo.
@@ -89,7 +93,7 @@ mod tests {
         let saved = std::fs::read_to_string(&path).unwrap();
         assert!(saved.contains("futureKey = 'keep'"));
         assert!(saved.contains("nested = 42"));
-        for value in ["neon", "system", "", "LIGHT", "3"] {
+        for value in ["neon", "", "LIGHT", "3"] {
             assert!(matches!(save_theme(&path, value), Err(Error::InvalidTheme)));
             assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
         }

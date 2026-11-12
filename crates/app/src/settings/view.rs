@@ -2,36 +2,132 @@
 use super::{Error, Message, Section, Settings};
 use crate::{labels, theme};
 use gsh_config::schema::{AppThemeMode, TranscriptWidth};
-use iced::widget::{button, checkbox, column, container, radio, row, text, text_input};
+use iced::widget::{button, column, container, pick_list, row, text, text_input};
 use iced::{Alignment, Background, Border, Element, Fill, Theme};
 
-fn theme_choice(
-    label: &'static str,
-    mode: AppThemeMode,
-    selected: AppThemeMode,
-) -> Element<'static, Message> {
-    radio(label, mode, Some(selected), Message::ThemeSelected)
-        .style(radio_style)
+fn choice(label: &'static str, selected: bool, message: Message) -> Element<'static, Message> {
+    button(
+        text(label)
+            .font(if selected {
+                theme::FONT_BODY_MEDIUM
+            } else {
+                theme::FONT_BODY
+            })
+            .size(theme::SETTINGS_SEGMENT_TEXT),
+    )
+    .padding([
+        theme::SETTINGS_SEGMENT_VERTICAL,
+        theme::SETTINGS_SEGMENT_HORIZONTAL,
+    ])
+    .on_press(message)
+    .style(move |_, status| {
+        let p = theme::palette();
+        button::Style {
+            background: if selected {
+                Some(p.panel3.into())
+            } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                Some(p.panel.into())
+            } else {
+                None
+            },
+            text_color: if selected { p.text } else { p.text2 },
+            border: Border {
+                color: p.border2,
+                width: if selected { 1.0 } else { 0.0 },
+                radius: theme::SETTINGS_SEGMENT_RADIUS.into(),
+            },
+            ..Default::default()
+        }
+    })
+    .into()
+}
+
+fn theme_choices(selected: AppThemeMode) -> Element<'static, Message> {
+    segmented(row![
+        choice(
+            labels::SETTINGS_LOCALE_SYSTEM,
+            selected == AppThemeMode::System,
+            Message::ThemeSelected(AppThemeMode::System)
+        ),
+        choice(
+            labels::SETTINGS_LIGHT,
+            selected == AppThemeMode::Light,
+            Message::ThemeSelected(AppThemeMode::Light)
+        ),
+        choice(
+            labels::SETTINGS_DARK,
+            selected == AppThemeMode::Dark,
+            Message::ThemeSelected(AppThemeMode::Dark)
+        )
+    ])
+}
+
+fn segmented<'a>(choices: iced::widget::Row<'a, Message>) -> Element<'a, Message> {
+    container(choices)
+        .padding(theme::SETTINGS_SEGMENT_PADDING)
+        .style(|_| container::Style {
+            background: Some(theme::palette().panel2.into()),
+            border: Border {
+                radius: theme::SETTINGS_SEGMENT_OUTER_RADIUS.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
         .into()
 }
 
-fn radio_style(_: &Theme, _: radio::Status) -> radio::Style {
+fn switch(value: bool, message: Message) -> Element<'static, Message> {
     let p = theme::palette();
-    radio::Style {
-        background: p.panel2.into(),
-        dot_color: p.accent,
-        border_width: 1.0,
-        border_color: p.border2,
-        text_color: Some(p.text2),
-    }
+    let knob = container(
+        iced::widget::Space::new()
+            .width(theme::SETTINGS_SWITCH_KNOB)
+            .height(theme::SETTINGS_SWITCH_KNOB),
+    )
+    .style(move |_| container::Style {
+        background: Some(if value { p.bg } else { p.text2 }.into()),
+        border: Border {
+            radius: theme::SETTINGS_SWITCH_KNOB.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    button(
+        container(knob)
+            .width(theme::SETTINGS_SWITCH_WIDTH)
+            .height(theme::SETTINGS_SWITCH_HEIGHT)
+            .align_x(if value {
+                iced::alignment::Horizontal::Right
+            } else {
+                iced::alignment::Horizontal::Left
+            })
+            .center_y(Fill)
+            .padding(theme::SETTINGS_SWITCH_PADDING),
+    )
+    .padding(0)
+    .on_press(message)
+    .style(move |_, status| button::Style {
+        background: Some(
+            if value {
+                p.accent
+            } else if matches!(status, button::Status::Hovered) {
+                p.panel3
+            } else {
+                p.panel2
+            }
+            .into(),
+        ),
+        border: Border {
+            color: p.border2,
+            width: 1.0,
+            radius: theme::SETTINGS_SWITCH_HEIGHT.into(),
+        },
+        ..Default::default()
+    })
+    .into()
 }
 
 pub fn view(s: &Settings) -> Element<'_, Message> {
-    // `system` é exibido como escuro, que é o que ele resolve.
-    let selected = match s.theme_mode {
-        AppThemeMode::Light => AppThemeMode::Light,
-        AppThemeMode::Dark | AppThemeMode::System => AppThemeMode::Dark,
-    };
+    let selected = s.theme_mode;
     let navigation = navigation(s);
     let content = match s.section {
         Section::General => column![
@@ -39,15 +135,7 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
                 .font(theme::FONT_BODY_SEMIBOLD)
                 .size(theme::SETTINGS_SECTION_TITLE_SIZE)
                 .color(theme::palette().text),
-            setting_row(
-                labels::SETTINGS_THEME,
-                row![
-                    theme_choice(labels::SETTINGS_DARK, AppThemeMode::Dark, selected),
-                    theme_choice(labels::SETTINGS_LIGHT, AppThemeMode::Light, selected)
-                ]
-                .spacing(theme::SETTINGS_NAV_ITEM_GAP)
-                .into()
-            ),
+            setting_row(labels::SETTINGS_THEME, theme_choices(selected)),
             iced::widget::Space::new().height(theme::SETTINGS_SECTION_GAP),
             text(labels::SETTINGS_GSH_DESKTOP)
                 .font(theme::FONT_BODY_SEMIBOLD)
@@ -55,30 +143,49 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
                 .color(theme::palette().text),
             setting_row(
                 labels::SETTINGS_LOCALE,
-                text_input(labels::SETTINGS_LOCALE_HINT, &s.locale)
-                    .on_input(Message::LocaleChanged)
-                    .style(input_style)
-                    .width(240)
-                    .into()
-            ),
-            button(labels::SETTINGS_SAVE)
-                .on_press(Message::Save)
-                .style(primary_button)
+                pick_list(
+                    &labels::SETTINGS_LOCALES[..],
+                    Some(match s.locale.as_str() {
+                        "en" => labels::SETTINGS_LOCALES[1],
+                        "es" => labels::SETTINGS_LOCALES[2],
+                        "pt-BR" => labels::SETTINGS_LOCALES[3],
+                        _ => labels::SETTINGS_LOCALES[0],
+                    }),
+                    |value| Message::LocaleChanged(
+                        match value {
+                            labels::SETTINGS_LOCALE_EN => "en",
+                            labels::SETTINGS_LOCALE_ES => "es",
+                            labels::SETTINGS_LOCALE_PT => "pt-BR",
+                            _ => "",
+                        }
+                        .to_owned()
+                    )
+                )
+                .style(locale_style)
+                .menu_style(|_| {
+                    let p = theme::palette();
+                    iced::widget::overlay::menu::Style {
+                        text_color: p.text,
+                        background: p.panel2.into(),
+                        border: Border {
+                            color: p.border2,
+                            width: 1.0,
+                            radius: theme::SETTINGS_DROPDOWN_RADIUS.into(),
+                        },
+                        selected_text_color: p.text,
+                        selected_background: p.panel3.into(),
+                        shadow: Default::default(),
+                    }
+                })
+                .into()
+            )
         ],
         Section::Appearance => column![
             text(labels::SETTINGS_APPEARANCE)
                 .font(theme::FONT_TITLE)
                 .size(theme::SIZE_TITLE)
                 .color(theme::palette().text),
-            setting_row(
-                labels::SETTINGS_THEME,
-                row![
-                    theme_choice(labels::SETTINGS_DARK, AppThemeMode::Dark, selected),
-                    theme_choice(labels::SETTINGS_LIGHT, AppThemeMode::Light, selected)
-                ]
-                .spacing(16)
-                .into()
-            ),
+            setting_row(labels::SETTINGS_THEME, theme_choices(selected)),
             setting_row(
                 labels::SETTINGS_INTERFACE_SIZE,
                 text_input(labels::SETTINGS_INTERFACE_SIZE_HINT, &s.interface_size)
@@ -89,35 +196,24 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
             ),
             setting_row(
                 labels::SETTINGS_TRANSCRIPT_WIDTH,
-                row![
-                    radio(
+                segmented(row![
+                    choice(
                         labels::SETTINGS_WIDTH_NARROW,
-                        TranscriptWidth::Narrow,
-                        Some(s.transcript_width),
-                        Message::TranscriptWidthChanged
-                    )
-                    .style(radio_style),
-                    radio(
+                        s.transcript_width == TranscriptWidth::Narrow,
+                        Message::TranscriptWidthChanged(TranscriptWidth::Narrow)
+                    ),
+                    choice(
                         labels::SETTINGS_WIDTH_MEDIUM,
-                        TranscriptWidth::Medium,
-                        Some(s.transcript_width),
-                        Message::TranscriptWidthChanged
-                    )
-                    .style(radio_style),
-                    radio(
+                        s.transcript_width == TranscriptWidth::Medium,
+                        Message::TranscriptWidthChanged(TranscriptWidth::Medium)
+                    ),
+                    choice(
                         labels::SETTINGS_WIDTH_WIDE,
-                        TranscriptWidth::Wide,
-                        Some(s.transcript_width),
-                        Message::TranscriptWidthChanged
+                        s.transcript_width == TranscriptWidth::Wide,
+                        Message::TranscriptWidthChanged(TranscriptWidth::Wide)
                     )
-                    .style(radio_style)
-                ]
-                .spacing(theme::SETTINGS_NAV_ITEM_GAP)
-                .into()
-            ),
-            button(labels::SETTINGS_SAVE)
-                .on_press(Message::SaveControls)
-                .style(primary_button)
+                ])
+            )
         ],
         Section::Terminal => column![
             text(labels::SETTINGS_TERMINAL)
@@ -148,10 +244,7 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
                     .width(240)
                     .into()
             ),
-            text(labels::SETTINGS_TERMINAL_RESTART),
-            button(labels::SETTINGS_SAVE)
-                .on_press(Message::SaveControls)
-                .style(primary_button)
+            text(labels::SETTINGS_TERMINAL_RESTART)
         ],
         Section::Editor => column![
             text(labels::SETTINGS_EDITOR)
@@ -168,21 +261,12 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
             ),
             setting_row(
                 labels::SETTINGS_HIGHLIGHT,
-                checkbox(s.highlight)
-                    .on_toggle(Message::HighlightChanged)
-                    .style(check_style)
-                    .into()
+                switch(s.highlight, Message::HighlightChanged(!s.highlight))
             ),
             setting_row(
                 labels::SETTINGS_WRAP,
-                checkbox(s.wrap)
-                    .on_toggle(Message::WrapChanged)
-                    .style(check_style)
-                    .into()
-            ),
-            button(labels::SETTINGS_SAVE)
-                .on_press(Message::SaveControls)
-                .style(primary_button)
+                switch(s.wrap, Message::WrapChanged(!s.wrap))
+            )
         ],
         Section::Notifications => column![
             text(labels::SETTINGS_NOTIFICATIONS)
@@ -191,22 +275,19 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
                 .color(theme::palette().text),
             setting_row(
                 labels::SETTINGS_NOTIFY_TURN_DONE,
-                checkbox(s.notifications)
-                    .on_toggle(Message::NotificationsChanged)
-                    .style(check_style)
-                    .into()
+                switch(
+                    s.notifications,
+                    Message::NotificationsChanged(!s.notifications)
+                )
             ),
             setting_row(
                 labels::SETTINGS_NOTIFY_PERMISSION,
-                checkbox(s.permission_sound)
-                    .on_toggle(Message::PermissionSoundChanged)
-                    .style(check_style)
-                    .into()
+                switch(
+                    s.permission_sound,
+                    Message::PermissionSoundChanged(!s.permission_sound)
+                )
             ),
-            text(labels::SETTINGS_NOTIFICATIONS_PENDING),
-            button(labels::SETTINGS_SAVE)
-                .on_press(Message::SaveControls)
-                .style(primary_button)
+            text(labels::SETTINGS_NOTIFICATIONS_PENDING)
         ],
     }
     .spacing(theme::SETTINGS_SECTION_TITLE_GAP)
@@ -231,8 +312,6 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
             }
         };
         content = content.push(text(message).color(theme::palette().warn));
-    } else if s.saved {
-        content = content.push(text(labels::SETTINGS_SAVED));
     }
     let panel = container(content)
         .max_width(theme::SETTINGS_PANEL_MAX_WIDTH)
@@ -529,25 +608,6 @@ fn header_button(_: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-fn primary_button(_: &Theme, status: button::Status) -> button::Style {
-    let p = theme::palette();
-    button::Style {
-        background: Some(Background::Color(
-            if matches!(status, button::Status::Hovered | button::Status::Pressed) {
-                p.accent_text
-            } else {
-                p.accent
-            },
-        )),
-        text_color: p.bg,
-        border: Border {
-            radius: theme::RADIUS_BUTTON.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    }
-}
-
 fn input_style(_: &Theme, status: text_input::Status) -> text_input::Style {
     let p = theme::palette();
     text_input::Style {
@@ -568,14 +628,19 @@ fn input_style(_: &Theme, status: text_input::Status) -> text_input::Style {
     }
 }
 
-fn check_style(theme: &Theme, status: checkbox::Status) -> checkbox::Style {
-    let mut style = checkbox::primary(theme, status);
+fn locale_style(_: &Theme, _: pick_list::Status) -> pick_list::Style {
     let p = theme::palette();
-    style.background = p.panel2.into();
-    style.icon_color = p.accent;
-    style.border.color = p.border2;
-    style.text_color = Some(p.text2);
-    style
+    pick_list::Style {
+        text_color: p.text,
+        placeholder_color: p.text3,
+        handle_color: p.text3,
+        background: p.panel2.into(),
+        border: Border {
+            color: p.border2,
+            width: 1.0,
+            radius: theme::SETTINGS_DROPDOWN_RADIUS.into(),
+        },
+    }
 }
 
 fn setting_row<'a>(label: &'static str, control: Element<'a, Message>) -> Element<'a, Message> {

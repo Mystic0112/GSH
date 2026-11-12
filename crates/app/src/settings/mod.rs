@@ -179,46 +179,55 @@ impl Settings {
                 self.shell = v;
                 self.saved = false;
                 self.error = None;
+                self.update(Message::SaveControls);
             }
             Message::ScrollbackChanged(v) => {
                 self.scrollback = v;
                 self.saved = false;
                 self.error = None;
+                self.update(Message::SaveControls);
             }
             Message::TerminalSizeChanged(v) => {
                 self.terminal_size = v;
                 self.saved = false;
                 self.error = None;
+                self.update(Message::SaveControls);
             }
             Message::TabSizeChanged(v) => {
                 self.tab_size = v;
                 self.saved = false;
                 self.error = None;
+                self.update(Message::SaveControls);
             }
             Message::HighlightChanged(v) => {
                 self.highlight = v;
                 self.saved = false;
                 self.error = None;
+                self.update(Message::SaveControls);
             }
             Message::WrapChanged(v) => {
                 self.wrap = v;
                 self.saved = false;
                 self.error = None;
+                self.update(Message::SaveControls);
             }
             Message::NotificationsChanged(v) => {
                 self.notifications = v;
                 self.saved = false;
                 self.error = None;
+                self.update(Message::SaveControls);
             }
             Message::PermissionSoundChanged(v) => {
                 self.permission_sound = v;
                 self.saved = false;
                 self.error = None;
+                self.update(Message::SaveControls);
             }
             Message::TranscriptWidthChanged(v) => {
                 self.transcript_width = v;
                 self.saved = false;
                 self.error = None;
+                self.update(Message::SaveControls);
             }
             Message::ThemeSelected(mode) => self.select_theme(mode),
             Message::SaveControls => {
@@ -242,6 +251,7 @@ impl Settings {
                 self.interface_size = value;
                 self.error = None;
                 self.saved = false;
+                self.update(Message::SaveControls);
             }
             Message::SaveAppearance => {
                 let result = match &self.path {
@@ -258,12 +268,20 @@ impl Settings {
                 self.locale = value;
                 self.error = None;
                 self.saved = false;
+                self.update(Message::Save);
             }
             Message::Save => {
                 let result = match &self.path {
                     Ok(path) => save_locale(path, &self.locale),
                     Err(_) => Err(Error::Config(gsh_config::ConfigError::NoHome)),
                 };
+                if result.is_ok() {
+                    self.current.locale = if self.locale.is_empty() {
+                        None
+                    } else {
+                        Some(self.locale.clone())
+                    };
+                }
                 self.saved = result.is_ok();
                 self.error = result.err();
             }
@@ -390,14 +408,37 @@ mod tests {
         assert_eq!(crate::theme::active(), ThemeVariant::Light);
 
         reloaded.update(Message::ThemeSelected(AppThemeMode::System));
-        assert!(matches!(reloaded.error, Some(Error::InvalidTheme)));
-        assert_eq!(reloaded.theme_mode, AppThemeMode::Light);
+        assert!(reloaded.error.is_none());
+        assert_eq!(reloaded.theme_mode, AppThemeMode::System);
         assert_eq!(
             gsh_config::load(&path).unwrap().theme_mode,
-            AppThemeMode::Light
+            AppThemeMode::System
         );
 
         crate::theme::set_active(ThemeVariant::Dark);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn changes_save_immediately_and_preserve_unknown_keys() {
+        let dir = std::env::temp_dir().join(format!("gsh-settings-auto-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "futureKey = 'keep'\n").unwrap();
+        let mut settings = Settings {
+            path: Ok(path.clone()),
+            ..Settings::default()
+        };
+        settings.update(Message::LocaleChanged("es".into()));
+        assert_eq!(
+            gsh_config::load(&path).unwrap().locale.as_deref(),
+            Some("es")
+        );
+        settings.update(Message::Select(Section::Notifications));
+        settings.update(Message::NotificationsChanged(false));
+        assert!(!gsh_config::load(&path).unwrap().notifications_enabled);
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("futureKey = 'keep'"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

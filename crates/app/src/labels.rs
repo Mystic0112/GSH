@@ -464,3 +464,14 @@ pub const SETTINGS_NAV_NO_RESULTS: &str = "Nenhum resultado";
 pub const SETTINGS_NAV_CLAUDE: &str = "Claude";
 pub const SETTINGS_CLAUDE_UNAVAILABLE: &str =
     "As configurações do Claude ainda não estão disponíveis neste app.";
+
+pub const SETTINGS_LOCALE_SYSTEM: &str = "Sistema";
+pub const SETTINGS_LOCALE_EN: &str = "English";
+pub const SETTINGS_LOCALE_ES: &str = "Español";
+pub const SETTINGS_LOCALE_PT: &str = "Português (Brasil)";
+pub const SETTINGS_LOCALES: [&str; 4] = [
+    SETTINGS_LOCALE_SYSTEM,
+    SETTINGS_LOCALE_EN,
+    SETTINGS_LOCALE_ES,
+    SETTINGS_LOCALE_PT,
+];
