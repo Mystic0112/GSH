@@ -277,11 +277,7 @@ fn view_entry_row<'a>(
     } else {
         ""
     };
-    let icon = if entry.is_dir {
-        labels::ICON_FOLDER
-    } else {
-        labels::ICON_FILE_ITEM
-    };
+    let icon = crate::file_icons::view(&entry.name, entry.is_dir, expanded);
     let name_color = if let Some(status) = git_status {
         crate::git_presenter::status_color(status)
     } else if selected {
@@ -305,10 +301,7 @@ fn view_entry_row<'a>(
         )
         .width(theme::FILE_TREE_CHEVRON_WIDTH),
         Space::new().width(theme::FILE_TREE_CHEVRON_GAP),
-        text(icon)
-            .font(theme::FONT_ICON)
-            .size(theme::FILE_TREE_ICON_SIZE)
-            .color(theme::palette().text3),
+        icon,
         Space::new().width(theme::FILE_TREE_ICON_GAP),
         text(entry.name)
             .font(theme::FONT_BODY)

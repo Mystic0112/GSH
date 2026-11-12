@@ -27,6 +27,7 @@ pub mod editor_scroll;
 pub mod editor_state;
 pub mod editor_view;
 pub mod farm;
+mod file_icons;
 pub mod file_ops;
 pub mod file_tree;
 pub mod file_viewer;
