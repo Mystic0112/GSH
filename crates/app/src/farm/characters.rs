@@ -1,7 +1,7 @@
 use super::{
     agents::{Agent, Pose},
     camera::Camera,
-    world::{self, Kind, Mode},
+    world::Prop,
 };
 use crate::{labels, theme};
 use iced::{
@@ -9,29 +9,27 @@ use iced::{
     Point, Rectangle, Size,
 };
 
-fn position(agent: &Agent, mode: Mode) -> Point {
-    let posts: Vec<_> = world::props(mode)
-        .into_iter()
-        .filter(|p| matches!(p.kind, Kind::Desk | Kind::Plot(_)))
-        .collect();
-    let Some(post) = posts.get(agent.slot % 9) else {
+/// Posto de cada agente: um por canteiro ou mesa, repetindo as linhas.
+fn position(agent: &Agent, posts: &[Prop]) -> Point {
+    let n = posts.len().max(1);
+    let Some(post) = posts.get(agent.slot % n) else {
         return Point::ORIGIN;
     };
     Point::new(
         post.x as f32 - 8.0,
-        post.y as f32 + 8.0 + (agent.slot / 9) as f32 * 10.0,
+        post.y as f32 + 8.0 + (agent.slot / n) as f32 * 10.0,
     )
 }
-pub fn hit(
-    agents: &[Agent],
-    mode: Mode,
+pub fn hit<'a>(
+    agents: &'a [Agent],
+    posts: &[Prop],
     camera: Camera,
     size: Size,
     point: Point,
-) -> Option<&Agent> {
+) -> Option<&'a Agent> {
     let world = camera.to_world(point, size);
     agents.iter().rev().find(|agent| {
-        let p = position(agent, mode);
+        let p = position(agent, posts);
         Rectangle {
             x: p.x,
             y: p.y,
@@ -42,9 +40,15 @@ pub fn hit(
     })
 }
 // Sprite simplificado; o clawdHD completo de farm_sprites.dart fica para a fase de fidelidade.
-pub fn draw(frame: &mut canvas::Frame, agents: &[Agent], mode: Mode, camera: Camera, size: Size) {
+pub fn draw(
+    frame: &mut canvas::Frame,
+    agents: &[Agent],
+    posts: &[Prop],
+    camera: Camera,
+    size: Size,
+) {
     for agent in agents {
-        let p = camera.to_screen(position(agent, mode), size);
+        let p = camera.to_screen(position(agent, posts), size);
         let z = camera.zoom;
         let color = theme::FARM_AGENTS
             .get(agent.slot % theme::FARM_AGENTS.len())

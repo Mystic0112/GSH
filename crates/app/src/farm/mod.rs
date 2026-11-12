@@ -1,4 +1,5 @@
 mod agents;
+mod backdrop;
 mod camera;
 mod characters;
 pub mod crops;
@@ -16,14 +17,15 @@ mod world_props;
 use crate::{labels, theme};
 use agents::Agents;
 pub use agents::{AgentInput, AgentState};
+use backdrop::Backdrop;
 use camera::Camera;
 use iced::widget::{
     button,
     canvas::{self, Action, Event},
     column, row, text,
 };
-use iced::{mouse, Element, Fill, Point, Rectangle, Renderer, Theme, Vector};
-use world::Mode;
+use iced::{mouse, window, Element, Fill, Point, Rectangle, Renderer, Size, Theme, Vector};
+use world::{Mode, Prop};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -33,6 +35,7 @@ pub enum Message {
     Center,
     Pan(Vector),
     Zoom(Point, iced::Size, f32),
+    Resized(Size),
 }
 
 pub struct FarmPane {
@@ -40,6 +43,9 @@ pub struct FarmPane {
     mode: Mode,
     camera: Camera,
     cache: canvas::Cache,
+    /// Última janela conhecida: o fundo é refeito quando ela muda.
+    view_size: Option<Size>,
+    backdrop: Option<Backdrop>,
 }
 impl Default for FarmPane {
     fn default() -> Self {
@@ -48,6 +54,8 @@ impl Default for FarmPane {
             mode: Mode::Office,
             camera: Camera::default(),
             cache: canvas::Cache::new(),
+            view_size: None,
+            backdrop: None,
         }
     }
 }
@@ -68,13 +76,57 @@ impl FarmPane {
     pub fn update(&mut self, message: Message) {
         match message {
             Message::Focus(_) => {}
-            Message::Office => self.mode = Mode::Office,
-            Message::Farm => self.mode = Mode::Farm,
-            Message::Center => self.camera = Camera::default(),
+            Message::Office => {
+                self.mode = Mode::Office;
+                self.camera = Camera::default();
+            }
+            Message::Farm => {
+                self.mode = Mode::Farm;
+                self.refit_backdrop();
+                self.camera = self.fit_camera();
+            }
+            Message::Center => self.camera = self.fit_camera(),
             Message::Pan(delta) => self.camera.offset += delta,
             Message::Zoom(at, view, step) => self.camera.zoom_at(at, view, step),
+            Message::Resized(size) => {
+                self.view_size = Some(size);
+                if self.mode == Mode::Farm {
+                    self.refit_backdrop();
+                    self.camera = self.fit_camera();
+                }
+            }
         }
         self.cache.clear();
+    }
+    /// Refaz o fundo para a janela atual, se ela mudou desde o último layout.
+    /// ponytail: refaz a cada mudança de tamanho, síncrono; assíncrono se a janela ficar lenta.
+    fn refit_backdrop(&mut self) {
+        let Some(size) = self.view_size else {
+            return;
+        };
+        if self.backdrop.as_ref().is_none_or(|b| b.size != size) {
+            self.backdrop = Some(Backdrop::build(size));
+        }
+    }
+    /// Câmera da fazenda: o zoom que mostra o layout inteiro; sem fundo, a padrão.
+    fn fit_camera(&self) -> Camera {
+        self.backdrop
+            .as_ref()
+            .map_or_else(Camera::default, |b| Camera {
+                zoom: b.zoom,
+                offset: Vector::ZERO,
+            })
+    }
+    /// Postos dos agentes: canteiros na fazenda, mesas no escritório.
+    fn posts(&self) -> Vec<Prop> {
+        match (self.mode, &self.backdrop) {
+            (Mode::Farm, Some(backdrop)) => backdrop.posts(),
+            (Mode::Farm, None) => Vec::new(),
+            (Mode::Office, _) => world::office_props()
+                .into_iter()
+                .filter(|p| p.kind == world::Kind::Desk)
+                .collect(),
+        }
     }
     pub fn view(&self) -> Element<'_, Message> {
         let control = |label, msg, active| {
@@ -153,6 +205,12 @@ impl canvas::Program<Message> for Program<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<Action<Message>> {
+        // a janela avisa o tamanho a cada quadro; se mudou, o fundo é refeito
+        if matches!(event, Event::Window(window::Event::RedrawRequested(_)))
+            && self.0.view_size != Some(bounds.size())
+        {
+            return Some(Action::publish(Message::Resized(bounds.size())));
+        }
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 state.last = cursor.position_in(bounds);
@@ -168,7 +226,7 @@ impl canvas::Program<Message> for Program<'_> {
                         if (at.x - start.x).hypot(at.y - start.y) < 4.0 {
                             if let Some(agent) = characters::hit(
                                 &self.0.agents.items,
-                                self.0.mode,
+                                &self.0.posts(),
                                 self.0.camera,
                                 bounds.size(),
                                 at,
@@ -220,21 +278,29 @@ impl canvas::Program<Message> for Program<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        let scene = self.0.cache.draw(renderer, bounds.size(), |frame| {
-            paint::draw(frame, bounds.size(), self.0.camera, self.0.mode);
-            characters::draw(
-                frame,
-                &self.0.agents.items,
-                self.0.mode,
-                self.0.camera,
-                bounds.size(),
-            );
+        let (size, camera) = (bounds.size(), self.0.camera);
+        let posts = self.0.posts();
+        // o canvas desenha as imagens por cima das formas de um mesmo geometry: cada camada vai no seu
+        let base = self.0.cache.draw(renderer, size, |frame| {
+            match (self.0.mode, &self.0.backdrop) {
+                (Mode::Farm, Some(backdrop)) => paint::draw_backdrop(frame, size, camera, backdrop),
+                (Mode::Farm, None) => {}
+                (Mode::Office, _) => paint::draw_office(frame, size, camera),
+            }
         });
+        let mut agents = canvas::Frame::new(renderer, size);
+        characters::draw(&mut agents, &self.0.agents.items, &posts, camera, size);
+        let mut layers = vec![base, agents.into_geometry()];
+        if let (Mode::Farm, Some(backdrop)) = (self.0.mode, &self.0.backdrop) {
+            let mut front = canvas::Frame::new(renderer, size);
+            paint::draw_front(&mut front, size, camera, backdrop);
+            layers.push(front.into_geometry());
+        }
         let mut overlay = canvas::Frame::new(renderer, bounds.size());
         if let Some(point) = cursor.position_in(bounds) {
             if let Some(agent) = characters::hit(
                 &self.0.agents.items,
-                self.0.mode,
+                &self.0.posts(),
                 self.0.camera,
                 bounds.size(),
                 point,
@@ -254,6 +320,7 @@ impl canvas::Program<Message> for Program<'_> {
                 });
             }
         }
-        vec![scene, overlay.into_geometry()]
+        layers.push(overlay.into_geometry());
+        layers
     }
 }

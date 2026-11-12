@@ -58,6 +58,21 @@ impl Raster {
         }
     }
 
+    /// Bytes RGBA (não pré-multiplicados) para `image::Handle::from_rgba`.
+    pub fn to_rgba(&self) -> Vec<u8> {
+        self.p
+            .iter()
+            .flat_map(|&c| {
+                [
+                    ((c >> 16) & 0xff) as u8,
+                    ((c >> 8) & 0xff) as u8,
+                    (c & 0xff) as u8,
+                    (c >> 24) as u8,
+                ]
+            })
+            .collect()
+    }
+
     /// O `pxCircle` do clodfarm: um disco em fileiras de 1px.
     pub fn circle(&mut self, cx: f64, cy: f64, r: f64, c: u32) {
         let mut y = -r;
@@ -75,5 +90,17 @@ impl Raster {
             self.fill((cx - ww).round(), (cy + y).round(), ww * 2.0 + 1.0, 1.0, c);
             y += 1.0;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgba_sai_na_ordem_do_image_handle() {
+        let mut r = Raster::new(2, 1);
+        r.fill(0.0, 0.0, 1.0, 1.0, 0xff_11_22_33);
+        assert_eq!(r.to_rgba(), vec![0x11, 0x22, 0x33, 0xff, 0, 0, 0, 0]);
     }
 }
