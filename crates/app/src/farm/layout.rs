@@ -62,7 +62,7 @@ impl Rect {
 }
 
 /// `FarmDecor`: flor, arbusto, cogumelo, abóbora ou tronco na terra livre.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Decor {
     pub kind: &'static str,
     pub x: f64,

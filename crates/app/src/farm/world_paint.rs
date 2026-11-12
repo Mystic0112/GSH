@@ -4,14 +4,18 @@
 //! trilhas) entra por parâmetro até o `farm_world.dart` ser portado.
 #![allow(dead_code)] // ponytail: o fundo ainda não está ligado ao cenário (falta layout e props)
 
+use super::dart_sort::sort_by;
+use super::layout::{Decor, Layout, Rect};
 use super::raster::{mulberry32, Raster, HD};
+use super::world_props;
 use crate::theme::scene::field as f;
+use std::cmp::Ordering;
 
 type Tree = (f64, f64, f64);
 
 const NOISE_N: i64 = 64;
 const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
-const SPARK: [&str; 9] = [
+pub(super) const SPARK: [&str; 9] = [
     "....o....",
     ".o..o..o.",
     "..o.o.o..",
@@ -279,9 +283,193 @@ pub fn rock(g: &mut Raster, left: f64, top: f64, width: f64, height: f64) {
     }
 }
 
+fn dist(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+    ((ax - bx) * (ax - bx) + (ay - by) * (ay - by)).sqrt()
+}
+
+/// `clear` de `_farmProps`: terra livre para pedra ou flor, com `pad` de folga.
+fn clear(l: &Layout, x: f64, y: f64, pad: f64) -> bool {
+    let c = l.content;
+    !l.blocked(x, y)
+        && !l.on_path(x, y, pad)
+        && dist(x, y, l.door.dx, l.door.dy) > 30.0
+        && !(x > c.left - 4.0 && x < c.right + 4.0 && y > c.top - 4.0 && y < c.bottom + 6.0)
+}
+
+/// Tipos de decoração sorteados: (nome, probabilidade, raio). O primeiro é o padrão.
+const KINDS: [(&str, f64, f64); 5] = [
+    ("flowers", 0.5, 0.0),
+    ("bush", 0.27, 7.0),
+    ("mushrooms", 0.09, 0.0),
+    ("pumpkin", 0.09, 6.0),
+    ("log", 0.05, 8.0),
+];
+
+fn pick_kind(mut pr: f64) -> (&'static str, f64) {
+    let mut kind = KINDS[0];
+    for k in KINDS {
+        if pr < k.1 {
+            kind = k;
+            break;
+        }
+        pr -= k.1;
+    }
+    (kind.0, kind.2)
+}
+
+/// `_farmProps`: caminhos, lago, pedras, decoração, curral, cercado, canteiros,
+/// celeiro e placa. Pedras e decoração ficam em `l`, que o bloqueio de caminhada
+/// consulta enquanto são colocadas (o mesmo papel da lista compartilhada do Dart).
+fn farm_props(g: &mut Raster, l: &mut Layout, rnd: &mut dyn FnMut() -> f64) {
+    let (w, h) = (l.w, l.h);
+    for pts in l.paths.clone() {
+        world_props::path(g, &pts, rnd);
+    }
+    world_props::pond(g, l, rnd);
+    // pedras e natureza no campo, onde não há mais nada
+    let p = l.play;
+    l.rocks.clear();
+    let want_rocks = (((w * h) as f64 / 45000.0).round() as i64).clamp(2, 10);
+    let mut tries = 0;
+    while (l.rocks.len() as i64) < want_rocks && tries < 400 {
+        tries += 1;
+        let rw = 12.0 + (rnd() * 8.0).floor();
+        let r = Rect::from_ltwh(
+            p.left + 10.0 + rnd() * (p.width() - 20.0),
+            p.top + rnd() * (p.height() - 12.0),
+            rw,
+            (rw * 0.75).round(),
+        );
+        if clear(l, r.left, r.top, 10.0)
+            && clear(l, r.left, r.bottom, 10.0)
+            && l.rocks
+                .iter()
+                .all(|o| dist(o.left, o.top, r.left, r.top) > 44.0)
+        {
+            l.rocks.push(r);
+        }
+    }
+    l.decor.clear();
+    let want_decor = (((w * h) as f64 / 2600.0).round() as i64).clamp(8, 70);
+    let mut tries = 0;
+    while (l.decor.len() as i64) < want_decor && tries < 900 {
+        tries += 1;
+        let x = p.left + 8.0 + rnd() * (p.width() - 16.0);
+        let y = p.top + 10.0 + rnd() * (p.height() - 14.0);
+        let (name, r) = pick_kind(rnd());
+        if !clear(l, x, y, 9.0)
+            || l.decor.iter().any(|o| dist(o.x, o.y, x, y) < 22.0)
+            || l.rocks.iter().any(|o| dist(o.left, o.top, x, y) < 20.0)
+        {
+            continue;
+        }
+        let c = (rnd() * 6.0).floor() as usize;
+        l.decor.push(Decor {
+            kind: name,
+            x,
+            y,
+            r,
+            c,
+        });
+    }
+    // flores na frente do celeiro e em volta do lago
+    let b = l.barn;
+    for fx in [b.left + 4.0, b.right - 6.0] {
+        let c = (rnd() * 6.0).floor() as usize;
+        l.decor.push(Decor {
+            kind: "flowers",
+            x: fx,
+            y: b.bottom + 4.0,
+            r: 0.0,
+            c,
+        });
+    }
+    let (pcx, pcy, prx) = (l.pond_cx(), l.pond_cy(), l.pond_rx());
+    l.decor.push(Decor {
+        kind: "flowers",
+        x: pcx - prx - 8.0,
+        y: pcy + 6.0,
+        r: 0.0,
+        c: 2,
+    });
+    l.decor.push(Decor {
+        kind: "flowers",
+        x: pcx + prx + 8.0,
+        y: pcy + 4.0,
+        r: 0.0,
+        c: 4,
+    });
+    for r in l.rocks.clone() {
+        rock(g, r.left, r.top, r.width(), r.height());
+    }
+    let mut sorted = l.decor.clone();
+    sort_by(&mut sorted, &|a, b| {
+        a.y.partial_cmp(&b.y).unwrap_or(Ordering::Equal)
+    });
+    for d in &sorted {
+        world_props::decor(g, d, rnd);
+    }
+    world_props::yard(g, l.yard, rnd);
+    world_props::fence(g, l.field, l.gate_at);
+    for &pl in &l.plots {
+        world_props::plot(g, pl);
+    }
+    world_props::barn(g, l.barn);
+    world_props::sign(g, l.sign);
+}
+
+/// O fundo da fazenda (`_paintWorld`, ramo da fazenda): grama, manchas, miolo,
+/// árvores de trás e a faixa da frente, que passa por cima dos bichos. Devolve
+/// (fundo, faixa da frente, linha em que a faixa começa). Grava pedras e decoração em `l`.
+pub fn paint_farm(l: &mut Layout, seed: u32) -> (Raster, Raster, i64) {
+    let (w, h) = (l.w, l.h);
+    let hd = HD as f64;
+    let mut rnd = mulberry32(seed);
+    let mut g = Raster::new(w * HD, h * HD);
+    // clareira gasta em volta da fazenda
+    let c = l.content;
+    let cx = c.center().dx;
+    let cy = c.center().dy + 6.0;
+    let rx = (c.width() * 0.62).max(60.0);
+    let ry = (c.height() * 0.64).max(50.0);
+    grass_field(&mut g, w, h, seed, (cx, cy, rx, ry));
+    grass_specks(&mut g, w, h, &mut rnd, &|x, y| l.blocked(x, y));
+    farm_props(&mut g, l, &mut rnd);
+    // árvores na borda: as de trás no fundo, a fileira de baixo na frente de tudo
+    let t = l.t;
+    let (mut trees, mut front) = place_trees(w, h, t, &mut rnd);
+    let by_y =
+        |a: &(f64, f64, f64), b: &(f64, f64, f64)| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal);
+    sort_by(&mut trees, &by_y);
+    for &(x, y, r) in &trees {
+        tree(
+            &mut g,
+            (x * hd).round() as i64,
+            (y * hd).round() as i64,
+            (r * hd).round() as i64,
+            &mut rnd,
+        );
+    }
+    let fg_y = (h - t - 8).max(0);
+    let mut f = Raster::new(w * HD, (h - fg_y) * HD);
+    sort_by(&mut front, &by_y);
+    for &(x, y, r) in &front {
+        let fy = ((y - fg_y as f64) * hd).round() as i64;
+        tree(
+            &mut f,
+            (x * hd).round() as i64,
+            fy,
+            (r * hd).round() as i64,
+            &mut rnd,
+        );
+    }
+    (g, f, fg_y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::farm::layout::{layout_farm, Viewport};
 
     /// Hash FNV-1a sobre as palavras ARGB: a mesma conta do harness Dart.
     fn fnv(p: &[u32]) -> u32 {
@@ -399,5 +587,143 @@ mod tests {
         ];
         assert_eq!(trees, expect_trees);
         assert_eq!(front, expect_front);
+    }
+
+    #[test]
+    fn fundo_da_fazenda_igual_ao_dart() {
+        let mut cases = [
+            (
+                layout_farm(
+                    6,
+                    5,
+                    &Viewport {
+                        w: 800.0,
+                        h: 600.0,
+                        ..Viewport::default()
+                    },
+                    |z| z,
+                    None,
+                ),
+                0,
+            ),
+            (
+                layout_farm(
+                    12,
+                    9,
+                    &Viewport {
+                        w: 1000.0,
+                        h: 700.0,
+                        left: 60.0,
+                        bottom: 30.0,
+                        ..Viewport::default()
+                    },
+                    |z| (z * 8.0).floor() / 8.0,
+                    None,
+                ),
+                1,
+            ),
+            (
+                layout_farm(
+                    20,
+                    14,
+                    &Viewport {
+                        w: 1280.0,
+                        h: 800.0,
+                        top: 40.0,
+                        right: 300.0,
+                        ..Viewport::default()
+                    },
+                    f64::round,
+                    Some(30),
+                ),
+                2,
+            ),
+        ];
+        let expect = [
+            // (fgY, hash do fundo, hash da faixa da frente, pedras, decorações)
+            (252, 446_489_437, 4_255_313_171, 3, 36),
+            (219, 908_662_702, 1_210_105_062, 0, 4),
+            (262, 3_673_271_468, 4_042_971_849, 0, 4),
+        ];
+        for ((l, i), (fg_y, bg, fr, rocks, decor)) in cases.iter_mut().zip(expect) {
+            let (g, f, got_fg_y) = paint_farm(l, 7);
+            assert_eq!(
+                (got_fg_y, fnv(&g.p), fnv(&f.p), l.rocks.len(), l.decor.len()),
+                (fg_y, bg, fr, rocks, decor),
+                "config {i}"
+            );
+        }
+        // configuração A, linha a linha: pedras e decorações na ordem em que foram sorteadas
+        let mut l = layout_farm(
+            6,
+            5,
+            &Viewport {
+                w: 800.0,
+                h: 600.0,
+                ..Viewport::default()
+            },
+            |z| z,
+            None,
+        );
+        let _ = paint_farm(&mut l, 7);
+        let rocks: Vec<(f64, f64, f64, f64)> = l
+            .rocks
+            .iter()
+            .map(|r| (r.left, r.top, r.width(), r.height()))
+            .collect();
+        assert_eq!(
+            rocks,
+            vec![
+                (144.47798880375922, 242.26452260557562, 18.0, 14.0),
+                (266.83849335089326, 236.9911998361349, 17.0, 13.0),
+                (340.3894758503884, 209.3645931556821, 17.0, 13.0)
+            ]
+        );
+        let decor: Vec<(&str, f64, f64, f64, usize)> = l
+            .decor
+            .iter()
+            .map(|d| (d.kind, d.x, d.y, d.r, d.c))
+            .collect();
+        assert_eq!(
+            decor,
+            vec![
+                ("pumpkin", 76.34586289059371, 61.82399356132373, 6.0, 3),
+                ("flowers", 249.38591895624995, 73.47442714776844, 0.0, 4),
+                ("flowers", 339.38320365268737, 127.97481641173363, 0.0, 1),
+                ("log", 51.24543241690844, 212.84919398091733, 8.0, 3),
+                ("flowers", 184.83512201346457, 233.47397564304993, 0.0, 2),
+                ("flowers", 273.35821301676333, 70.74667111644521, 0.0, 4),
+                ("bush", 344.0911465557292, 157.44142525363714, 7.0, 3),
+                ("flowers", 61.499081063084304, 142.92751911329105, 0.0, 3),
+                ("flowers", 156.82304294314235, 225.83450308488682, 0.0, 0),
+                ("pumpkin", 59.41562680527568, 188.53030358208343, 6.0, 3),
+                ("bush", 319.0131932729855, 251.18931118911132, 7.0, 5),
+                ("flowers", 60.934993997216225, 78.50403667846695, 0.0, 3),
+                ("flowers", 194.58949058316648, 73.42084827600047, 0.0, 2),
+                ("flowers", 97.71635986398906, 239.69602706516162, 0.0, 5),
+                ("bush", 348.20366769563407, 81.5684666223824, 7.0, 0),
+                ("bush", 303.9247349835932, 226.79202793259174, 7.0, 0),
+                ("bush", 242.6818320993334, 245.94088334962726, 7.0, 3),
+                ("flowers", 124.10011678002775, 75.31116497376934, 0.0, 0),
+                ("mushrooms", 127.32551363296807, 229.81844835728407, 0.0, 4),
+                ("flowers", 323.7473846646026, 67.1676299632527, 0.0, 3),
+                ("log", 221.88967373222113, 238.69832173362374, 8.0, 2),
+                ("flowers", 347.7118020411581, 189.79556274227798, 0.0, 1),
+                ("flowers", 300.03195158205926, 62.09798738081008, 0.0, 3),
+                ("flowers", 139.95226060505956, 59.66190166212618, 0.0, 3),
+                ("flowers", 54.12475075572729, 115.52967553539202, 0.0, 0),
+                ("bush", 160.06043863017112, 75.5889597767964, 7.0, 2),
+                ("flowers", 60.46703807078302, 235.50570762855932, 0.0, 2),
+                ("flowers", 348.7084547523409, 107.530428705737, 0.0, 3),
+                ("pumpkin", 331.6666435915977, 229.86292121978477, 6.0, 4),
+                ("pumpkin", 223.38918140158057, 64.13359691156074, 6.0, 5),
+                ("bush", 283.2596024032682, 249.9428886915557, 7.0, 1),
+                ("bush", 77.00320421718061, 251.01308462861925, 7.0, 5),
+                ("flowers", 100.0, 137.0, 0.0, 3),
+                ("flowers", 136.0, 137.0, 0.0, 3),
+                ("flowers", 81.0, 203.0, 0.0, 2),
+                ("flowers", 157.0, 201.0, 0.0, 4)
+            ]
+        );
     }
 }

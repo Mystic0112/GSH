@@ -839,6 +839,20 @@ pub mod scene {
             0xfff4f1e8, 0xfff5c542, 0xfff59cc0, 0xffb9d9ff, 0xffff8f6b, 0xffc99bf0,
         ];
         pub const FLOWER_CENTER: u32 = 0xfff5e27a;
+        // solo, água e sombras de farm_world.dart (_soil*, _w*, _shadow*).
+        pub const SOIL: u32 = 0xff6b4a2e;
+        pub const SOIL2: u32 = 0xff57391f;
+        pub const SOIL3: u32 = 0xff7d5a3a;
+        pub const SOIL_DEEP: u32 = 0xff3f2915;
+        pub const W0: u32 = 0xff2a5a8a;
+        pub const W1: u32 = 0xff3f7fb8;
+        pub const W2: u32 = 0xff5b9ed0;
+        pub const W3: u32 = 0xff9fd0ee;
+        pub const SHADOW30: u32 = 0x4d14_200a;
+        pub const SHADOW35: u32 = 0x5914_200a;
+        pub const SHADOW36: u32 = 0x5c14_200a;
+        // rgba(90, 70, 30, .3): o cercado do curral (_yard).
+        pub const YARD_SHADE: u32 = 0x4d5a_461e;
     }
 }
 

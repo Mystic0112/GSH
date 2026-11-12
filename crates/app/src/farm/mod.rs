@@ -2,6 +2,7 @@ mod agents;
 mod camera;
 mod characters;
 pub mod crops;
+mod dart_sort;
 pub mod icons;
 mod layout;
 pub mod office;
@@ -10,6 +11,7 @@ mod raster;
 mod sprites;
 mod world;
 mod world_paint;
+mod world_props;
 
 use crate::{labels, theme};
 use agents::Agents;
