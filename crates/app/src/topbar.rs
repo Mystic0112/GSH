@@ -4,7 +4,7 @@
 //! botão de recolher o rail à esquerda + título do workspace ativo, pílula da
 //! `AgentIsland` centralizada e botão do painel de arquivos à direita.
 
-use iced::widget::{button, column, container, row, stack, text, Space};
+use iced::widget::{button, column, container, row, stack, text, tooltip, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
 
 use crate::labels;
@@ -25,8 +25,6 @@ pub struct TopbarActions<M> {
     pub on_toggle_files: M,
     pub on_chat: M,
     pub on_farm: M,
-    pub on_database: M,
-    pub on_settings: M,
 }
 
 /// Renderiza a barra superior do shell com a pílula da ilha centralizada.
@@ -51,17 +49,10 @@ pub fn view<'a, M: Clone + 'a>(
     .align_y(Alignment::Center);
 
     let right = row![
-        row![
-            counter(props.counts.finished, theme::palette().ok),
-            counter(props.counts.waiting_badge(), theme::palette().warn),
-            counter(props.counts.working, theme::palette().accent),
-        ]
-        .spacing(4)
-        .align_y(Alignment::Center),
+        farm_strip(props.counts, actions.on_farm.clone()),
         icon_toggle_button(labels::ICON_CHAT, false, actions.on_chat),
         icon_toggle_button(labels::ICON_FARM, false, actions.on_farm),
-        icon_toggle_button(labels::ICON_DATABASE, false, actions.on_database),
-        icon_toggle_button(labels::ICON_SETTINGS, false, actions.on_settings),
+        // ponytail: harness e cenário entram com os painéis
         icon_toggle_button(
             labels::ICON_SIDEBAR_RIGHT,
             !props.files_open,
@@ -162,16 +153,106 @@ fn icon_toggle_button<'a, M: Clone + 'a>(
 
 fn counter<'a, M: 'a>(count: usize, color: iced::Color) -> Element<'a, M> {
     row![
-        text(labels::ICON_DOT)
-            .font(theme::FONT_ICON)
-            .size(theme::SIZE_LABEL)
-            .color(color),
+        counter_dot(color),
         text(count.to_string())
-            .font(theme::FONT_BODY)
+            .font(theme::FONT_MONO)
             .size(theme::SIZE_LABEL)
-            .color(theme::palette().text2)
+            .color(if count == 0 {
+                theme::palette().text4
+            } else {
+                theme::palette().text2
+            })
     ]
-    .spacing(3)
+    .spacing(theme::FARM_STRIP_DOT_GAP)
     .align_y(Alignment::Center)
     .into()
+}
+
+fn farm_strip<'a, M: Clone + 'a>(
+    counts: crate::island::IslandCounts,
+    on_open: M,
+) -> Element<'a, M> {
+    let waiting = counts.waiting_badge();
+    if counts.working == 0 && waiting == 0 && counts.finished == 0 {
+        return Space::new().width(0).into();
+    }
+    let counters = button(
+        row![
+            counter(counts.working, theme::palette().accent),
+            counter(waiting, theme::palette().warn),
+            counter(counts.finished, theme::palette().ok),
+        ]
+        .spacing(theme::FARM_STRIP_COUNTER_GAP)
+        .align_y(Alignment::Center),
+    )
+    .height(theme::TOPBAR_ICON_BUTTON_SIZE)
+    .padding([0.0, theme::FARM_STRIP_BUTTON_PADDING])
+    .on_press(on_open.clone())
+    .style(|_: &Theme, status| button::Style {
+        background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+            .then_some(Background::Color(theme::palette().panel3)),
+        border: Border {
+            radius: theme::RADIUS_BUTTON.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let summary = labels::format_summary(counts.working, waiting, counts.finished);
+    let tooltip = tooltip(
+        counters,
+        text(summary).size(theme::SIZE_LABEL),
+        tooltip::Position::Bottom,
+    );
+    let mut strip = row![tooltip].spacing(4).align_y(Alignment::Center);
+    if waiting > 0 {
+        let pill = button(
+            row![
+                counter_dot(theme::palette().warn),
+                text(labels::farm_need_you(waiting))
+                    .font(theme::FONT_BODY_SEMIBOLD)
+                    .size(theme::SIZE_LABEL)
+                    .color(theme::palette().warn),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .height(theme::FARM_STRIP_PILL_HEIGHT)
+        .padding([0.0, theme::FARM_STRIP_PILL_PADDING])
+        .on_press(on_open)
+        .style(|_: &Theme, status| {
+            let alpha = if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                0.24
+            } else {
+                0.14
+            };
+            button::Style {
+                background: Some(Background::Color(iced::Color {
+                    a: alpha,
+                    ..theme::palette().warn
+                })),
+                border: Border {
+                    radius: theme::FARM_STRIP_PILL_RADIUS.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        });
+        strip = strip.push(pill);
+    }
+    strip.into()
+}
+
+fn counter_dot<'a, M: 'a>(color: iced::Color) -> Element<'a, M> {
+    container(Space::new())
+        .width(theme::FARM_STRIP_DOT_SIZE)
+        .height(theme::FARM_STRIP_DOT_SIZE)
+        .style(move |_: &Theme| container::Style {
+            background: Some(Background::Color(color)),
+            border: Border {
+                radius: (theme::FARM_STRIP_DOT_SIZE / 2.0).into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into()
 }

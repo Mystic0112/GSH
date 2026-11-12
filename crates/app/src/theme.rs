@@ -405,6 +405,13 @@ pub const RADIUS_BADGE: f32 = 4.0;
 pub const WORKSPACE_AVATAR_SIZE: f32 = 30.0;
 pub const WORKSPACE_AVATAR_INITIAL_SCALE: f32 = 0.43;
 pub const TOPBAR_ICON_BUTTON_SIZE: f32 = 28.0;
+pub const FARM_STRIP_DOT_SIZE: f32 = 7.0;
+pub const FARM_STRIP_COUNTER_GAP: f32 = 10.0;
+pub const FARM_STRIP_DOT_GAP: f32 = 5.0;
+pub const FARM_STRIP_BUTTON_PADDING: f32 = 7.0;
+pub const FARM_STRIP_PILL_HEIGHT: f32 = 22.0;
+pub const FARM_STRIP_PILL_RADIUS: f32 = 11.0;
+pub const FARM_STRIP_PILL_PADDING: f32 = 9.0;
 
 /// Converte um [`Rgb`] do `gsh-term` em [`iced::Color`].
 pub const fn rgb_to_color(rgb: Rgb) -> Color {

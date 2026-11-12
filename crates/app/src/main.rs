@@ -1001,8 +1001,6 @@ impl Shell {
                 on_toggle_files: Msg::ToggleFiles,
                 on_chat: Msg::NewChatTab,
                 on_farm: Msg::OpenFarm,
-                on_database: Msg::OpenDatabase,
-                on_settings: Msg::OpenSettings,
             },
         );
 
@@ -1045,6 +1043,8 @@ impl Shell {
                 &self.workspaces,
                 Msg::SelectWorkspace,
                 Msg::PickWorkspaceFolder,
+                Msg::OpenDatabase,
+                Msg::OpenSettings,
             ));
         }
         body = body.push(center_pane);

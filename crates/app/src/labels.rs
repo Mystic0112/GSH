@@ -385,6 +385,16 @@ pub const FARM_WAITING: &str = "Esperando";
 pub const FARM_IDLE: &str = "Ocioso";
 pub const FARM_DONE: &str = "Terminou";
 pub const FARM_ALERT: &str = "!";
+pub const FARM_NEED_YOU_ONE: &str = "1 precisa de você";
+pub const FARM_NEED_YOU_MANY: &str = "precisam de você";
+
+pub fn farm_need_you(count: usize) -> String {
+    if count == 1 {
+        FARM_NEED_YOU_ONE.to_string()
+    } else {
+        format!("{count} {FARM_NEED_YOU_MANY}")
+    }
+}
 // Configurações
 pub const SETTINGS_TITLE: &str = "Configurações";
 pub const SETTINGS_GENERAL: &str = "Geral";

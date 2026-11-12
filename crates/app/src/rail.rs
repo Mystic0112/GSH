@@ -34,6 +34,8 @@ pub fn view<'a, M: Clone + 'a>(
     workspaces: &'a WorkspaceList,
     on_select: impl Fn(usize) -> M,
     on_add_workspace: M,
+    on_database: M,
+    on_settings: M,
 ) -> Element<'a, M> {
     let add_button = button(
         container(
@@ -119,10 +121,9 @@ pub fn view<'a, M: Clone + 'a>(
                 .size(theme::SIZE_LABEL)
                 .color(theme::palette().text3),
             Space::new().width(Fill),
-            text(labels::ICON_SETTINGS)
-                .font(theme::FONT_ICON)
-                .size(theme::SIZE_TITLE)
-                .color(theme::palette().text3),
+            // ponytail: banco não tem entrada no Flutter; fica no rodapé até decidir
+            footer_icon_button(labels::ICON_DATABASE, on_database),
+            footer_icon_button(labels::ICON_SETTINGS, on_settings),
         ]
         .align_y(Alignment::Center),
     )
@@ -229,6 +230,44 @@ fn workspace_row<'a, M: Clone + 'a>(
             text_color: theme::palette().text,
             border: Border {
                 radius: theme::RADIUS_CARD.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    })
+    .into()
+}
+
+/// Botão pequeno do rodapé (`_SmallIcon` de `projects_rail.dart`): 26×26,
+/// ícone 16 em `text3`, raio 5, hover `panel3`.
+fn footer_icon_button<'a, M: Clone + 'a>(glyph: &'static str, on_press: M) -> Element<'a, M> {
+    button(
+        container(
+            text(glyph)
+                .font(theme::FONT_ICON)
+                .size(theme::SIZE_ICON)
+                .color(theme::palette().text3),
+        )
+        .width(Fill)
+        .height(Fill)
+        .center_x(Fill)
+        .center_y(Fill),
+    )
+    .width(Length::Fixed(26.0))
+    .height(Length::Fixed(26.0))
+    .padding(0)
+    .on_press(on_press)
+    .style(|_: &Theme, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: if hovered {
+                Some(Background::Color(theme::palette().panel3))
+            } else {
+                None
+            },
+            text_color: theme::palette().text3,
+            border: Border {
+                radius: theme::RADIUS_BUTTON.into(),
                 ..Default::default()
             },
             ..Default::default()
