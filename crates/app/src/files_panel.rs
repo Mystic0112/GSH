@@ -172,7 +172,7 @@ fn view_tree_body<'a>(
         return empty_state_label(labels::FILES_EMPTY_FOLDER);
     }
 
-    let mut list = column![].spacing(1.0).padding([4, 6]);
+    let mut list = column![].spacing(0).padding([4, 6]);
     for item in rows {
         match item {
             TreeRow::Entry {
@@ -186,7 +186,7 @@ fn view_tree_body<'a>(
                 list = list.push(view_entry_row(entry, depth, expanded, selected, git_status));
             }
             TreeRow::Error { depth, error } => {
-                let indent = (depth as f32) * 14.0 + 8.0;
+                let indent = (depth as f32) * 12.0 + 8.0;
                 list = list.push(
                     container(
                         text(error.ui_message())
@@ -215,7 +215,7 @@ fn view_entry_row<'a>(
     selected: bool,
     git_status: Option<gsh_git::GitFileStatus>,
 ) -> Element<'a, FilesMsg> {
-    let indent = (depth as f32) * 14.0 + 6.0;
+    let indent = (depth as f32) * 12.0 + 6.0;
     let chevron = if entry.is_dir {
         if expanded {
             labels::ICON_CHEVRON_DOWN

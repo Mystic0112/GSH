@@ -51,9 +51,13 @@ pub fn view<'a, M: Clone + 'a>(
     .align_y(Alignment::Center);
 
     let right = row![
-        counter(props.counts.finished, theme::palette().ok),
-        counter(props.counts.waiting_badge(), theme::palette().warn),
-        counter(props.counts.working, theme::palette().accent),
+        row![
+            counter(props.counts.finished, theme::palette().ok),
+            counter(props.counts.waiting_badge(), theme::palette().warn),
+            counter(props.counts.working, theme::palette().accent),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center),
         Space::new().width(4),
         icon_toggle_button(labels::ICON_CHAT, false, actions.on_chat),
         icon_toggle_button(labels::ICON_FARM, false, actions.on_farm),
@@ -114,7 +118,7 @@ fn icon_toggle_button<'a, M: Clone + 'a>(
         container(
             text(glyph)
                 .font(theme::FONT_ICON)
-                .size(17)
+                .size(theme::SIZE_TOPBAR_ICON)
                 .color(if selected {
                     theme::palette().accent_text
                 } else {
@@ -133,7 +137,7 @@ fn icon_toggle_button<'a, M: Clone + 'a>(
     .style(move |_: &Theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         let bg = if selected {
-            Some(Background::Color(theme::palette().panel2))
+            Some(Background::Color(theme::palette().accent_soft))
         } else if hovered {
             Some(Background::Color(theme::palette().panel3))
         } else {

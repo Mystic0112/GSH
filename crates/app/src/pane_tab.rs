@@ -15,7 +15,7 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         theme::palette().text3
     };
     let title_color = if is_active {
-        theme::palette().text
+        theme::palette().accent_text
     } else {
         theme::palette().text3
     };
@@ -58,8 +58,6 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
             let bg = if hovered {
                 theme::palette().panel3
-            } else if is_active {
-                theme::palette().panel
             } else {
                 theme::palette().bg
             };
@@ -117,11 +115,7 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
     .width(Fill)
     .height(Fill)
     .style(move |_: &Theme| container::Style {
-        background: Some(Background::Color(if is_active {
-            theme::palette().panel
-        } else {
-            theme::palette().bg
-        })),
+        background: Some(Background::Color(theme::palette().bg)),
         ..Default::default()
     });
 

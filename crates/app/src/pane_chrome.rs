@@ -1,7 +1,7 @@
 //! Moldura do pane central (`pane_view.dart` e `pane_tab_leading.dart` do Flutter).
 //!
 //! Barra de abas de 40px em `BG` com divisória inferior `BORDER` (aba ativa em
-//! `PANEL` com indicador inferior `ACCENT` de 2px e hover `PANEL3`, abas
+//! `BG` com indicador inferior `ACCENT` de 2px e hover `PANEL3`, abas
 //! inativas em `BG` com texto `TEXT3`, botão `×` por aba, botão `+` que abre
 //! novo terminal e controles de split/fechar) e corpo em `PANEL` com borda `BORDER`.
 

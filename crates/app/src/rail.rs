@@ -171,13 +171,8 @@ fn workspace_row<'a, M: Clone + 'a>(
     .style(move |_: &Theme| container::Style {
         background: Some(Background::Color(theme::palette().panel)),
         border: Border {
-            color: if selected {
-                theme::palette().border2
-            } else {
-                theme::palette().border
-            },
-            width: 1.0,
-            radius: theme::RADIUS_CARD.into(),
+            radius: theme::RADIUS_BUTTON.into(),
+            ..Default::default()
         },
         ..Default::default()
     });
@@ -192,7 +187,7 @@ fn workspace_row<'a, M: Clone + 'a>(
                     theme::FONT_BODY
                 })
                 .size(theme::SIZE_RAIL_ITEM)
-                .color(theme::palette().text),
+                .color(theme::palette().text2),
         )
         .width(Fill),
     ]
@@ -218,35 +213,39 @@ fn workspace_row<'a, M: Clone + 'a>(
         content = content.push(branch_badge);
     }
 
-    button(content)
-        .width(Fill)
-        .padding([7, 9])
-        .on_press(on_press)
-        .style(move |_: &Theme, status| {
-            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let bg = if selected {
-                Some(Background::Color(theme::palette().panel2))
-            } else if hovered {
-                Some(Background::Color(theme::palette().panel3))
-            } else {
-                None
-            };
-            button::Style {
-                background: bg,
-                text_color: theme::palette().text,
-                border: Border {
-                    color: if selected {
-                        theme::palette().accent
-                    } else {
-                        theme::palette().border
-                    },
-                    width: if selected { 1.0 } else { 0.0 },
-                    radius: theme::RADIUS_CARD.into(),
-                },
+    let indicator =
+        container(Space::new().width(2).height(20)).style(move |_: &Theme| container::Style {
+            background: selected.then_some(Background::Color(theme::palette().accent)),
+            ..Default::default()
+        });
+    button(
+        row![indicator, content]
+            .spacing(7)
+            .align_y(Alignment::Center),
+    )
+    .width(Fill)
+    .padding([7, 9])
+    .on_press(on_press)
+    .style(move |_: &Theme, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let bg = if selected {
+            Some(Background::Color(theme::palette().panel2))
+        } else if hovered {
+            Some(Background::Color(theme::palette().panel3))
+        } else {
+            None
+        };
+        button::Style {
+            background: bg,
+            text_color: theme::palette().text,
+            border: Border {
+                radius: theme::RADIUS_CARD.into(),
                 ..Default::default()
-            }
-        })
-        .into()
+            },
+            ..Default::default()
+        }
+    })
+    .into()
 }
 
 fn hairline_h<'a, M: 'a>() -> Element<'a, M> {

@@ -255,14 +255,14 @@ fn nav_item(
     .on_press(Message::Select(section))
     .style(move |_, status| button::Style {
         background: if selected {
-            Some(Background::Color(theme::palette().panel2))
+            Some(Background::Color(theme::palette().accent_soft))
         } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
             Some(Background::Color(theme::palette().panel3))
         } else {
             None
         },
         text_color: if selected {
-            theme::palette().text
+            theme::palette().accent_text
         } else {
             theme::palette().text2
         },

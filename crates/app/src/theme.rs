@@ -366,6 +366,8 @@ pub const FONT_TITLE_BOLD: Font = Font {
 // Escala tipográfica (`app_typography.dart`)
 pub const SIZE_DISPLAY: f32 = 22.0;
 pub const SIZE_TOPBAR_TITLE: f32 = 14.0;
+pub const SIZE_ICON: f32 = 16.0;
+pub const SIZE_TOPBAR_ICON: f32 = 17.0;
 pub const SIZE_TITLE: f32 = 13.0;
 pub const SIZE_TAB: f32 = 12.5;
 pub const SIZE_BODY: f32 = 14.5;
