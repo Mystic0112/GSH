@@ -595,6 +595,10 @@ impl Shell {
     /// Abre um terminal novo no pane focado, no diretório do workspace.
     fn open_terminal_in_focused(&mut self) {
         let cwd = self.active_workspace_dir().map(Path::to_path_buf);
+        self.open_terminal_for_dir(cwd);
+    }
+
+    fn open_terminal_for_dir(&mut self, cwd: Option<PathBuf>) {
         let id = self.panes.alloc_term_id();
         self.panes.focused_model_mut().open_terminal(id);
         let new_term = self.spawn_terminal_for_dir(id, cwd.as_deref());
@@ -781,7 +785,28 @@ impl Shell {
             }
             Msg::Chat(id, chat_msg) => {
                 if let Some(chat) = self.chats.get_mut(&id) {
-                    chat.update(chat_msg).map(move |m| Msg::Chat(id, m))
+                    let task = chat.update(chat_msg).map(move |m| Msg::Chat(id, m));
+                    let handoff = chat.take_handoff_requested().then(|| {
+                        (
+                            chat.session_id().map(ToOwned::to_owned),
+                            chat.cwd().map(Path::to_path_buf),
+                        )
+                    });
+                    if let Some((Some(session_id), cwd)) = handoff.filter(|(sid, _)| {
+                        sid.as_deref().is_some_and(gsh_chat::history::is_session_id)
+                    }) {
+                        self.open_terminal_for_dir(cwd);
+                        if let Some(PaneTab::Terminal(term_id)) =
+                            self.panes.focused_model().active_tab().cloned()
+                        {
+                            if let Some(term) = self.terminals.get_mut(&term_id) {
+                                let command =
+                                    format!("claude --resume {session_id} --remote-control\n");
+                                let _ = term.send_text(&command);
+                            }
+                        }
+                    }
+                    task
                 } else {
                     Task::none()
                 }

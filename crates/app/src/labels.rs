@@ -48,6 +48,49 @@ pub const CHAT_ENGINE_EXITED_PREFIX: &str = "O claude encerrou (código ";
 pub const CHAT_ENGINE_EXITED_SUFFIX: &str = ").";
 pub const CHAT_TURN_FAILED_PREFIX: &str = "O turno terminou com erro: ";
 pub const CHAT_COST_PREFIX: &str = "custo US$ ";
+pub const CHAT_ALLOW: &str = "Permitir";
+pub const CHAT_ALWAYS: &str = "Sempre permitir";
+pub const CHAT_DENY: &str = "Negar";
+pub const CHAT_ATTACH: &str = "Anexar arquivos";
+pub const CHAT_MODE_PLAN: &str = "Planejar";
+pub const CHAT_MODE_EDITS: &str = "Aceitar edições";
+pub const CHAT_MODE_IGNORE: &str = "Ignorar permissões";
+pub const CHAT_MODE_ASK: &str = "Pedir permissão";
+pub const CHAT_RESUME: &str = "Retomar conversa";
+pub const CHAT_RESUME_EMPTY: &str = "Retomar uma conversa";
+pub const CHAT_REMOTE_CONTROL: &str = "Remote Control";
+pub const CHAT_RECENT_SESSIONS: &str = "Conversas recentes";
+pub const CHAT_RESUME_NONE: &str = "Nenhuma conversa recente.";
+pub const CHAT_USAGE: &str = "Uso da conta";
+pub const CHAT_USAGE_UNAVAILABLE: &str = "Uso da conta indisponível";
+pub const CHAT_USAGE_SESSION: &str = "Sessão (5 horas)";
+pub const CHAT_USAGE_WEEKLY: &str = "Semana";
+pub const CHAT_USAGE_RESET_TODAY: &str = "reinicia hoje às ";
+pub const CHAT_USAGE_RESET_ON: &str = "reinicia em ";
+pub const CHAT_CONTEXT_UNAVAILABLE: &str = "Contexto indisponível";
+pub const CHAT_PEER_PICKER: &str = "Enviar para sessão…";
+pub const CHAT_HANDOFF: &str = "Continuar no terminal";
+pub const CHAT_HANDOFF_NO_SESSION: &str = "Ainda não há uma sessão para continuar no terminal.";
+pub const CHAT_HANDOFF_BUSY: &str = "Aguarde o turno terminar antes de continuar no terminal.";
+pub const CHAT_HANDOFF_ACTIVE: &str = "Esta conversa já está no Remote Control: ";
+pub const CHAT_HANDOFF_NOTICE: &str = "A conversa continuará no terminal.";
+pub const CHAT_EDITED_FILES: &str = "arquivos editados";
+pub const CHAT_ASK_LIST_SESSIONS: &str = "Liste as sessões para as quais posso mandar mensagem, com ListAgents, e espere eu escolher uma. ";
+pub const CHAT_NO_PEER_SESSIONS: &str = "Nenhuma outra sessão do Claude Code rodando agora.";
+pub const CHAT_SEND_TO_SESSION_PREFIX: &str = "Mande esta mensagem para a sessão \"";
+pub const CHAT_SEND_TO_SESSION_SUFFIX: &str = "\" com SendMessage e espere a resposta: ";
+pub const CHAT_LIST_ALL_SESSIONS: &str = "Listar todas as sessões (pergunta ao agente)…";
+pub const CHAT_RENAME: &str = "Renomear conversa";
+pub const CHAT_PLAN_APPROVE: &str = "Aprovar plano";
+pub const CHAT_PLAN_REFINE: &str = "Refinar plano";
+pub const CHAT_QUESTION_SEND: &str = "Enviar resposta";
+pub const CHAT_RESUME_LIVE_TITLE: &str = "Esta sessão ainda pode estar ativa. Retomar mesmo assim?";
+pub const CHAT_RESUME_CONFIRM: &str = "Retomar mesmo assim";
+pub const CHAT_RESUME_CANCEL: &str = "Cancelar";
+pub const CHAT_QUESTION_TITLE: &str = "O Claude precisa de algumas respostas";
+pub const CHAT_QUESTION_FREE_TEXT: &str = "Outra resposta…";
+pub const CHAT_PLAN_TITLE: &str = "Plano proposto";
+pub const CHAT_PLAN_FEEDBACK: &str = "O que você gostaria de ajustar?";
 pub const CHAT_CMD_PREFIX: &str = "$ ";
 pub const CHAT_TOOL_NAME_PAD: &str = "  ";
 
@@ -132,6 +175,14 @@ pub const ICON_GIT_BRANCH: &str = "\u{e0b6}";
 pub const ICON_ACCOUNT_TREE: &str = "\u{e97a}";
 pub const ICON_DIFF: &str = "\u{eb7d}";
 pub const ICON_MINUS: &str = "\u{e15b}";
+pub const ICON_SPEED: &str = "\u{e9e4}";
+pub const ICON_HISTORY: &str = "\u{e8b3}";
+pub const ICON_FORUM: &str = "\u{e8af}";
+pub const ICON_PHONE_IPHONE: &str = "\u{f2da}";
+pub const ICON_LAPTOP: &str = "\u{e31e}";
+pub const ICON_KEYBOARD_RETURN: &str = "\u{e31b}";
+pub const ICON_IMAGE: &str = "\u{e3f4}";
+pub const ICON_EXPAND_MORE: &str = "\u{e5cf}";
 
 // Controle de versão (Git) — painel lateral, histórico e diff (`pt_BR.i18n.json` -> `gsh.fileTreePanel`)
 pub const SOURCE_CONTROL_HEADER: &str = "Controle de versão";
@@ -303,6 +354,27 @@ pub fn format_chat_empty_subtitle(folder: &str) -> String {
 /// Aviso de falha ao iniciar o processo do `claude` (`tr.startFailed`).
 pub fn format_chat_start_failed(detail: &str) -> String {
     format!("{CHAT_START_FAILED_PREFIX}{detail}")
+}
+pub fn format_chat_clipboard_failed(detail: &str) -> String {
+    format!("Não foi possível ler a imagem da área de transferência: {detail}")
+}
+pub fn format_chat_title_failed(detail: &str) -> String {
+    format!("Não foi possível renomear a conversa: {detail}")
+}
+pub fn format_chat_account_failed(detail: &str) -> String {
+    format!("Não foi possível consultar a conta Claude: {detail}")
+}
+pub fn format_chat_context(tokens: u64, window: u64) -> String {
+    fn compact(n: u64) -> String {
+        if n >= 1_000_000 {
+            format!("{:.1}M", n as f64 / 1_000_000.0)
+        } else if n >= 1_000 {
+            format!("{:.1}k", n as f64 / 1_000.0)
+        } else {
+            n.to_string()
+        }
+    }
+    format!("Contexto {}/{} tokens", compact(tokens), compact(window))
 }
 
 /// Aviso de encerramento inesperado do `claude` (`tr.engineExited`).
