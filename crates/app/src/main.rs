@@ -46,6 +46,7 @@ pub mod island;
 pub mod labels;
 pub mod pane_chrome;
 pub mod pane_close_dialog;
+pub mod pane_focus;
 pub mod pane_model;
 pub mod pane_strip;
 pub mod pane_tab;
@@ -532,15 +533,6 @@ impl Shell {
                 }
             }
             Msg::TerminalIn(id, term_msg) => {
-                // o canvas captura o clique: é ele quem avisa para focar o pane do terminal
-                if matches!(
-                    term_msg,
-                    TerminalMsg::ClearSelection | TerminalMsg::StartSelection { .. }
-                ) {
-                    if let Some(pane) = self.panes.pane_of(&PaneTab::Terminal(id)) {
-                        self.panes.focus(pane);
-                    }
-                }
                 self.terminals.get_mut(&id).map_or_else(Task::none, |term| {
                     term.update(term_msg)
                         .map(move |message| Msg::TerminalIn(id, message))
@@ -1012,7 +1004,10 @@ impl Shell {
 
     /// Um pane inteiro (barra de abas + conteúdo); todo pane tem os botões de dividir e fechar.
     fn pane_view<'a>(&'a self, pane: Pane, model: &'a PaneModel) -> Element<'a, Msg> {
-        let content = self.pane_content(pane, model);
+        // pointer-down no conteúdo foca o pane mesmo que o filho capture o clique
+        let on_focus = (self.panes.focused() != pane).then_some(Msg::FocusPane(pane));
+        let content =
+            pane_focus::FocusOnPress::new(self.pane_content(pane, model), on_focus.clone()).into();
         let dirty = |path: &Path| {
             self.editors
                 .get(path)
@@ -1021,9 +1016,7 @@ impl Shell {
         let hovered = self
             .hovered_tab
             .and_then(|(hovered_pane, index)| (hovered_pane == pane).then_some(index));
-        // Foca o pane no clique sem engolir o botão: o `mouse_area` só vê o clique que
-        // nenhum filho capturou, e cada botão da barra já foca o próprio pane.
-        let chrome = pane_chrome::view(
+        pane_chrome::view(
             model,
             content,
             ChromeCallbacks {
@@ -1036,12 +1029,12 @@ impl Shell {
                 on_close_pane: Msg::ClosePane(pane),
                 // a dica é uma camada acima de tudo: não pode vazar por cima do diálogo
                 show_tooltips: self.pending_close_pane.is_none(),
+                on_focus,
             },
             &dirty,
             hovered,
             move |index| Msg::TabHover(index.map(|index| (pane, index))),
-        );
-        mouse_area(chrome).on_press(Msg::FocusPane(pane)).into()
+        )
     }
 
     fn view(&self) -> Element<'_, Msg> {
@@ -1667,15 +1660,5 @@ mod tests {
         let _ = shell.update(Msg::ClosePane(first));
         assert_eq!(shell.panes.focused(), first);
         assert_eq!(shell.pending_close_pane, Some(first));
-    }
-
-    #[test]
-    fn clique_no_canvas_do_terminal_foca_o_pane_dele() {
-        let mut shell = test_shell();
-        let first = shell.panes.focused();
-        let _ = shell.update(Msg::SplitPane(first, Axis::Vertical));
-        assert_ne!(shell.panes.focused(), first);
-        let _ = shell.update(Msg::TerminalIn(1, TerminalMsg::ClearSelection));
-        assert_eq!(shell.panes.focused(), first);
     }
 }

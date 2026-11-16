@@ -6,7 +6,7 @@
 //! novo terminal e controles de split/fechar) e corpo em `PANEL` com borda `BORDER`.
 
 use iced::widget::pane_grid;
-use iced::widget::{button, canvas, column, container, row, text, tooltip};
+use iced::widget::{button, canvas, column, container, mouse_area, row, text, tooltip};
 use iced::{Background, Border, Element, Fill, Theme};
 
 use crate::labels;
@@ -27,6 +27,9 @@ pub struct ChromeCallbacks<M, FSelect, FClose> {
     pub on_close_pane: M,
     /// `false` com um diálogo aberto: a dica é um overlay e ficaria por cima dele.
     pub show_tooltips: bool,
+    /// Foca o pane ao clicar no vazio da barra (o conteúdo cuida do próprio clique);
+    /// `None` quando o pane já é o focado.
+    pub on_focus: Option<M>,
 }
 
 /// Envolve o conteúdo ativo do pane (terminal ou viewer) com a barra de abas.
@@ -51,7 +54,13 @@ where
         callbacks.show_tooltips,
     );
     // as ferramentas ficam dentro da barra (mesmo fundo e borda de baixo), como em pane_view.dart
+    let on_focus = callbacks.on_focus.clone();
     let tab_strip = view_tab_strip(model, callbacks, dirty, hovered, on_hover, split_controls);
+    // o vazio da barra foca o pane; os botões capturam o próprio clique e já focam o pane
+    let tab_strip: Element<'a, M> = match on_focus {
+        Some(message) => mouse_area(tab_strip).on_press(message).into(),
+        None => tab_strip,
+    };
 
     let body = container(active_content)
         .width(Fill)

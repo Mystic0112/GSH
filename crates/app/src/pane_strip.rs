@@ -5,7 +5,7 @@ use crate::{
     pane_tab::view_tab,
     theme,
 };
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
 
 pub(crate) fn view_tab_strip<'a, M, FSelect, FClose, FHover>(
@@ -39,11 +39,20 @@ where
 
     let add_tab = view_add_tab_button(callbacks.on_new_terminal);
     let bar = container(
-        // "+" logo depois da última aba; o vazio fica antes das ferramentas (pane_view.dart)
-        row![tabs_row, add_tab, Space::new().width(Fill), tools]
-            .width(Fill)
-            .height(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
-            .align_y(Alignment::Center),
+        // abas e "+" numa faixa com rolagem horizontal que encolhe; as ferramentas ficam
+        // sempre visíveis à direita (o Expanded + SingleChildScrollView de pane_view.dart)
+        row![
+            scrollable(row![tabs_row, add_tab].height(Fill))
+                .direction(scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::new().width(0).scroller_width(0),
+                ))
+                .width(Fill)
+                .height(Fill),
+            tools
+        ]
+        .width(Fill)
+        .height(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
+        .align_y(Alignment::Center),
     )
     .width(Fill)
     .height(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
