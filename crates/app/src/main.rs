@@ -588,7 +588,10 @@ impl Shell {
                     self.editors.remove(&path);
                 }
             }
-            PaneTab::Farm | PaneTab::Settings | PaneTab::Database | PaneTab::Harness(_) => {}
+            PaneTab::Settings => {
+                let _ = self.settings.update(settings::Message::Back);
+            }
+            PaneTab::Farm | PaneTab::Database | PaneTab::Harness(_) => {}
         }
     }
 
@@ -598,6 +601,32 @@ impl Shell {
         let id = self.panes.alloc_term_id();
         self.panes.focused_model_mut().open_terminal(id);
         let new_term = self.spawn_terminal_for_dir(id, cwd.as_deref());
+        self.terminals.insert(id, new_term);
+    }
+
+    /// Roda `command` numa aba nova de terminal do workspace ativo e fecha as Configurações
+    /// (`runInShellTerminal` do Flutter). Sem workspace ativo, abre o diálogo de aviso.
+    fn run_in_workspace_terminal(&mut self, command: &str) {
+        let Some(cwd) = self.active_workspace_dir().map(Path::to_path_buf) else {
+            self.settings.claude.show_no_workspace();
+            return;
+        };
+        if let Some(pane) = self.panes.pane_of(&PaneTab::Settings) {
+            self.panes.focus(pane);
+            if let Some(idx) = self
+                .panes
+                .focused_model()
+                .tabs()
+                .iter()
+                .position(|tab| *tab == PaneTab::Settings)
+            {
+                let _ = self.panes.focused_model_mut().close(idx);
+            }
+        }
+        let id = self.panes.alloc_term_id();
+        self.panes.focused_model_mut().open_terminal(id);
+        let mut new_term = self.spawn_terminal_for_dir(id, Some(cwd.as_path()));
+        new_term.send_command(command);
         self.terminals.insert(id, new_term);
     }
 
@@ -1015,6 +1044,7 @@ impl Shell {
                 Task::none()
             }
             Msg::OpenSettings => {
+                self.settings.claude.workspace = self.active_workspace_dir().map(Path::to_path_buf);
                 if !self
                     .panes
                     .focused_model()
@@ -1027,13 +1057,35 @@ impl Shell {
                 Task::none()
             }
             Msg::Settings(message) => {
-                self.settings.update(message);
+                self.settings.claude.workspace = self.active_workspace_dir().map(Path::to_path_buf);
+                let task = self.settings.update(message);
                 if self.settings.saved {
                     for editor in self.editors.values_mut() {
                         editor.set_config(self.settings.current.editor.clone());
                     }
                 }
-                Task::none()
+                if let Some(command) = self.settings.claude.take_terminal_command() {
+                    self.run_in_workspace_terminal(&command);
+                }
+                if let Some(path) = self.settings.claude.take_open_file() {
+                    if let Some(pane) = self.panes.pane_of(&PaneTab::Settings) {
+                        self.panes.focus(pane);
+                        if let Some(idx) = self
+                            .panes
+                            .focused_model()
+                            .tabs()
+                            .iter()
+                            .position(|tab| *tab == PaneTab::Settings)
+                        {
+                            let _ = self.panes.focused_model_mut().close(idx);
+                        }
+                    }
+                    self.open_in_editor(path);
+                }
+                if self.settings.claude.take_quit_request() {
+                    return iced::exit();
+                }
+                task.map(Msg::Settings)
             }
             Msg::OpenFarm => {
                 self.panes.focused_model_mut().open_farm();

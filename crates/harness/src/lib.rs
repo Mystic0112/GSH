@@ -29,6 +29,7 @@ use std::path::PathBuf;
 pub use create::{create, slug, CreateError};
 pub use frontmatter::parse_frontmatter;
 pub use hook::hook_script_path;
+pub use json::Json;
 pub use read::read;
 
 /// Acima disto o Claude Code avisa que o CLAUDE.md pesa na performance.

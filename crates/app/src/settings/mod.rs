@@ -1,6 +1,7 @@
 //! Estado e persistência das configurações gerais.
 
 mod appearance;
+pub mod claude;
 mod controls;
 pub mod view;
 
@@ -44,6 +45,7 @@ pub enum Message {
     TranscriptWidthChanged(gsh_config::schema::TranscriptWidth),
     ThemeSelected(gsh_config::schema::AppThemeMode),
     SaveControls,
+    Claude(claude::Message),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +79,7 @@ pub struct Settings {
     pub scale: f32,
     pub error: Option<Error>,
     pub saved: bool,
+    pub claude: claude::ClaudeState,
 }
 
 impl Default for Settings {
@@ -103,6 +106,7 @@ impl Default for Settings {
             scale: 1.0,
             error: None,
             saved: false,
+            claude: claude::ClaudeState::default(),
         }
     }
 }
@@ -110,6 +114,7 @@ impl Default for Settings {
 impl Settings {
     pub fn reload(&mut self) {
         self.saved = false;
+        self.claude.reset();
         match &self.path {
             Ok(path) => match gsh_config::load(path) {
                 Ok(config) => {
@@ -146,7 +151,7 @@ impl Settings {
     }
 
     /// Grava o tema escolhido e o aplica ao vivo; se não gravar, mantém o anterior.
-    fn select_theme(&mut self, mode: gsh_config::schema::AppThemeMode) {
+    pub(super) fn select_theme(&mut self, mode: gsh_config::schema::AppThemeMode) {
         let result = match &self.path {
             Ok(path) => appearance::save_theme(path, mode.name()),
             Err(_) => Err(Error::Config(gsh_config::ConfigError::NoHome)),
@@ -160,15 +165,23 @@ impl Settings {
         self.error = result.err();
     }
 
-    pub fn update(&mut self, message: Message) {
+    pub fn update(&mut self, message: Message) -> iced::Task<Message> {
         match message {
-            Message::Back => {}
+            Message::Back => return claude::update::commit_pending(self).map(Message::Claude),
             Message::SearchChanged(value) => self.nav_search = value,
             Message::SideChanged(claude) => {
+                let task = claude::update::commit_pending(self).map(Message::Claude);
                 if self.nav_claude && !claude {
                     self.section = Section::General;
+                } else if !self.nav_claude && claude {
+                    self.claude.tab = claude::Tab::General;
+                    self.claude.refresh_snapshot();
                 }
                 self.nav_claude = claude;
+                return task;
+            }
+            Message::Claude(message) => {
+                return claude::update::update(self, message).map(Message::Claude);
             }
             Message::Select(section) => {
                 self.section = section;
@@ -179,55 +192,55 @@ impl Settings {
                 self.shell = v;
                 self.saved = false;
                 self.error = None;
-                self.update(Message::SaveControls);
+                let _ = self.update(Message::SaveControls);
             }
             Message::ScrollbackChanged(v) => {
                 self.scrollback = v;
                 self.saved = false;
                 self.error = None;
-                self.update(Message::SaveControls);
+                let _ = self.update(Message::SaveControls);
             }
             Message::TerminalSizeChanged(v) => {
                 self.terminal_size = v;
                 self.saved = false;
                 self.error = None;
-                self.update(Message::SaveControls);
+                let _ = self.update(Message::SaveControls);
             }
             Message::TabSizeChanged(v) => {
                 self.tab_size = v;
                 self.saved = false;
                 self.error = None;
-                self.update(Message::SaveControls);
+                let _ = self.update(Message::SaveControls);
             }
             Message::HighlightChanged(v) => {
                 self.highlight = v;
                 self.saved = false;
                 self.error = None;
-                self.update(Message::SaveControls);
+                let _ = self.update(Message::SaveControls);
             }
             Message::WrapChanged(v) => {
                 self.wrap = v;
                 self.saved = false;
                 self.error = None;
-                self.update(Message::SaveControls);
+                let _ = self.update(Message::SaveControls);
             }
             Message::NotificationsChanged(v) => {
                 self.notifications = v;
                 self.saved = false;
                 self.error = None;
-                self.update(Message::SaveControls);
+                let _ = self.update(Message::SaveControls);
             }
             Message::PermissionSoundChanged(v) => {
                 self.permission_sound = v;
                 self.saved = false;
                 self.error = None;
-                self.update(Message::SaveControls);
+                let _ = self.update(Message::SaveControls);
             }
             Message::TranscriptWidthChanged(v) => {
                 self.transcript_width = v;
                 self.saved = false;
                 self.error = None;
-                self.update(Message::SaveControls);
+                let _ = self.update(Message::SaveControls);
             }
             Message::ThemeSelected(mode) => self.select_theme(mode),
             Message::SaveControls => {
@@ -251,7 +264,7 @@ impl Settings {
                 self.interface_size = value;
                 self.error = None;
                 self.saved = false;
-                self.update(Message::SaveControls);
+                let _ = self.update(Message::SaveControls);
             }
             Message::SaveAppearance => {
                 let result = match &self.path {
@@ -268,7 +281,7 @@ impl Settings {
                 self.locale = value;
                 self.error = None;
                 self.saved = false;
-                self.update(Message::Save);
+                let _ = self.update(Message::Save);
             }
             Message::Save => {
                 let result = match &self.path {
@@ -286,6 +299,7 @@ impl Settings {
                 self.error = result.err();
             }
         }
+        iced::Task::none()
     }
 }
 
@@ -325,7 +339,7 @@ fn save_locale(path: &Path, value: &str) -> Result<(), Error> {
     write_atomic(path, &contents)
 }
 
-fn write_atomic(path: &Path, contents: &str) -> Result<(), Error> {
+pub(super) fn write_atomic(path: &Path, contents: &str) -> Result<(), Error> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -390,7 +404,7 @@ mod tests {
             path: Ok(path.clone()),
             ..Settings::default()
         };
-        settings.update(Message::ThemeSelected(AppThemeMode::Light));
+        let _ = settings.update(Message::ThemeSelected(AppThemeMode::Light));
         assert!(settings.saved && settings.error.is_none());
         assert_eq!(settings.theme_mode, AppThemeMode::Light);
         assert_eq!(crate::theme::active(), ThemeVariant::Light);
@@ -407,7 +421,7 @@ mod tests {
         assert_eq!(reloaded.theme_mode, AppThemeMode::Light);
         assert_eq!(crate::theme::active(), ThemeVariant::Light);
 
-        reloaded.update(Message::ThemeSelected(AppThemeMode::System));
+        let _ = reloaded.update(Message::ThemeSelected(AppThemeMode::System));
         assert!(reloaded.error.is_none());
         assert_eq!(reloaded.theme_mode, AppThemeMode::System);
         assert_eq!(
@@ -428,13 +442,13 @@ mod tests {
             path: Ok(path.clone()),
             ..Settings::default()
         };
-        settings.update(Message::LocaleChanged("es".into()));
+        let _ = settings.update(Message::LocaleChanged("es".into()));
         assert_eq!(
             gsh_config::load(&path).unwrap().locale.as_deref(),
             Some("es")
         );
-        settings.update(Message::Select(Section::Notifications));
-        settings.update(Message::NotificationsChanged(false));
+        let _ = settings.update(Message::Select(Section::Notifications));
+        let _ = settings.update(Message::NotificationsChanged(false));
         assert!(!gsh_config::load(&path).unwrap().notifications_enabled);
         assert!(std::fs::read_to_string(&path)
             .unwrap()

@@ -1,11 +1,15 @@
 //! Interface da aba de configurações.
-use super::{Error, Message, Section, Settings};
+use super::{claude, Error, Message, Section, Settings};
 use crate::{labels, theme};
 use gsh_config::schema::{AppThemeMode, TranscriptWidth};
 use iced::widget::{button, column, container, pick_list, row, text, text_input};
 use iced::{Alignment, Background, Border, Element, Fill, Theme};
 
-fn choice(label: &'static str, selected: bool, message: Message) -> Element<'static, Message> {
+pub(super) fn choice<M: Clone + 'static>(
+    label: &'static str,
+    selected: bool,
+    message: M,
+) -> Element<'static, M> {
     button(
         text(label)
             .font(if selected {
@@ -62,7 +66,7 @@ fn theme_choices(selected: AppThemeMode) -> Element<'static, Message> {
     ])
 }
 
-fn segmented<'a>(choices: iced::widget::Row<'a, Message>) -> Element<'a, Message> {
+pub(super) fn segmented<'a, M: 'a>(choices: iced::widget::Row<'a, M>) -> Element<'a, M> {
     container(choices)
         .padding(theme::SETTINGS_SEGMENT_PADDING)
         .style(|_| container::Style {
@@ -76,13 +80,15 @@ fn segmented<'a>(choices: iced::widget::Row<'a, Message>) -> Element<'a, Message
         .into()
 }
 
-fn switch(value: bool, message: Message) -> Element<'static, Message> {
+pub(super) fn switch<M: Clone + 'static>(value: bool, message: M) -> Element<'static, M> {
     let p = theme::palette();
     let knob = container(
         iced::widget::Space::new()
             .width(theme::SETTINGS_SWITCH_KNOB)
             .height(theme::SETTINGS_SWITCH_KNOB),
     )
+    .width(theme::SETTINGS_SWITCH_KNOB)
+    .height(theme::SETTINGS_SWITCH_KNOB)
     .style(move |_| container::Style {
         background: Some(if value { p.bg } else { p.text2 }.into()),
         border: Border {
@@ -100,9 +106,11 @@ fn switch(value: bool, message: Message) -> Element<'static, Message> {
             } else {
                 iced::alignment::Horizontal::Left
             })
-            .center_y(Fill)
+            .align_y(iced::alignment::Vertical::Center)
             .padding(theme::SETTINGS_SWITCH_PADDING),
     )
+    .width(theme::SETTINGS_SWITCH_WIDTH)
+    .height(theme::SETTINGS_SWITCH_HEIGHT)
     .padding(0)
     .on_press(message)
     .style(move |_, status| button::Style {
@@ -292,9 +300,8 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
     }
     .spacing(theme::SETTINGS_SECTION_TITLE_GAP)
     .width(Fill);
-    // ponytail: o lado Claude lê ~/.claude (fora do escopo); mostra o aviso até portar
     let mut content = if s.nav_claude {
-        column![text(labels::SETTINGS_CLAUDE_UNAVAILABLE).color(theme::palette().text3)].width(Fill)
+        column![claude::view::panel(s).map(Message::Claude)].width(Fill)
     } else {
         content
     };
@@ -333,10 +340,10 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
     let body = row![
         navigation,
         nav_border,
-        iced::widget::scrollable(panel).height(Fill)
+        iced::widget::scrollable(panel).width(Fill).height(Fill)
     ]
     .height(Fill);
-    container(column![
+    let page = container(column![
         row![
             button(
                 container(
@@ -365,7 +372,8 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
     ])
     .width(Fill)
     .height(Fill)
-    .into()
+    .into();
+    claude::view::overlay(&s.claude, page)
 }
 
 fn matches_search(label: &str, query: &str) -> bool {
@@ -400,33 +408,75 @@ fn navigation(s: &Settings) -> Element<'_, Message> {
             Section::Notifications,
         ),
     ];
-    let mut items = column![].spacing(theme::SETTINGS_NAV_ITEM_SPACING);
+    let mut nav_list = column![];
     let mut found = false;
-    for (icon, label, section) in entries {
-        if !s.nav_claude && matches_search(label, &s.nav_search) {
+    if s.nav_claude {
+        let tab_groups: [(&str, &[claude::Tab]); 3] = [
+            (labels::SETTINGS_CLAUDE_GROUP, &claude::Tab::GROUP_SETTINGS),
+            (
+                labels::SETTINGS_CLAUDE_GROUP_COMPUTER,
+                &claude::Tab::GROUP_COMPUTER,
+            ),
+            (
+                labels::SETTINGS_CLAUDE_GROUP_PERSONALIZATION,
+                &claude::Tab::GROUP_PERSONALIZATION,
+            ),
+        ];
+        for (title, tabs) in tab_groups {
+            let shown: Vec<claude::Tab> = tabs
+                .iter()
+                .copied()
+                .filter(|t| matches_search(t.label(), &s.nav_search))
+                .collect();
+            if shown.is_empty() {
+                continue;
+            }
+            nav_list = nav_list.push(group_heading(title, !found));
             found = true;
-            items = items.push(nav_item(icon, label, section, s.section));
+            let mut group_items = column![].spacing(theme::SETTINGS_NAV_ITEM_SPACING);
+            for tab in shown {
+                group_items = group_items.push(nav_entry(
+                    tab.icon(),
+                    tab.label(),
+                    tab == s.claude.tab,
+                    false,
+                    Message::Claude(claude::Message::Select(tab)),
+                ));
+            }
+            nav_list = nav_list.push(group_items);
         }
-    }
-    let group = if s.nav_claude {
-        labels::SETTINGS_NAV_CLAUDE
-    } else if found {
-        labels::SETTINGS_GSH_DESKTOP
+        if matches_search(labels::SETTINGS_NAV_API_KEYS, &s.nav_search) {
+            nav_list = nav_list.push(group_heading(
+                labels::SETTINGS_CLAUDE_GROUP_PLATFORM,
+                !found,
+            ));
+            found = true;
+            nav_list = nav_list.push(nav_entry(
+                labels::ICON_VPN_KEY,
+                labels::SETTINGS_NAV_API_KEYS,
+                false,
+                true,
+                Message::Claude(claude::Message::OpenUrl(String::from(labels::API_KEYS_URL))),
+            ));
+        }
+        if !found {
+            nav_list = nav_list.push(group_heading(labels::SETTINGS_NAV_NO_RESULTS, true));
+        }
     } else {
-        labels::SETTINGS_NAV_NO_RESULTS
-    };
-    let heading = container(
-        text(group)
-            .font(theme::FONT_BODY)
-            .size(theme::SETTINGS_NAV_GROUP_SIZE)
-            .color(theme::palette().text3),
-    )
-    .padding(iced::Padding {
-        top: theme::SETTINGS_NAV_GROUP_TOP,
-        right: f32::from(theme::SETTINGS_NAV_ITEM_HORIZONTAL),
-        bottom: theme::SETTINGS_NAV_GROUP_BOTTOM,
-        left: f32::from(theme::SETTINGS_NAV_ITEM_HORIZONTAL),
-    });
+        let mut items = column![].spacing(theme::SETTINGS_NAV_ITEM_SPACING);
+        for (icon, label, section) in entries {
+            if matches_search(label, &s.nav_search) {
+                found = true;
+                items = items.push(nav_item(icon, label, section, s.section));
+            }
+        }
+        let group = if found {
+            labels::SETTINGS_GSH_DESKTOP
+        } else {
+            labels::SETTINGS_NAV_NO_RESULTS
+        };
+        nav_list = nav_list.push(group_heading(group, true)).push(items);
+    }
     let search = text_input(labels::SETTINGS_NAV_SEARCH, &s.nav_search)
         .icon(text_input::Icon {
             font: theme::FONT_ICON,
@@ -456,8 +506,7 @@ fn navigation(s: &Settings) -> Element<'_, Message> {
         ..Default::default()
     });
     let list =
-        iced::widget::scrollable(column![heading, items].padding([0, theme::SETTINGS_NAV_PADDING]))
-            .height(Fill);
+        iced::widget::scrollable(nav_list.padding([0, theme::SETTINGS_NAV_PADDING])).height(Fill);
     container(column![
         container(segments).padding(iced::Padding {
             top: f32::from(theme::SETTINGS_NAV_PADDING),
@@ -541,55 +590,98 @@ fn nav_search_style(theme: &Theme, status: text_input::Status) -> text_input::St
     style
 }
 
+fn group_heading(title: &'static str, first: bool) -> Element<'static, Message> {
+    container(
+        text(title)
+            .font(theme::FONT_BODY)
+            .size(theme::SETTINGS_NAV_GROUP_SIZE)
+            .color(theme::palette().text3),
+    )
+    .padding(iced::Padding {
+        top: if first {
+            theme::SETTINGS_NAV_GROUP_TOP
+        } else {
+            theme::SETTINGS_NAV_GROUP_NEXT_TOP
+        },
+        right: f32::from(theme::SETTINGS_NAV_ITEM_HORIZONTAL),
+        bottom: theme::SETTINGS_NAV_GROUP_BOTTOM,
+        left: f32::from(theme::SETTINGS_NAV_ITEM_HORIZONTAL),
+    })
+    .into()
+}
+
 fn nav_item(
     icon: &'static str,
     label: &'static str,
     section: Section,
     current: Section,
 ) -> Element<'static, Message> {
-    let selected = section == current;
-    button(
-        row![
-            text(icon)
-                .font(theme::FONT_ICON)
-                .size(theme::SETTINGS_NAV_ICON_SIZE),
-            text(label)
-                .font(if selected {
-                    theme::FONT_BODY_SEMIBOLD
-                } else {
-                    theme::FONT_BODY
-                })
-                .size(theme::SETTINGS_NAV_TEXT_SIZE)
-        ]
-        .spacing(theme::SETTINGS_NAV_ITEM_GAP)
-        .align_y(Alignment::Center),
+    nav_entry(
+        icon,
+        label,
+        section == current,
+        false,
+        Message::Select(section),
     )
-    .width(Fill)
-    .padding([
-        theme::SETTINGS_NAV_ITEM_VERTICAL,
-        theme::SETTINGS_NAV_ITEM_HORIZONTAL,
-    ])
-    .on_press(Message::Select(section))
-    .style(move |_, status| button::Style {
-        background: if selected
-            || matches!(status, button::Status::Hovered | button::Status::Pressed)
-        {
-            Some(Background::Color(theme::palette().panel3))
-        } else {
-            None
-        },
-        text_color: if selected {
-            theme::palette().text
-        } else {
-            theme::palette().text2
-        },
-        border: Border {
-            radius: theme::SETTINGS_NAV_RADIUS.into(),
+}
+
+fn nav_entry(
+    icon: &'static str,
+    label: &'static str,
+    selected: bool,
+    external: bool,
+    on_press: Message,
+) -> Element<'static, Message> {
+    let mut line = row![
+        text(icon)
+            .font(theme::FONT_ICON)
+            .size(theme::SETTINGS_NAV_ICON_SIZE),
+        text(label)
+            .font(if selected {
+                theme::FONT_BODY_SEMIBOLD
+            } else {
+                theme::FONT_BODY
+            })
+            .size(theme::SETTINGS_NAV_TEXT_SIZE)
+            .width(Fill),
+    ]
+    .spacing(theme::SETTINGS_NAV_ITEM_GAP)
+    .align_y(Alignment::Center);
+    if external {
+        line = line.push(
+            text(labels::ICON_NORTH_EAST)
+                .font(theme::FONT_ICON)
+                .size(15.0)
+                .color(theme::palette().text3),
+        );
+    }
+    button(line)
+        .width(Fill)
+        .padding([
+            theme::SETTINGS_NAV_ITEM_VERTICAL,
+            theme::SETTINGS_NAV_ITEM_HORIZONTAL,
+        ])
+        .on_press(on_press)
+        .style(move |_, status| button::Style {
+            background: if selected
+                || matches!(status, button::Status::Hovered | button::Status::Pressed)
+            {
+                Some(Background::Color(theme::palette().panel3))
+            } else {
+                None
+            },
+            text_color: if selected {
+                theme::palette().text
+            } else {
+                theme::palette().text2
+            },
+            border: Border {
+                radius: theme::SETTINGS_NAV_RADIUS.into(),
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        ..Default::default()
-    })
-    .into()
+        })
+        .into()
 }
 
 fn header_button(_: &Theme, status: button::Status) -> button::Style {
@@ -608,7 +700,7 @@ fn header_button(_: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-fn input_style(_: &Theme, status: text_input::Status) -> text_input::Style {
+pub(super) fn input_style(_: &Theme, status: text_input::Status) -> text_input::Style {
     let p = theme::palette();
     text_input::Style {
         background: Background::Color(p.panel2),
@@ -628,7 +720,7 @@ fn input_style(_: &Theme, status: text_input::Status) -> text_input::Style {
     }
 }
 
-fn locale_style(_: &Theme, _: pick_list::Status) -> pick_list::Style {
+pub(super) fn locale_style(_: &Theme, _: pick_list::Status) -> pick_list::Style {
     let p = theme::palette();
     pick_list::Style {
         text_color: p.text,
@@ -654,20 +746,209 @@ fn setting_row<'a>(label: &'static str, control: Element<'a, Message>) -> Elemen
             iced::widget::Space::new().width(theme::SETTINGS_ROW_GAP),
             control
         ]
+        .width(Fill)
         .align_y(Alignment::Center)
         .padding([theme::SETTINGS_ROW_VERTICAL, 0]),
         crate::panel_widgets::hairline_h()
     ]
+    .width(Fill)
     .into()
 }
 
 #[cfg(test)]
 mod nav_tests {
     use super::matches_search;
+    use crate::labels;
+    use crate::settings::{claude, Message, Settings};
+    use crate::theme;
+    use iced::{Element, Point, Size};
+    use iced_test::simulator::{click, Simulator};
+
+    fn simulator<'a, M>(size: Size, element: impl Into<Element<'a, M>>) -> Simulator<'a, M> {
+        std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
+        let settings = iced::Settings {
+            fonts: theme::EMBEDDED_FONTS
+                .iter()
+                .map(|font| (*font).into())
+                .collect(),
+            default_font: theme::FONT_BODY,
+            ..Default::default()
+        };
+        Simulator::with_size(settings, size, element)
+    }
+
     #[test]
     fn filter_matches_case_insensitively_and_trims_query() {
         assert!(matches_search("Aparência", "  ARÊN  "));
         assert!(matches_search("Terminal", "  "));
         assert!(!matches_search("Terminal", "editor"));
+        for tab in claude::Tab::ALL {
+            assert!(matches_search(tab.label(), &tab.label().to_uppercase()));
+        }
+    }
+
+    #[test]
+    fn claude_tabs_and_overlays_build_without_error() {
+        let mut s = Settings::default();
+        s.claude.home = std::path::PathBuf::new();
+        let _ = s.update(Message::SideChanged(true));
+        for tab in claude::Tab::ALL {
+            let _ = s.update(Message::Claude(claude::Message::Select(tab)));
+            let _ = super::view(&s);
+        }
+        let _ = s.update(Message::Claude(claude::Message::LogoutAsk));
+        s.claude.show_no_workspace();
+        let _ = super::view(&s);
+    }
+
+    #[test]
+    fn general_tab_renders_and_clicks_switches() {
+        let mut s = Settings::default();
+        s.claude.home = std::path::PathBuf::new();
+        let _ = s.update(Message::SideChanged(true));
+        let _ = s.update(Message::Claude(claude::Message::Select(
+            claude::Tab::General,
+        )));
+
+        let mut ui = simulator(Size::new(1100.0, 900.0), super::view(&s));
+        let click_row_switch =
+            |ui: &mut Simulator<'_, Message>, title: &'static str, desc: &'static str| {
+                let title_bounds = ui.find(title).unwrap().visible_bounds().unwrap();
+                let desc_bounds = ui.find(desc).unwrap().visible_bounds().unwrap();
+                let switch_x = title_bounds.x
+                    + title_bounds.width
+                    + theme::SETTINGS_ROW_GAP
+                    + theme::SETTINGS_SWITCH_WIDTH * 0.5;
+                let switch_y = (title_bounds.y + desc_bounds.y + desc_bounds.height) * 0.5;
+                ui.point_at(Point::new(switch_x, switch_y));
+                let _ = ui.simulate(click());
+            };
+        click_row_switch(
+            &mut ui,
+            labels::SETTINGS_GC_REDUCED_MOTION,
+            labels::SETTINGS_GC_REDUCED_MOTION_DESC,
+        );
+        click_row_switch(
+            &mut ui,
+            labels::SETTINGS_GC_NOTIFY_TURN_DONE,
+            labels::SETTINGS_GC_NOTIFY_TURN_DONE_DESC,
+        );
+        click_row_switch(
+            &mut ui,
+            labels::SETTINGS_GC_PUSH_INPUT_NEEDED,
+            labels::SETTINGS_GC_PUSH_INPUT_NEEDED_DESC,
+        );
+        let messages: Vec<Message> = ui.into_messages().collect();
+        assert!(
+            messages.iter().any(|m| matches!(
+                m,
+                Message::Claude(claude::Message::Switch(claude::Switch::ReducedMotion, true))
+            )),
+            "esperava clique no switch de Movimento reduzido, veio: {messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| matches!(
+                m,
+                Message::Claude(claude::Message::Pref(claude::Pref::Notifications(_)))
+            )),
+            "esperava clique no switch de notificações de conclusão, veio: {messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| matches!(
+                m,
+                Message::Claude(claude::Message::Switch(
+                    claude::Switch::PushInputNeeded,
+                    true
+                ))
+            )),
+            "esperava clique no switch de push no celular, veio: {messages:?}"
+        );
+    }
+
+    #[test]
+    fn catalog_headers_keep_add_button_visible_and_clickable_in_900px_pane() {
+        for tab in [
+            claude::Tab::Connectors,
+            claude::Tab::Skills,
+            claude::Tab::Plugins,
+        ] {
+            let mut s = Settings::default();
+            s.claude.home = std::path::PathBuf::new();
+            let _ = s.update(Message::SideChanged(true));
+            let _ = s.update(Message::Claude(claude::Message::Select(tab)));
+
+            let mut ui = simulator(Size::new(900.0, 600.0), super::view(&s));
+            let add_btn = ui.find(labels::SETTINGS_CAT_ADD).unwrap();
+            let bounds = add_btn.visible_bounds().unwrap();
+            assert!(
+                bounds.x + bounds.width <= 900.0,
+                "{tab:?}: botão '+ Adicionar' estourou 900px: {bounds:?}"
+            );
+            let _ = ui.click(labels::SETTINGS_CAT_ADD).unwrap();
+            let messages: Vec<Message> = ui.into_messages().collect();
+            assert!(
+                !messages.is_empty(),
+                "{tab:?}: clique em '+ Adicionar' não emitiu mensagem"
+            );
+        }
+    }
+
+    #[test]
+    fn usage_tab_renders_logged_out_note_and_subscription_bars() {
+        let mut s = Settings::default();
+        s.claude.home = std::path::PathBuf::new();
+        let _ = s.update(Message::SideChanged(true));
+        let _ = s.update(Message::Claude(claude::Message::Select(claude::Tab::Usage)));
+
+        // Estado não-logado / sem limites de plano (`rate_limits_available: false`):
+        let _ = s.update(Message::Claude(claude::Message::UsageLoaded(Ok(
+            claude::cli::Usage {
+                available: false,
+                subscription_type: None,
+                windows: Vec::new(),
+            },
+        ))));
+        {
+            let mut ui = simulator(Size::new(900.0, 600.0), super::view(&s));
+            assert!(ui.find(labels::SETTINGS_USAGE_UNAVAILABLE).is_ok());
+        }
+
+        // Estado logado por assinatura (`rate_limits_available: true`):
+        let _ = s.update(Message::Claude(claude::Message::UsageLoaded(Ok(
+            claude::cli::Usage {
+                available: true,
+                subscription_type: Some(String::from("team")),
+                windows: vec![
+                    claude::cli::UsageWindow {
+                        kind: claude::cli::UsageWindowKind::Session,
+                        label: None,
+                        percent: Some(4.0),
+                        resets_at: Some(2_000_000_000),
+                    },
+                    claude::cli::UsageWindow {
+                        kind: claude::cli::UsageWindowKind::Weekly,
+                        label: None,
+                        percent: Some(63.0),
+                        resets_at: Some(2_000_100_000),
+                    },
+                    claude::cli::UsageWindow {
+                        kind: claude::cli::UsageWindowKind::WeeklyModel,
+                        label: Some(String::from("Fable")),
+                        percent: Some(37.0),
+                        resets_at: Some(2_000_100_000),
+                    },
+                ],
+            },
+        ))));
+        {
+            let mut ui = simulator(Size::new(900.0, 600.0), super::view(&s));
+            assert!(ui.find(labels::SETTINGS_USAGE_PLAN_TEAM).is_ok());
+            assert!(ui.find(labels::SETTINGS_USAGE_WINDOW_SESSION).is_ok());
+            assert!(ui.find(labels::SETTINGS_USAGE_WINDOW_WEEKLY).is_ok());
+            assert!(ui.find("Fable").is_ok());
+            assert!(ui.find("4% usado").is_ok());
+            assert!(ui.find("63% usado").is_ok());
+            assert!(ui.find("37% usado").is_ok());
+        }
     }
 }
