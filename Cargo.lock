@@ -1618,6 +1618,7 @@ dependencies = [
  "gsh-db",
  "gsh-editor",
  "gsh-git",
+ "gsh-harness",
  "gsh-ipc",
  "gsh-search",
  "gsh-term",
@@ -1688,6 +1689,16 @@ dependencies = [
 name = "gsh-git"
 version = "0.1.0"
 dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "gsh-harness"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 

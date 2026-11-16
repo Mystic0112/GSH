@@ -47,6 +47,7 @@ pub mod git_panel;
 pub mod git_presenter;
 pub mod git_state;
 pub mod gorilla;
+pub mod harness_pane;
 pub mod island;
 pub mod labels;
 pub mod pane_chrome;
@@ -68,7 +69,7 @@ pub mod terminal_pane;
 pub mod theme;
 pub mod topbar;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -157,6 +158,8 @@ enum Msg {
     Farm(farm::Message),
     OpenDatabase,
     Database(db_pane::Message),
+    OpenHarness,
+    Harness(harness_pane::Msg),
     SelectWorkspace(usize),
     PickWorkspaceFolder,
     WorkspaceFolderPicked(Option<PathBuf>),
@@ -174,6 +177,7 @@ struct Shell {
     island: AgentIsland,
     farm: farm::FarmPane,
     database: db_pane::DbPane,
+    harness: harness_pane::HarnessState,
     settings: settings::Settings,
     panes: PaneTree,
     /// Pane aguardando a resposta do diálogo "Fechar painel?".
@@ -235,6 +239,7 @@ impl Default for Shell {
             island,
             farm: farm::FarmPane::default(),
             database: db_pane::DbPane::default(),
+            harness: harness_pane::HarnessState::default(),
             settings,
             panes,
             pending_close_pane: None,
@@ -383,6 +388,16 @@ impl Shell {
         }
     }
 
+    /// Botão Harness da topbar: recurso ligado e workspace com pasta local.
+    fn shows_harness(&self) -> bool {
+        self.settings
+            .current
+            .shows_feature(gsh_config::schema::AppFeature::Harness)
+            && self
+                .active_workspace_dir()
+                .is_some_and(|dir| !dir.as_os_str().is_empty())
+    }
+
     fn active_workspace_dir(&self) -> Option<&Path> {
         self.workspaces.active().and_then(|ws| ws.path.as_deref())
     }
@@ -434,7 +449,8 @@ impl Shell {
                 | PaneTab::File(_)
                 | PaneTab::Farm
                 | PaneTab::Settings
-                | PaneTab::Database => None,
+                | PaneTab::Database
+                | PaneTab::Harness(_) => None,
             })
             .collect()
     }
@@ -536,7 +552,7 @@ impl Shell {
                     self.editors.remove(&path);
                 }
             }
-            PaneTab::Farm | PaneTab::Settings | PaneTab::Database => {}
+            PaneTab::Farm | PaneTab::Settings | PaneTab::Database | PaneTab::Harness(_) => {}
         }
     }
 
@@ -549,7 +565,36 @@ impl Shell {
         self.terminals.insert(id, new_term);
     }
 
+    /// Abas Harness visíveis (a ativa de algum pane).
+    fn visible_harnesses(&self) -> BTreeSet<PathBuf> {
+        self.panes
+            .models()
+            .into_iter()
+            .filter_map(|model| match model.active_tab() {
+                Some(PaneTab::Harness(workspace)) => Some(workspace.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// O harness recarrega ao montar a aba e quando ela volta a ficar ativa (o usuário pode
+    /// ter editado os arquivos), qualquer que seja o jeito de chegar nela.
     fn update(&mut self, msg: Msg) -> Task<Msg> {
+        let before = self.visible_harnesses();
+        let task = self.update_inner(msg);
+        let loads: Vec<Task<Msg>> = self
+            .visible_harnesses()
+            .into_iter()
+            .filter(|workspace| !before.contains(workspace))
+            .map(|workspace| self.harness.load(&workspace).map(Msg::Harness))
+            .collect();
+        if loads.is_empty() {
+            return task;
+        }
+        Task::batch(std::iter::once(task).chain(loads))
+    }
+
+    fn update_inner(&mut self, msg: Msg) -> Task<Msg> {
         if matches!(
             &msg,
             Msg::SelectTab(_)
@@ -898,7 +943,10 @@ impl Shell {
                         PaneTab::File(path) => {
                             let _ = self.file_tree.select_file(path);
                         }
-                        PaneTab::Farm | PaneTab::Settings | PaneTab::Database => {}
+                        PaneTab::Farm
+                        | PaneTab::Settings
+                        | PaneTab::Database
+                        | PaneTab::Harness(_) => {}
                     }
                 }
                 Task::none()
@@ -952,6 +1000,22 @@ impl Shell {
             Msg::Farm(farm::Message::Focus(pane_id)) => {
                 self.reveal_terminal_by_pane_id(&pane_id);
                 Task::none()
+            }
+            Msg::OpenHarness => {
+                if let Some(workspace) = self.active_workspace_dir().map(Path::to_path_buf) {
+                    if let Some(pane) = self.panes.pane_of(&PaneTab::Harness(workspace.clone())) {
+                        self.panes.focus(pane);
+                    }
+                    self.panes.focused_model_mut().open_harness(&workspace);
+                }
+                Task::none()
+            }
+            Msg::Harness(message) => {
+                let (task, open) = self.harness.update(message);
+                if let Some(path) = open {
+                    self.open_in_editor(path);
+                }
+                task.map(Msg::Harness)
             }
             Msg::OpenDatabase => {
                 self.panes.focused_model_mut().open_database();
@@ -1138,9 +1202,16 @@ impl Shell {
         } else {
             Subscription::none()
         };
+        let harness_spinner = if self.harness.any_loading() {
+            iced::time::every(Duration::from_millis(harness_pane::SPIN_TICK_MS))
+                .map(|_| Msg::Harness(harness_pane::Msg::Spin))
+        } else {
+            Subscription::none()
+        };
         Subscription::batch(
             [
                 status_sub,
+                harness_spinner,
                 windows,
                 cancel_create,
                 search_shortcut,
@@ -1200,6 +1271,9 @@ impl Shell {
             }
             Some(PaneTab::Farm) => self.farm.view().map(Msg::Farm),
             Some(PaneTab::Database) => self.database.view().map(Msg::Database),
+            Some(PaneTab::Harness(workspace)) => {
+                harness_pane::view(&self.harness, workspace).map(Msg::Harness)
+            }
             Some(PaneTab::Settings) => {
                 let index = model.active_index().unwrap_or(0);
                 settings::view::view(&self.settings).map(move |message| match message {
@@ -1265,6 +1339,7 @@ impl Shell {
                 on_toggle_files: Msg::ToggleFiles,
                 on_chat: Msg::NewChatTab,
                 on_farm: Msg::OpenFarm,
+                on_harness: self.shows_harness().then_some(Msg::OpenHarness),
             },
         );
 
@@ -1412,6 +1487,10 @@ impl Shell {
             .into(),
             None => layered,
         };
+        let layered: Element<'_, Msg> = match self.harness.name_dialog() {
+            Some(dialog) => stack![layered, dialog.map(Msg::Harness)].into(),
+            None => layered,
+        };
         match &self.gallery_error {
             Some(error) => stack![
                 layered,
@@ -1488,6 +1567,7 @@ mod tests {
             island: AgentIsland::default(),
             farm: farm::FarmPane::default(),
             database: db_pane::DbPane::default(),
+            harness: harness_pane::HarnessState::default(),
             settings: settings::Settings::default(),
             panes: PaneTree::default(),
             pending_close_pane: None,
@@ -2008,5 +2088,62 @@ mod tests {
         let cursor = shell.editors.get(&opened).unwrap().content.cursor();
         assert_eq!((cursor.position.line, cursor.position.column), (2, 0));
         let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn harness_tab_is_unique_per_workspace_and_reloads_when_it_becomes_active() {
+        let mut shell = test_shell();
+        let a = PathBuf::from("/tmp/gsh-harness-a");
+        let b = PathBuf::from("/tmp/gsh-harness-b");
+        shell.workspaces.open_folder(a.clone());
+        let _ = shell.update(Msg::OpenHarness);
+        assert!(shell.harness.is_loading(&a));
+        let _ = shell.update(Msg::OpenHarness);
+        shell.workspaces.open_folder(b.clone());
+        let _ = shell.update(Msg::OpenHarness);
+        let harness_tabs = |shell: &Shell| {
+            shell
+                .panes
+                .focused_model()
+                .tabs()
+                .iter()
+                .filter(|tab| matches!(tab, PaneTab::Harness(_)))
+                .count()
+        };
+        assert_eq!(harness_tabs(&shell), 2);
+        assert!(shell.harness.is_loading(&b));
+
+        // lido: sair da aba e voltar relê
+        let _ = shell.update(Msg::Harness(harness_pane::Msg::Loaded(
+            a.clone(),
+            Some(gsh_harness::ProjectHarness::default()),
+        )));
+        let _ = shell.update(Msg::Harness(harness_pane::Msg::Loaded(b.clone(), None)));
+        assert!(!shell.harness.is_loading(&a));
+        let tabs = shell.panes.focused_model().tabs().to_vec();
+        let index_a = tabs
+            .iter()
+            .position(|tab| tab == &PaneTab::Harness(a.clone()))
+            .expect("aba a");
+        let _ = shell.update(Msg::SelectTab(index_a));
+        assert!(shell.harness.is_loading(&a));
+        assert!(shell.harness.of(&a).is_some());
+    }
+
+    #[test]
+    fn harness_button_needs_the_feature_and_a_local_folder() {
+        let mut shell = test_shell();
+        shell.workspaces.open_folder("/tmp/gsh-harness-a");
+        assert!(shell.shows_harness());
+        shell
+            .settings
+            .current
+            .features
+            .hidden
+            .insert(gsh_config::schema::AppFeature::Harness);
+        assert!(!shell.shows_harness());
+        shell.settings.current.features.hidden.clear();
+        // o workspace de exemplo não tem pasta
+        shell.workspaces.select(1);
+        assert!(!shell.shows_harness());
     }
 }

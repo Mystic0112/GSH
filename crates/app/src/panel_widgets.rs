@@ -1,6 +1,6 @@
 //! Superfícies e ações compartilhadas pelos painéis laterais.
 use crate::theme;
-use iced::widget::{button, container, row, text, Space};
+use iced::widget::{button, container, row, text, text_input, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Padding, Theme};
 
 pub fn ghost<'a, M: Clone + 'a>(
@@ -109,4 +109,26 @@ pub fn empty_label<'a, M: 'a>(message: &'static str) -> Element<'a, M> {
     .center_x(Fill)
     .center_y(Fill)
     .into()
+}
+
+/// Campo de texto dos formulários curtos (nome de arquivo, nome de item): `panel2`, borda
+/// `border2` e `accent` com foco.
+pub fn input_style(_: &Theme, status: text_input::Status) -> text_input::Style {
+    let p = theme::palette();
+    text_input::Style {
+        background: p.panel2.into(),
+        border: Border {
+            color: if matches!(status, text_input::Status::Focused { .. }) {
+                p.accent
+            } else {
+                p.border2
+            },
+            width: 1.0,
+            radius: theme::RADIUS_BUTTON.into(),
+        },
+        icon: p.text3,
+        placeholder: p.text3,
+        value: p.text,
+        selection: p.accent_soft,
+    }
 }

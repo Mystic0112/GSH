@@ -1080,3 +1080,64 @@ pub const SETTINGS_SWITCH_WIDTH: f32 = 36.0;
 pub const SETTINGS_SWITCH_HEIGHT: f32 = 20.0;
 pub const SETTINGS_SWITCH_KNOB: f32 = 14.0;
 pub const SETTINGS_SWITCH_PADDING: u16 = 2;
+
+// Medidas da aba Harness (`harness_view.dart`)
+pub const HARNESS_PADDING_SIDE: f32 = 24.0;
+pub const HARNESS_PADDING_TOP: f32 = 20.0;
+pub const HARNESS_PADDING_BOTTOM: f32 = 32.0;
+pub const HARNESS_HEADER_GAP: f32 = 18.0;
+pub const HARNESS_SUBTITLE_GAP: f32 = 4.0;
+pub const HARNESS_REFRESH_PADDING: f32 = 6.0;
+pub const HARNESS_REFRESH_ICON: f32 = 18.0;
+pub const HARNESS_REFRESH_SPINNER: f32 = 16.0;
+pub const HARNESS_LOADING_SPINNER: f32 = 20.0;
+pub const HARNESS_GRID_GAP: f32 = 16.0;
+pub const HARNESS_TWO_COLUMNS_MIN_WIDTH: f32 = 980.0;
+pub const HARNESS_CARD_RADIUS: f32 = 8.0;
+pub const HARNESS_COST_PADDING: f32 = 14.0;
+pub const HARNESS_COST_VALUE_SIZE: f32 = 20.0;
+pub const HARNESS_COST_TITLE_GAP: f32 = 10.0;
+pub const HARNESS_COST_ISSUE_ICON: f32 = 16.0;
+pub const HARNESS_COST_ISSUE_GAP: f32 = 4.0;
+pub const HARNESS_COST_PARTS_GAP: f32 = 4.0;
+pub const HARNESS_COST_HINT_GAP: f32 = 6.0;
+pub const HARNESS_COST_TIP_GAP: f32 = 2.0;
+pub const HARNESS_SECTION_PADDING: Padding = Padding {
+    top: 12.0,
+    right: 14.0,
+    bottom: 10.0,
+    left: 14.0,
+};
+pub const HARNESS_SECTION_ICON: f32 = 16.0;
+pub const HARNESS_SECTION_ICON_GAP: f32 = 8.0;
+pub const HARNESS_SECTION_COUNT_GAP: f32 = 6.0;
+pub const HARNESS_SECTION_PER_TURN_GAP: f32 = 8.0;
+pub const HARNESS_SECTION_PER_TURN_SIZE: f32 = 11.5;
+pub const HARNESS_SECTION_DESC_GAP: f32 = 2.0;
+pub const HARNESS_SECTION_LIST_GAP: f32 = 8.0;
+pub const HARNESS_SECTION_EMPTY_PADDING: f32 = 8.0;
+pub const HARNESS_VISIBLE_ENTRIES: usize = 6;
+pub const HARNESS_ROW_PADDING: [f32; 2] = [5.0, 6.0];
+pub const HARNESS_ROW_RADIUS: f32 = 6.0;
+pub const HARNESS_INVALID_ICON: f32 = 14.0;
+pub const HARNESS_INVALID_GAP: f32 = 6.0;
+pub const HARNESS_ENTRY_NAME_SIZE: f32 = 13.0;
+pub const HARNESS_ENTRY_DETAIL_SIZE: f32 = 11.5;
+pub const HARNESS_ENTRY_GAP: f32 = 8.0;
+pub const HARNESS_ENTRY_ISSUE_ICON: f32 = 15.0;
+pub const HARNESS_ENTRY_ISSUE_GAP: f32 = 6.0;
+pub const HARNESS_ENTRY_LOCK_ICON: f32 = 13.0;
+pub const HARNESS_ENTRY_LOCK_GAP: f32 = 6.0;
+pub const HARNESS_CHIP_SIZE: f32 = 11.0;
+pub const HARNESS_CHIP_PADDING: [f32; 2] = [2.0, 6.0];
+pub const HARNESS_CHIP_RADIUS: f32 = 5.0;
+// `GhostButton(size: ButtonSize.small)` do shadcn: 0,75 do padding (16x8), da fonte (14) e raio 12*0,5.
+pub const HARNESS_GHOST_PADDING: [f32; 2] = [6.0, 12.0];
+pub const HARNESS_GHOST_TEXT: f32 = 10.5;
+pub const HARNESS_GHOST_ICON: f32 = 14.0;
+pub const HARNESS_GHOST_GAP: f32 = 8.0;
+pub const HARNESS_GHOST_RADIUS: f32 = 6.0;
+pub const HARNESS_GHOST_HOVER_ALPHA: f32 = 0.8;
+// `AlertDialog` do nome do item novo (`_RealmNameDialog`).
+pub const HARNESS_NAME_DIALOG_WIDTH: f32 = 360.0;
+pub const HARNESS_NAME_ERROR_GAP: f32 = 8.0;

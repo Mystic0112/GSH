@@ -5,6 +5,8 @@
 //! permite que o futuro módulo de i18n substitua os textos sem varrer a árvore
 //! de componentes.
 
+use gsh_harness::{Issue, Kind, Scope};
+
 use crate::gallery_template::GalleryTemplate;
 
 pub const APP_TITLE: &str = "GSH Desktop";
@@ -550,5 +552,114 @@ pub fn gallery_description(template: GalleryTemplate) -> &'static str {
         GalleryTemplate::Tasks => "Comandos para rodar pelo painel de Tasks, como dev server, testes e build. Fica em .gsh/tasks.json.",
         GalleryTemplate::Layout => "Terminais e splits para abrir de uma vez, estilo tmuxinator. Pode rodar sozinho em worktrees novas.",
         GalleryTemplate::WorkspaceEnv => "Variáveis injetadas em todo terminal deste workspace. Coloque tokens ou logins de API aqui em vez de colar no prompt do agente. Fica fora do git.",
+    }
+}
+
+// Aba Harness (`pt_BR.i18n.json` -> `gsh.harness`, `gsh.topbar.openHarness`, `gsh.realmDialogs.duplicateName`)
+pub const TOPBAR_OPEN_HARNESS: &str = "Harness do workspace";
+pub const HARNESS_TAB_TITLE: &str = "Harness";
+pub const HARNESS_REFRESH: &str = "Ler de novo";
+pub const HARNESS_EDIT_FILE: &str = "Editar arquivo";
+pub const HARNESS_NEW_ITEM: &str = "Novo";
+pub const HARNESS_MEMORY_NEW: &str = "Criar CLAUDE.md";
+pub const HARNESS_CREATE: &str = "Criar";
+pub const HARNESS_NAME_PLACEHOLDER: &str = "nome (vira o nome do arquivo)";
+pub const HARNESS_EMPTY: &str = "Nada aqui ainda.";
+pub const HARNESS_READ_ONLY: &str = "Só leitura aqui: use claude mcp add/remove";
+pub const HARNESS_COST_TITLE: &str = "Custo fixo por turno";
+pub const HARNESS_COST_HINT: &str = "O que vai para o contexto em toda mensagem, antes de qualquer trabalho: as instruções inteiras e o nome + descrição de cada skill, subagente e comando. Ferramentas MCP não entram na conta.";
+pub const HARNESS_COST_TIP: &str = "Para enxugar: o que só vale às vezes sai do CLAUDE.md e vira skill; skills e comandos que ninguém usa, apague.";
+pub const HARNESS_SHOW_LESS: &str = "Mostrar menos";
+pub const HARNESS_DUPLICATE_NAME: &str = "Já existe um realm com esse nome.";
+pub const HARNESS_ELLIPSIS: &str = "…";
+pub const ICON_TUNE: &str = "\u{e429}";
+pub const ICON_WARNING_AMBER: &str = "\u{f083}";
+pub const ICON_DESCRIPTION: &str = "\u{e873}";
+pub const ICON_AUTO_AWESOME: &str = "\u{e65f}";
+pub const ICON_SMART_TOY: &str = "\u{f06c}";
+pub const ICON_BOLT: &str = "\u{ea0b}";
+pub const ICON_SHIELD: &str = "\u{e9e0}";
+pub const ICON_EXTENSION: &str = "\u{e87b}";
+pub const ICON_EDIT: &str = "\u{f097}";
+pub const ICON_ERROR_OUTLINE: &str = "\u{f8b6}";
+pub const ICON_LOCK_OUTLINE: &str = "\u{e899}";
+
+pub fn harness_subtitle(path: &str) -> String {
+    format!("O que o agente carrega ao rodar em {path}")
+}
+
+pub fn harness_cost_value(tokens: &str) -> String {
+    format!("≈ {tokens} tokens")
+}
+
+pub fn harness_per_turn(tokens: &str) -> String {
+    format!("≈ {tokens}/turno")
+}
+
+pub fn harness_new_title(section: &str) -> String {
+    format!("Novo item em {section}")
+}
+
+pub fn harness_invalid_json(file: &str) -> String {
+    format!("{file}: JSON inválido — o Claude Code ignora este arquivo inteiro.")
+}
+
+pub fn harness_issues(n: usize) -> String {
+    format!("Avisos: {n}")
+}
+
+pub fn harness_show_all(n: usize) -> String {
+    format!("Mostrar todos ({n})")
+}
+
+pub fn harness_title(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Memory => "Instruções",
+        Kind::Skills => "Skills",
+        Kind::Agents => "Subagentes",
+        Kind::Commands => "Comandos",
+        Kind::Hooks => "Hooks",
+        Kind::Permissions => "Permissões",
+        Kind::Mcp => "MCP",
+    }
+}
+
+pub fn harness_description(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Memory => "CLAUDE.md lidos numa sessão aqui (da pasta para cima), o seu do usuário e o AGENTS.md (Codex).",
+        Kind::Skills => "Capacidades que o agente aciona sozinho quando a descrição bate com a tarefa.",
+        Kind::Agents => "Especialistas para quem o agente delega (com ferramentas e modelo próprios).",
+        Kind::Commands => "Atalhos /nome que você digita na sessão.",
+        Kind::Hooks => "Comandos que rodam em eventos da sessão (antes de uma ferramenta, ao parar...).",
+        Kind::Permissions => "Regras de ferramenta: liberar, perguntar ou bloquear.",
+        Kind::Mcp => "Servidores de ferramentas extras. Os do usuário e os locais vêm do ~/.claude.json (mude com claude mcp).",
+    }
+}
+
+pub fn harness_issue(issue: Issue) -> &'static str {
+    match issue {
+        Issue::NoDescription => "Sem descrição: o agente não sabe quando usar.",
+        Issue::MissingScript => "O script que este hook chama não existe.",
+        Issue::TooLarge => {
+            "Grande demais: pesa em toda mensagem (o Claude Code avisa acima de 40 mil caracteres)."
+        }
+    }
+}
+
+pub fn harness_scope(scope: Scope) -> &'static str {
+    match scope {
+        Scope::User => "Usuário",
+        Scope::Project => "Projeto",
+        Scope::Local => "Local",
+    }
+}
+
+/// Regra de permissão (`allow`/`ask`/`deny`) traduzida; outro valor fica como veio.
+pub fn harness_rule(rule: &str) -> &str {
+    match rule {
+        "allow" => "liberar",
+        "ask" => "perguntar",
+        "deny" => "bloquear",
+        other => other,
     }
 }

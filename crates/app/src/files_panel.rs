@@ -109,25 +109,7 @@ fn create_input(form: Option<&CreateForm>) -> Element<'_, FilesMsg> {
             (!form.busy).then_some(FilesMsg::CreateNameChanged as fn(String) -> FilesMsg),
         )
         .on_submit_maybe((!form.busy).then_some(FilesMsg::SubmitCreate))
-        .style(|_, status| {
-            let p = theme::palette();
-            text_input::Style {
-                background: p.panel2.into(),
-                border: Border {
-                    color: if matches!(status, text_input::Status::Focused { .. }) {
-                        p.accent
-                    } else {
-                        p.border2
-                    },
-                    width: 1.0,
-                    radius: theme::RADIUS_BUTTON.into(),
-                },
-                icon: p.text3,
-                placeholder: p.text3,
-                value: p.text,
-                selection: p.accent_soft,
-            }
-        });
+        .style(crate::panel_widgets::input_style);
     let mut content = column![input].spacing(4);
     if let Some(error) = form.error {
         content = content.push(

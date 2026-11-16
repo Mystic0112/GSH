@@ -1,0 +1,18 @@
+[package]
+name = "gsh-harness"
+description = "GSH: leitura e criação da configuração do Claude Code de um workspace (aba Harness), sem UI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# JSON com a ordem das chaves do arquivo (o `Value` do serde_json ordena por
+# chave, e o Dart lista e regrava na ordem do arquivo). O Deserialize é manual,
+# então não precisa do `derive`.
+serde = "1"
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

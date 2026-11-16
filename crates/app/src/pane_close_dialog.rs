@@ -17,12 +17,12 @@ pub fn view<'a, M: Clone + 'a>(
     on_noop: M,
 ) -> Element<'a, M> {
     dialog(
-        labels::PANE_CLOSE_TITLE,
-        labels::pane_close_message(tab_count),
+        labels::PANE_CLOSE_TITLE.to_owned(),
+        message_body(labels::pane_close_message(tab_count)),
         labels::PANE_CLOSE_CONFIRM,
         Emphasis::Danger,
         on_cancel,
-        on_confirm,
+        Some(on_confirm),
         on_noop,
     )
 }
@@ -36,14 +36,47 @@ pub fn notice<'a, M: Clone + 'a>(
     on_noop: M,
 ) -> Element<'a, M> {
     dialog(
-        title,
-        message,
+        title.to_owned(),
+        message_body(message),
         labels::DIALOG_OK,
         Emphasis::Primary,
         on_close.clone(),
-        on_close,
+        Some(on_close),
         on_noop,
     )
+}
+
+/// Diálogo com um corpo livre (`AlertDialog` com `content`): título, corpo e os botões
+/// Cancelar / `confirm_label`. `on_confirm` vazio deixa a confirmação desabilitada.
+pub fn custom<'a, M: Clone + 'a>(
+    title: String,
+    body: Element<'a, M>,
+    confirm_label: &'static str,
+    on_cancel: M,
+    on_confirm: Option<M>,
+    on_noop: M,
+) -> Element<'a, M> {
+    dialog(
+        title,
+        body,
+        confirm_label,
+        Emphasis::Primary,
+        on_cancel,
+        on_confirm,
+        on_noop,
+    )
+}
+
+/// Mensagem do aviso, quebrando na largura do conteúdo.
+fn message_body<'a, M: 'a>(message: String) -> Element<'a, M> {
+    container(
+        text(message)
+            .font(theme::FONT_BODY)
+            .size(theme::DIALOG_MESSAGE_SIZE)
+            .color(theme::palette().text2),
+    )
+    .max_width(theme::DIALOG_CONTENT_WIDTH)
+    .into()
 }
 
 /// Botão de confirmação: `DestructiveButton` ou `PrimaryButton`.
@@ -54,35 +87,27 @@ enum Emphasis {
 }
 
 fn dialog<'a, M: Clone + 'a>(
-    title: &'static str,
-    message: String,
+    title: String,
+    body: Element<'a, M>,
     confirm_label: &'static str,
     emphasis: Emphasis,
     on_cancel: M,
-    on_confirm: M,
+    on_confirm: Option<M>,
     on_noop: M,
 ) -> Element<'a, M> {
     let title = text(title)
         .font(theme::FONT_TITLE)
         .size(theme::DIALOG_TITLE_SIZE)
         .color(theme::palette().text);
-    let message = text(message)
-        .font(theme::FONT_BODY)
-        .size(theme::DIALOG_MESSAGE_SIZE)
-        .color(theme::palette().text2);
     let actions = row![
-        dialog_button(labels::DIALOG_CANCEL, on_cancel.clone(), None),
+        dialog_button(labels::DIALOG_CANCEL, Some(on_cancel.clone()), None),
         dialog_button(confirm_label, on_confirm, Some(emphasis)),
     ]
     .spacing(theme::DIALOG_ACTIONS_GAP)
     .align_y(Alignment::Center);
 
     // largura do conteúdo (a mensagem quebra em 380), ações à direita, como no AlertDialog
-    let header = column![
-        title,
-        container(message).max_width(theme::DIALOG_CONTENT_WIDTH)
-    ]
-    .spacing(theme::DIALOG_TITLE_GAP);
+    let header = column![title, body].spacing(theme::DIALOG_TITLE_GAP);
     let card = container(
         column![header, actions]
             .spacing(theme::DIALOG_GAP)
@@ -124,7 +149,7 @@ fn dialog<'a, M: Clone + 'a>(
 /// Botão do diálogo: confirmação (`emphasis`) ou `OutlineButton` (contorno).
 fn dialog_button<'a, M: Clone + 'a>(
     label: &'static str,
-    on_press: M,
+    on_press: Option<M>,
     emphasis: Option<Emphasis>,
 ) -> Element<'a, M> {
     let content = move |color: Color| {
@@ -140,7 +165,7 @@ fn dialog_button<'a, M: Clone + 'a>(
     };
     button(content(foreground))
         .padding([8, 16])
-        .on_press(on_press)
+        .on_press_maybe(on_press)
         .style(move |_: &Theme, status| {
             let palette = theme::palette();
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
@@ -154,6 +179,10 @@ fn dialog_button<'a, M: Clone + 'a>(
             };
             let (background, border_color) = match emphasis {
                 Some(Emphasis::Danger) => fill(palette.error),
+                // `PrimaryButton` desabilitado: `mutedForeground` (text2) no lugar do accent
+                Some(Emphasis::Primary) if matches!(status, button::Status::Disabled) => {
+                    (Some(Background::Color(palette.text2)), palette.text2)
+                }
                 Some(Emphasis::Primary) => fill(palette.accent),
                 None => (
                     hovered.then_some(Background::Color(palette.panel3)),

@@ -31,6 +31,8 @@ pub enum PaneTab {
     Settings,
     /// Consulta SQL (PostgreSQL).
     Database,
+    /// Harness do workspace de `PathBuf`: o que o Claude Code carrega ali. Uma por workspace.
+    Harness(PathBuf),
 }
 
 impl PaneTab {
@@ -58,6 +60,7 @@ impl PaneTab {
             Self::Farm => labels::FARM_TAB_TITLE.to_string(),
             Self::Settings => labels::SETTINGS_TITLE.to_string(),
             Self::Database => labels::DB_TAB_TITLE.to_string(),
+            Self::Harness(_) => labels::HARNESS_TAB_TITLE.to_string(),
         }
     }
 
@@ -69,6 +72,7 @@ impl PaneTab {
             Self::Farm => labels::ICON_FARM,
             Self::Settings => labels::ICON_SETTINGS,
             Self::Database => labels::ICON_DATABASE,
+            Self::Harness(_) => labels::ICON_TUNE,
             Self::File(path) => {
                 let name = file_display_name(path);
                 labels::file_icon_for_name(&name)
@@ -176,6 +180,20 @@ impl PaneModel {
             self.active = Some(index);
         } else {
             self.tabs.push(PaneTab::Database);
+            self.active = Some(self.tabs.len().saturating_sub(1));
+        }
+    }
+
+    /// Abre ou ativa a aba Harness do workspace em `workspace`.
+    pub fn open_harness(&mut self, workspace: &Path) {
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab, PaneTab::Harness(path) if path == workspace))
+        {
+            self.active = Some(index);
+        } else {
+            self.tabs.push(PaneTab::Harness(workspace.to_path_buf()));
             self.active = Some(self.tabs.len().saturating_sub(1));
         }
     }
@@ -337,5 +355,24 @@ mod tests {
         let mut model = with_terminal();
         model.open_chat(1);
         assert_eq!(model.active_tab(), Some(&PaneTab::Chat(1)));
+
+        let harness = PaneTab::Harness(PathBuf::from("/proj"));
+        assert_eq!(harness.title(), "Harness");
+        assert_eq!(harness.icon(), labels::ICON_TUNE);
+    }
+
+    #[test]
+    fn harness_abre_uma_aba_por_workspace() {
+        let mut model = with_terminal();
+        model.open_harness(Path::new("/a"));
+        model.open_harness(Path::new("/b"));
+        assert_eq!(model.tabs().len(), 3);
+        model.activate(0);
+        model.open_harness(Path::new("/a"));
+        assert_eq!(model.tabs().len(), 3);
+        assert_eq!(
+            model.active_tab(),
+            Some(&PaneTab::Harness(PathBuf::from("/a")))
+        );
     }
 }

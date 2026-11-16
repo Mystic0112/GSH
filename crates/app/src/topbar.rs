@@ -25,6 +25,8 @@ pub struct TopbarActions<M> {
     pub on_toggle_files: M,
     pub on_chat: M,
     pub on_farm: M,
+    /// Abre a aba Harness do workspace; `None` esconde o botão (sem pasta local ou recurso desligado).
+    pub on_harness: Option<M>,
 }
 
 /// Renderiza a barra superior do shell com a pílula da ilha centralizada.
@@ -48,20 +50,28 @@ pub fn view<'a, M: Clone + 'a>(
     ]
     .align_y(Alignment::Center);
 
-    let right = row![
+    let mut right = row![
         farm_strip(props.counts, actions.on_farm.clone()),
         icon_toggle_button(labels::ICON_CHAT, false, actions.on_chat),
         icon_toggle_button(labels::ICON_FARM, false, actions.on_farm),
-        // ponytail: harness e cenário entram com os painéis
-        icon_toggle_button(
+    ];
+    if let Some(on_harness) = actions.on_harness {
+        right = right.push(tooltip(
+            icon_toggle_button(labels::ICON_TUNE, false, on_harness),
+            crate::pane_chrome::tip_bubble(labels::TOPBAR_OPEN_HARNESS),
+            tooltip::Position::Bottom,
+        ));
+    }
+    // ponytail: o grafo de agentes entra com o painel dele
+    let right = right
+        .push(icon_toggle_button(
             labels::ICON_SIDEBAR_RIGHT,
             !props.files_open,
-            actions.on_toggle_files
-        ),
-        Space::new().width(12.0),
-    ]
-    .spacing(4)
-    .align_y(Alignment::Center);
+            actions.on_toggle_files,
+        ))
+        .push(Space::new().width(12.0))
+        .spacing(4)
+        .align_y(Alignment::Center);
 
     let center_island = responsive(move |size| {
         if island_fits(size.width) {

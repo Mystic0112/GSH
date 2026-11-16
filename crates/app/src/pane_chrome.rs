@@ -135,7 +135,9 @@ fn tool_button<'a, M: Clone + 'a>(
 }
 
 /// Balão de dica (tooltip do Flutter): `panel2`, borda `border2`, texto `text`.
-pub fn tip_bubble<'a, M: 'a>(tip: &'static str) -> iced::widget::Container<'a, M> {
+pub fn tip_bubble<'a, M: 'a>(
+    tip: impl iced::widget::text::IntoFragment<'a>,
+) -> iced::widget::Container<'a, M> {
     container(
         text(tip)
             .font(theme::FONT_BODY)

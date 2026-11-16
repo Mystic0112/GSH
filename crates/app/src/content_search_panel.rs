@@ -480,6 +480,14 @@ fn ellipsize(segments: Vec<Segment>, max_chars: usize) -> Vec<Segment> {
     out
 }
 
+/// Spinner quadrado de `size` px (`CircularProgressIndicator` do shadcn) que gira com `elapsed_ms`.
+pub fn spinner<'a, M: 'a>(size: f32, elapsed_ms: u64) -> Element<'a, M> {
+    canvas::Canvas::new(Spinner { elapsed_ms })
+        .width(size)
+        .height(size)
+        .into()
+}
+
 /// Spinner de 12px (`CircularProgressIndicator(size: 12)` do shadcn): trilho a 20% e arco em
 /// `accent` com traço de 1px, que gira e muda de comprimento como o do Material.
 struct Spinner {
