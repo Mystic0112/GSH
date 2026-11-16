@@ -963,6 +963,23 @@ pub mod scene {
     pub const TOGGLE_GAP: f32 = 2.0;
     pub const TOGGLE_TEXT_SIZE: f32 = 11.0;
     pub const TOGGLE_LINE_HEIGHT: f32 = 1.2;
+    // _Hud em farm_hud.dart: contador de tokens (chama 20x20, texto 16), chips (11) e status.
+    pub const HUD_TEXT_SIZE: f32 = 11.0;
+    pub const HUD_LINE_HEIGHT: f32 = 1.2;
+    pub const HUD_TOKENS_SIZE: f32 = 16.0;
+    pub const HUD_FLAME_SIZE: f32 = 20.0;
+    pub const HUD_FLAME_GAP: f32 = 8.0;
+    pub const HUD_CHIP_GAP: f32 = 4.0;
+    pub const HUD_STATUS_BOX: f32 = 8.0;
+    pub const HUD_STATUS_GAP: f32 = 6.0;
+    pub const HUD_STATUS_BORDER: f32 = 1.0;
+    // _FarmEmpty em farm_hud.dart.
+    pub const EMPTY_MAX_WIDTH: f32 = 380.0;
+    pub const EMPTY_PADDING: f32 = 8.0;
+    pub const EMPTY_GAP: f32 = 8.0;
+    pub const EMPTY_TITLE_SIZE: f32 = 14.0;
+    pub const EMPTY_HINT_SIZE: f32 = 11.0;
+    pub const EMPTY_LINE_HEIGHT: f32 = 1.4;
 
     // ARGB do campo e das árvores de farm_world.dart e farm_world_paint.dart (usado por farm/world_paint.rs).
     pub mod field {

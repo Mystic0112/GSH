@@ -54,7 +54,36 @@ pub struct FarmCounts {
     pub waiting: usize,
     pub idle: usize,
 }
+/// Quanto a cena precisa caber: canteiros (um por agente) e vagas no curral (quem dorme).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Need {
+    pub plots: i64,
+    pub yard: i64,
+}
 impl Agents {
+    pub fn need(&self) -> Need {
+        Need {
+            plots: self.items.len() as i64,
+            yard: self
+                .items
+                .iter()
+                .filter(|a| a.input.state == AgentState::Idle)
+                .count() as i64,
+        }
+    }
+    /// Quem ficou além do que o layout comporta pega o primeiro canteiro livre dentro dele.
+    pub fn reslot(&mut self, capacity: usize) {
+        for i in 0..self.items.len() {
+            if self.items.get(i).is_none_or(|a| a.slot < capacity) {
+                continue;
+            }
+            if let Some(free) = (0..capacity).find(|s| !self.items.iter().any(|a| a.slot == *s)) {
+                if let Some(agent) = self.items.get_mut(i) {
+                    agent.slot = free;
+                }
+            }
+        }
+    }
     pub fn counts(&self) -> FarmCounts {
         let mut counts = FarmCounts::default();
         for agent in &self.items {
@@ -132,6 +161,20 @@ mod tests {
                 idle: 2
             }
         );
+    }
+    #[test]
+    fn need_counts_agents_and_sleepers_and_reslot_fits_capacity() {
+        let mut agents = Agents::default();
+        let mut inputs: Vec<AgentInput> = (0..8).map(|i| input(&format!("p{i}"))).collect();
+        inputs[0].state = AgentState::Working;
+        agents.sync(inputs);
+        assert_eq!(agents.need(), Need { plots: 8, yard: 7 });
+        agents.reslot(6);
+        let mut slots: Vec<usize> = agents.items.iter().map(|a| a.slot).collect();
+        slots.sort_unstable();
+        // o layout encolheu para 6 canteiros: quem estava além pega vaga livre, o resto fica
+        assert_eq!(slots.iter().filter(|s| **s < 6).count(), 6);
+        assert_eq!(slots.iter().filter(|s| **s >= 6).count(), 2);
     }
     #[test]
     fn slots_stay_and_removed_slot_is_reused() {

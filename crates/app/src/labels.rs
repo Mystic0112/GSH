@@ -385,10 +385,24 @@ pub const FARM_TAB_TITLE: &str = "Cenário";
 pub const FARM_OFFICE: &str = "Escritório";
 pub const FARM_FARM: &str = "Fazenda";
 
-pub const FARM_WORKING: &str = "Trabalhando";
-pub const FARM_WAITING: &str = "Esperando";
-pub const FARM_IDLE: &str = "Ocioso";
-pub const FARM_DONE: &str = "Terminou";
+pub const FARM_EMPTY_TITLE: &str = "Nenhum agente rodando";
+pub const FARM_EMPTY_HINT: &str = "Todo loop do Claude Code nesta máquina aparece aqui enquanto trabalha, inclusive subagentes e sessões fora do GSH Desktop.";
+
+pub fn farm_spent_hud(tokens: &str) -> String {
+    format!("{tokens} tokens gastos")
+}
+pub fn farm_agents(count: usize) -> String {
+    format!("{count} agentes")
+}
+pub fn farm_subagents(count: usize) -> String {
+    format!("{count} subagentes")
+}
+pub fn farm_working(count: usize) -> String {
+    format!("{count} trabalhando")
+}
+pub fn farm_idle(count: usize) -> String {
+    format!("{count} parados")
+}
 pub const FARM_ALERT: &str = "!";
 pub const PANE_SPLIT_RIGHT: &str = "Dividir à direita";
 pub const PANE_SPLIT_DOWN: &str = "Dividir abaixo";

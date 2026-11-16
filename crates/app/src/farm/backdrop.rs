@@ -1,8 +1,9 @@
 // Ported from clodfarm (github.com/matank001/clodfarm), MIT License, see third_party/clodfarm/LICENSE.
 //! Fundo do cenário no canvas: o layout de farm_world.dart, a pintura HD em imagem
 //! e os canteiros, onde os agentes sentam. Fazenda e escritório usam o mesmo layout;
-//! só a pintura muda. Coordenadas do canvas: o layout menos a metade do mundo, então
-//! a origem fica no centro.
+//! só a pintura muda. Coordenadas: as do layout (origem no canto do mundo).
+use super::agents::Need;
+use super::camera::{snap, Extent};
 use super::crops::{self, CropStage};
 use super::layout::{layout_farm, Rect, Viewport};
 use super::office::sprites::{monitor, monitor_off, monitor_wait, MONITOR_HEIGHT, MONITOR_WIDTH};
@@ -13,9 +14,6 @@ use super::world_paint::paint_farm;
 use iced::widget::image::Handle;
 use iced::Size;
 
-/// Canteiros (ou ilhas do escritório) pedidos ao layout: 3x3 e um curral mínimo.
-const PLOTS: i64 = 9;
-const YARD: i64 = 5;
 /// Semente do fundo: a mesma do `buildWorld` do Flutter.
 const SEED: u32 = 7;
 
@@ -31,27 +29,50 @@ pub struct Backdrop {
     pub size: Size,
     /// Modo em que o fundo foi pintado.
     pub mode: Mode,
-    /// Zoom que mostra a fazenda inteira na janela (`layout.z`).
-    pub zoom: f32,
+    /// Janela com o recorte do HUD em que o layout foi feito (`_viewport` do Dart).
+    pub view: Viewport,
+    /// O mundo para a câmera: tamanho, zoom que o mostra inteiro e centro do conteúdo.
+    pub extent: Extent,
+    /// Quanto o layout comporta (`capPlots`/`capYard`).
+    cap_plots: i64,
+    cap_yard: i64,
     width: i32,
     height: i32,
     /// Linha em que a faixa da frente começa, em coordenadas do layout.
     fg_y: i32,
-    /// Canteiros: canto superior esquerdo, já no sistema do canvas.
+    /// Canteiros: canto superior esquerdo, nas coordenadas do layout.
     plots: Vec<(i32, i32)>,
     bg: Handle,
     fg: Option<Handle>,
     screens: Option<Screens>,
 }
 
+/// A janela e o pedaço que o HUD cobre: larga, ele fica ao lado da fazenda; alta, em
+/// cima (`_viewport` de farm_view.dart).
+pub fn viewport(size: Size) -> Viewport {
+    let (w, h) = (f64::from(size.width), f64::from(size.height));
+    let wide = w > h * 1.15 && 240.0 < w * 0.4;
+    Viewport {
+        w,
+        h,
+        left: if wide { 240.0 } else { 0.0 },
+        top: if wide { 8.0 } else { 150.0 },
+        right: 12.0,
+        bottom: 12.0,
+    }
+}
+
 impl Backdrop {
-    pub fn build(size: Size, mode: Mode) -> Self {
-        let view = Viewport {
-            w: f64::from(size.width),
-            h: f64::from(size.height),
-            ..Viewport::default()
-        };
-        let mut layout = layout_farm(PLOTS, YARD, &view, |z| z, None);
+    /// Refaz o mundo para `size` e para o que `need` pede (`_rebuild` do Dart).
+    pub fn build(size: Size, mode: Mode, need: Need) -> Self {
+        let view = viewport(size);
+        let mut layout = layout_farm(
+            (need.plots as f64 * 1.15).ceil() as i64 + 1,
+            (need.yard as f64 * 1.1).ceil() as i64 + 2,
+            &view,
+            |z| snap(z, true),
+            None,
+        );
         let (bg, fg, fg_y, screens) = match mode {
             Mode::Farm => {
                 let (mut bg, fg, fg_y) = paint_farm(&mut layout, SEED);
@@ -65,16 +86,25 @@ impl Backdrop {
             }
         };
         let (width, height) = (layout.w as i32, layout.h as i32);
-        let (ox, oy) = (width / 2, height / 2);
         let plots = layout
             .plots
             .iter()
-            .map(|p| (p.left.round() as i32 - ox, p.top.round() as i32 - oy))
+            .map(|p| (p.left.round() as i32, p.top.round() as i32))
             .collect();
+        let center = layout.content.center();
         Self {
             size,
             mode,
-            zoom: layout.z as f32,
+            view,
+            extent: Extent {
+                w: layout.w as f64,
+                h: layout.h as f64,
+                z: layout.z,
+                cx: center.dx,
+                cy: center.dy,
+            },
+            cap_plots: layout.cap_plots as i64,
+            cap_yard: layout.cap_yard,
             width,
             height,
             fg_y: fg_y as i32,
@@ -85,19 +115,31 @@ impl Backdrop {
         }
     }
 
-    /// Retângulo do fundo no canvas (x, y, largura, altura), em unidades de mundo.
+    /// O layout não comporta `need` (ou sobra muito): refazer o mundo (`outgrown`).
+    pub fn outgrown(&self, need: Need) -> bool {
+        need.plots > self.cap_plots
+            || need.yard > self.cap_yard
+            || (self.cap_plots > 8 && (need.plots as f64) < self.cap_plots as f64 * 0.45)
+    }
+
+    /// Canteiros que o layout comporta.
+    pub fn capacity(&self) -> usize {
+        self.plots.len()
+    }
+
+    /// Retângulo do fundo (x, y, largura, altura), em unidades de mundo.
     pub fn bg_rect(&self) -> (f32, f32, f32, f32) {
-        self.rect(0, 0, self.width, self.height)
+        (0.0, 0.0, self.width as f32, self.height as f32)
     }
 
-    /// Retângulo da faixa da frente no canvas: passa por cima dos bichos.
+    /// Retângulo da faixa da frente: passa por cima dos bichos.
     pub fn fg_rect(&self) -> (f32, f32, f32, f32) {
-        self.rect(0, self.fg_y, self.width, self.height - self.fg_y)
-    }
-
-    fn rect(&self, x: i32, y: i32, w: i32, h: i32) -> (f32, f32, f32, f32) {
-        let (ox, oy) = (self.width / 2, self.height / 2);
-        ((x - ox) as f32, (y - oy) as f32, w as f32, h as f32)
+        (
+            0.0,
+            self.fg_y as f32,
+            self.width as f32,
+            (self.height - self.fg_y) as f32,
+        )
     }
 
     pub fn bg(&self) -> Handle {
@@ -121,7 +163,7 @@ impl Backdrop {
             .collect()
     }
 
-    /// Canto do canteiro `i` no canvas, em unidades de mundo.
+    /// Canto do canteiro `i`, em unidades de mundo.
     pub fn plot_origin(&self, i: usize) -> Option<(f32, f32)> {
         self.plots.get(i).map(|&(x, y)| (x as f32, y as f32))
     }

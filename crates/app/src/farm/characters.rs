@@ -26,10 +26,9 @@ pub fn hit<'a>(
     agents: &'a [Agent],
     posts: &[Prop],
     camera: Camera,
-    size: Size,
     point: Point,
 ) -> Option<&'a Agent> {
-    let world = camera.to_world(point, size);
+    let world = camera.to_world(point);
     agents.iter().rev().find(|agent| {
         let p = position(agent, posts);
         Rectangle {
@@ -69,16 +68,10 @@ fn clawd_pose(pose: Pose) -> ClawdPose {
 }
 
 /// O Clawd de cada agente: 16 x 18 de mundo, com os pés em `position`.
-pub fn draw(
-    frame: &mut canvas::Frame,
-    agents: &[Agent],
-    posts: &[Prop],
-    camera: Camera,
-    size: Size,
-) {
+pub fn draw(frame: &mut canvas::Frame, agents: &[Agent], posts: &[Prop], camera: Camera) {
     for agent in agents {
-        let p = camera.to_screen(position(agent, posts), size);
-        let z = camera.zoom;
+        let p = camera.to_screen(position(agent, posts));
+        let z = camera.scale();
         let pose = agent.input.state.pose();
         frame.draw_image(
             Rectangle {
