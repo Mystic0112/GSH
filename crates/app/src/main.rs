@@ -45,10 +45,12 @@ pub mod gorilla;
 pub mod island;
 pub mod labels;
 pub mod pane_chrome;
+pub mod pane_close_dialog;
 pub mod pane_model;
 pub mod pane_strip;
 pub mod pane_tab;
 pub mod pane_tool_icon;
+pub mod pane_tree;
 pub mod panel_widgets;
 pub mod rail;
 pub mod settings;
@@ -64,6 +66,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gsh_core::workspace::WorkspaceList;
+use iced::widget::pane_grid::{self, Axis, Pane};
 use iced::widget::{column, container, mouse_area, row, stack, Space};
 use iced::{Background, Element, Fill, Padding, Subscription, Task, Theme};
 
@@ -77,6 +80,7 @@ use crate::files_panel::FilesMsg;
 use crate::island::{AgentIsland, IslandMsg, PermissionDecision};
 use crate::pane_chrome::ChromeCallbacks;
 use crate::pane_model::{ChatId, PaneModel, PaneTab, TermId};
+use crate::pane_tree::PaneTree;
 use crate::terminal_input::{classify_key_press, KeyAction};
 use crate::terminal_pane::{TerminalMsg, TerminalPane};
 use crate::topbar::TopbarProps;
@@ -87,7 +91,10 @@ const STATUS_POLL_INTERVAL_MS: u64 = 50;
 #[derive(Debug, Clone)]
 enum Msg {
     Island(IslandMsg),
+    /// Evento da `Subscription` (tique e teclado): o teclado vale para o terminal focado.
     Terminal(TerminalMsg),
+    /// Evento do canvas de um terminal específico (redimensionar, rolar, selecionar).
+    TerminalIn(TermId, TerminalMsg),
     Chat(ChatId, ChatMsg),
     Files(FilesMsg),
     Git(git_panel::GitMsg),
@@ -98,16 +105,22 @@ enum Msg {
     CancelWindowClose,
     WindowUnfocused,
     StatusTick,
-    TabHover(Option<(bool, usize)>),
+    TabHover(Option<(Pane, usize)>),
     SelectTab(usize),
     CloseTab(usize),
     NewTerminalTab,
     NewChatTab,
-    SplitRight,
-    CloseSplit,
-    SelectOther(usize),
-    CloseOther(usize),
-    NewTerminalOther,
+    /// Variantes de aba que primeiro focam o pane de origem do clique.
+    SelectTabIn(Pane, usize),
+    CloseTabIn(Pane, usize),
+    NewTerminalIn(Pane),
+    FocusPane(Pane),
+    SplitPane(Pane, Axis),
+    /// Pede para fechar o pane; abre a confirmação.
+    ClosePane(Pane),
+    ConfirmClosePane,
+    CancelClosePane,
+    ResizePane(pane_grid::ResizeEvent),
     OpenFarm,
     OpenSettings,
     Settings(settings::Message),
@@ -132,12 +145,10 @@ struct Shell {
     farm: farm::FarmPane,
     database: db_pane::DbPane,
     settings: settings::Settings,
-    pane_model: PaneModel,
-    /// Segundo pane quando o central está dividido; `pane_model` é sempre o focado.
-    split_pane: Option<PaneModel>,
-    /// `true` quando o pane focado está à direita (o outro, à esquerda).
-    split_focus_right: bool,
-    hovered_tab: Option<(bool, usize)>,
+    panes: PaneTree,
+    /// Pane aguardando a resposta do diálogo "Fechar painel?".
+    pending_close_pane: Option<Pane>,
+    hovered_tab: Option<(Pane, usize)>,
     terminals: BTreeMap<TermId, TerminalPane>,
     chats: BTreeMap<ChatId, ChatPane>,
     file_viewers: BTreeMap<PathBuf, FileViewerState>,
@@ -163,7 +174,7 @@ impl Default for Shell {
 
         let workspaces = rail::default_workspace_list();
         let active_path = workspaces.active().and_then(|ws| ws.path.clone());
-        let pane_model = PaneModel::new();
+        let panes = PaneTree::default();
 
         let initial_pane_id = pane_id_for_term(1);
         status_runtime.register_pane(initial_pane_id.clone());
@@ -189,9 +200,8 @@ impl Default for Shell {
             farm: farm::FarmPane::default(),
             database: db_pane::DbPane::default(),
             settings,
-            pane_model,
-            split_pane: None,
-            split_focus_right: false,
+            panes,
+            pending_close_pane: None,
             hovered_tab: None,
             terminals,
             chats: BTreeMap::new(),
@@ -255,9 +265,10 @@ impl Shell {
             .map(|ws| ws.name.clone())
             .unwrap_or_else(|| labels::WORKSPACE_GSH.to_string());
 
-        self.pane_model
-            .tabs()
-            .iter()
+        self.panes
+            .models()
+            .into_iter()
+            .flat_map(PaneModel::tabs)
             .filter_map(|tab| match tab {
                 PaneTab::Terminal(id) => Some(PaneDescriptor::new(
                     pane_id_for_term(*id),
@@ -305,13 +316,13 @@ impl Shell {
         let Some(target_id) = term_id_from_pane_id(pane_id) else {
             return;
         };
-        let tab_idx = self
-            .pane_model
-            .tabs()
-            .iter()
-            .position(|tab| matches!(tab, PaneTab::Terminal(id) if *id == target_id));
-        if let Some(idx) = tab_idx {
-            let _ = self.pane_model.activate(idx);
+        let tab = PaneTab::Terminal(target_id);
+        if let Some(pane) = self.panes.pane_of(&tab) {
+            self.panes.focus(pane);
+            let model = self.panes.focused_model_mut();
+            if let Some(idx) = model.tabs().iter().position(|t| t == &tab) {
+                let _ = model.activate(idx);
+            }
             if let Some(term) = self.terminals.get_mut(&target_id) {
                 term.sync_snapshot();
             }
@@ -340,45 +351,50 @@ impl Shell {
     }
 
     fn active_terminal_mut(&mut self) -> Option<&mut TerminalPane> {
-        let Some(PaneTab::Terminal(id)) = self.pane_model.active_tab().cloned() else {
+        let Some(PaneTab::Terminal(id)) = self.panes.focused_model().active_tab().cloned() else {
             return None;
         };
         self.terminals.get_mut(&id)
     }
 
-    fn update(&mut self, msg: Msg) -> Task<Msg> {
-        let task = self.update_inner(msg);
-        self.normalize_split();
-        task
-    }
-
-    /// Divisão sem abas some; pane focado vazio cede lugar ao outro.
-    fn normalize_split(&mut self) {
-        if self
-            .split_pane
-            .as_ref()
-            .is_some_and(|o| o.tabs().is_empty())
-        {
-            self.split_pane = None;
-            self.split_focus_right = false;
-        }
-        if self.pane_model.tabs().is_empty() {
-            if let Some(other) = self.split_pane.take() {
-                self.pane_model = other;
-                self.split_focus_right = false;
+    /// Encerra a sessão de uma aba que já saiu da árvore de panes.
+    fn dispose_tab(&mut self, tab: PaneTab) {
+        match tab {
+            PaneTab::Terminal(id) => {
+                if let Some(mut term) = self.terminals.remove(&id) {
+                    term.close_session();
+                }
+                let pane_id = pane_id_for_term(id);
+                if self.status_runtime.remove_pane(&pane_id) {
+                    self.sync_island_from_status();
+                }
             }
+            PaneTab::Chat(id) => {
+                if let Some(mut chat) = self.chats.remove(&id) {
+                    chat.close();
+                }
+            }
+            PaneTab::File(path) => {
+                // o mesmo arquivo pode estar aberto em outro pane
+                if self.panes.pane_of(&PaneTab::File(path.clone())).is_none() {
+                    self.file_viewers.remove(&path);
+                    self.editors.remove(&path);
+                }
+            }
+            PaneTab::Farm | PaneTab::Settings | PaneTab::Database => {}
         }
     }
 
-    /// Troca o pane focado pelo outro (o focado passa a ser o que estava ao lado).
-    fn focus_other(&mut self) {
-        if let Some(other) = self.split_pane.as_mut() {
-            std::mem::swap(&mut self.pane_model, other);
-            self.split_focus_right = !self.split_focus_right;
-        }
+    /// Abre um terminal novo no pane focado, no diretório do workspace.
+    fn open_terminal_in_focused(&mut self) {
+        let cwd = self.active_workspace_dir().map(Path::to_path_buf);
+        let id = self.panes.alloc_term_id();
+        self.panes.focused_model_mut().open_terminal(id);
+        let new_term = self.spawn_terminal_for_dir(id, cwd.as_deref());
+        self.terminals.insert(id, new_term);
     }
 
-    fn update_inner(&mut self, msg: Msg) -> Task<Msg> {
+    fn update(&mut self, msg: Msg) -> Task<Msg> {
         if matches!(
             &msg,
             Msg::SelectTab(_)
@@ -460,11 +476,33 @@ impl Shell {
                 }
                 Task::none()
             }
+            // diálogo modal aberto: o teclado não chega ao terminal
+            Msg::Terminal(TerminalMsg::Keyboard(_)) if self.pending_close_pane.is_some() => {
+                Task::none()
+            }
             Msg::Terminal(term_msg) => {
                 if matches!(term_msg, TerminalMsg::Tick)
                     && self.status_runtime.drain_deliveries(now_epoch_ms())
                 {
                     self.sync_island_from_status();
+                }
+                if matches!(term_msg, TerminalMsg::Tick) {
+                    // todo terminal visível (aba ativa de cada pane) atualiza, não só o focado
+                    let visible: Vec<TermId> = self
+                        .panes
+                        .models()
+                        .into_iter()
+                        .filter_map(|model| match model.active_tab() {
+                            Some(PaneTab::Terminal(id)) => Some(*id),
+                            _ => None,
+                        })
+                        .collect();
+                    let ticks = self
+                        .terminals
+                        .iter_mut()
+                        .filter(|(id, _)| visible.contains(id))
+                        .map(|(_, term)| term.update(TerminalMsg::Tick).map(Msg::Terminal));
+                    return Task::batch(ticks);
                 }
                 if let TerminalMsg::Keyboard(iced::keyboard::Event::KeyPressed {
                     ref key,
@@ -477,7 +515,9 @@ impl Shell {
                         classify_key_press(key, modified_key, modifiers),
                         Some(KeyAction::Send(ref bytes)) if bytes.as_slice() == b"\x1b"
                     ) {
-                        if let Some(PaneTab::Terminal(id)) = self.pane_model.active_tab().cloned() {
+                        if let Some(PaneTab::Terminal(id)) =
+                            self.panes.focused_model().active_tab().cloned()
+                        {
                             let pane_id = pane_id_for_term(id);
                             if self.status_runtime.interrupt_pane(&pane_id, now_epoch_ms()) {
                                 self.sync_island_from_status();
@@ -490,6 +530,21 @@ impl Shell {
                 } else {
                     Task::none()
                 }
+            }
+            Msg::TerminalIn(id, term_msg) => {
+                // o canvas captura o clique: é ele quem avisa para focar o pane do terminal
+                if matches!(
+                    term_msg,
+                    TerminalMsg::ClearSelection | TerminalMsg::StartSelection { .. }
+                ) {
+                    if let Some(pane) = self.panes.pane_of(&PaneTab::Terminal(id)) {
+                        self.panes.focus(pane);
+                    }
+                }
+                self.terminals.get_mut(&id).map_or_else(Task::none, |term| {
+                    term.update(term_msg)
+                        .map(move |message| Msg::TerminalIn(id, message))
+                })
             }
             Msg::Chat(id, chat_msg) => {
                 if let Some(chat) = self.chats.get_mut(&id) {
@@ -532,7 +587,7 @@ impl Shell {
                                 }
                             }
                         }
-                        self.pane_model.open_file(target);
+                        self.panes.focused_model_mut().open_file(target);
                     }
                     FilesMsg::CollapseAll => self.file_tree.collapse_all(),
                     FilesMsg::Refresh => {
@@ -659,7 +714,7 @@ impl Shell {
                 })
             }
             Msg::SelectTab(idx) => {
-                if let Some(tab) = self.pane_model.activate(idx).cloned() {
+                if let Some(tab) = self.panes.focused_model_mut().activate(idx).cloned() {
                     match tab {
                         PaneTab::Terminal(id) => {
                             if let Some(term) = self.terminals.get_mut(&id) {
@@ -684,49 +739,36 @@ impl Shell {
                 Task::none()
             }
             Msg::CloseTab(idx) => {
-                if self.pane_model.active_index() != Some(idx) {
+                if self.panes.focused_model().active_index() != Some(idx) {
                     for editor in self.editors.values_mut() {
                         editor.state.cancel_close();
                     }
                 }
-                if let Some(PaneTab::File(path)) = self.pane_model.tabs().get(idx) {
+                if let Some(PaneTab::File(path)) = self.panes.focused_model().tabs().get(idx) {
                     if let Some(editor) = self.editors.get_mut(path) {
                         if !editor.state.request_close() {
-                            self.pane_model.activate(idx);
+                            self.panes.focused_model_mut().activate(idx);
                             return Task::none();
                         }
                     }
                 }
-                if let Some(removed) = self.pane_model.close(idx) {
-                    match removed {
-                        PaneTab::Terminal(id) => {
-                            if let Some(mut term) = self.terminals.remove(&id) {
-                                term.close_session();
-                            }
-                            let pane_id = pane_id_for_term(id);
-                            if self.status_runtime.remove_pane(&pane_id) {
-                                self.sync_island_from_status();
-                            }
-                        }
-                        PaneTab::Chat(id) => {
-                            if let Some(mut chat) = self.chats.remove(&id) {
-                                chat.close();
-                            }
-                        }
-                        PaneTab::File(path) => {
-                            self.file_viewers.remove(&path);
-                            self.editors.remove(&path);
-                        }
-                        PaneTab::Farm | PaneTab::Settings | PaneTab::Database => {}
-                    }
+                if let Some(removed) = self.panes.focused_model_mut().close(idx) {
+                    self.dispose_tab(removed);
                 }
+                // pane que perdeu a última aba some, se houver outro (como `_closeTabIn`)
+                self.panes.close_if_empty(self.panes.focused());
                 Task::none()
             }
             Msg::OpenSettings => {
-                if !self.pane_model.tabs().contains(&PaneTab::Settings) {
+                if !self
+                    .panes
+                    .focused_model()
+                    .tabs()
+                    .contains(&PaneTab::Settings)
+                {
                     self.settings.reload();
                 }
-                self.pane_model.open_settings();
+                self.panes.focused_model_mut().open_settings();
                 Task::none()
             }
             Msg::Settings(message) => {
@@ -739,7 +781,7 @@ impl Shell {
                 Task::none()
             }
             Msg::OpenFarm => {
-                self.pane_model.open_farm();
+                self.panes.focused_model_mut().open_farm();
                 Task::none()
             }
             Msg::Farm(farm::Message::Focus(pane_id)) => {
@@ -747,7 +789,7 @@ impl Shell {
                 Task::none()
             }
             Msg::OpenDatabase => {
-                self.pane_model.open_database();
+                self.panes.focused_model_mut().open_database();
                 Task::none()
             }
             Msg::Database(message) => self.database.update(message).map(Msg::Database),
@@ -755,46 +797,64 @@ impl Shell {
                 self.farm.update(message);
                 Task::none()
             }
-            Msg::SplitRight => {
-                if self.split_pane.is_none() {
-                    if let Some(idx) = self.pane_model.active_index() {
-                        if let Some(tab) = self.pane_model.close(idx) {
-                            let mut moved = PaneModel::empty();
-                            moved.adopt(tab);
-                            let remaining = std::mem::replace(&mut self.pane_model, moved);
-                            self.split_pane = Some(remaining);
-                            self.split_focus_right = true;
-                        }
-                    }
-                }
-                Task::none()
-            }
-            Msg::CloseSplit => {
-                if let Some(other) = self.split_pane.take() {
-                    for tab in other.tabs().iter().cloned() {
-                        self.pane_model.adopt(tab);
-                    }
-                }
-                self.split_focus_right = false;
-                Task::none()
-            }
-            Msg::SelectOther(idx) => {
-                self.focus_other();
+            Msg::SelectTabIn(pane, idx) => {
+                self.panes.focus(pane);
                 self.update(Msg::SelectTab(idx))
             }
-            Msg::CloseOther(idx) => {
-                self.focus_other();
+            Msg::CloseTabIn(pane, idx) => {
+                self.panes.focus(pane);
                 self.update(Msg::CloseTab(idx))
             }
-            Msg::NewTerminalOther => {
-                self.focus_other();
+            Msg::NewTerminalIn(pane) => {
+                self.panes.focus(pane);
                 self.update(Msg::NewTerminalTab)
             }
-            Msg::NewTerminalTab => {
+            Msg::FocusPane(pane) => {
+                self.panes.focus(pane);
+                Task::none()
+            }
+            Msg::SplitPane(pane, axis) => {
                 let cwd = self.active_workspace_dir().map(Path::to_path_buf);
-                let id = self.pane_model.open_terminal();
-                let new_term = self.spawn_terminal_for_dir(id, cwd.as_deref());
-                self.terminals.insert(id, new_term);
+                if let Some(id) = self.panes.split_with_terminal(pane, axis) {
+                    let term = self.spawn_terminal_for_dir(id, cwd.as_deref());
+                    self.terminals.insert(id, term);
+                }
+                Task::none()
+            }
+            Msg::ClosePane(pane) => {
+                if self.panes.model(pane).is_some() {
+                    self.panes.focus(pane);
+                    self.pending_close_pane = Some(pane);
+                }
+                Task::none()
+            }
+            Msg::CancelClosePane => {
+                self.pending_close_pane = None;
+                Task::none()
+            }
+            Msg::ConfirmClosePane => {
+                if let Some(closed) = self
+                    .pending_close_pane
+                    .take()
+                    .and_then(|pane| self.panes.close(pane))
+                {
+                    for tab in closed.tabs {
+                        self.dispose_tab(tab);
+                    }
+                    if let Some(id) = closed.fresh_terminal {
+                        let cwd = self.active_workspace_dir().map(Path::to_path_buf);
+                        let term = self.spawn_terminal_for_dir(id, cwd.as_deref());
+                        self.terminals.insert(id, term);
+                    }
+                }
+                Task::none()
+            }
+            Msg::ResizePane(event) => {
+                self.panes.resize(event.split, event.ratio);
+                Task::none()
+            }
+            Msg::NewTerminalTab => {
+                self.open_terminal_in_focused();
                 Task::none()
             }
             Msg::NewChatTab => {
@@ -803,7 +863,8 @@ impl Shell {
                     .workspaces
                     .active()
                     .and_then(|ws| ws.git_branch.clone());
-                let id = self.pane_model.open_chat();
+                let id = self.panes.alloc_chat_id();
+                self.panes.focused_model_mut().open_chat(id);
                 let chat = ChatPane::new(cwd, branch).with_static_test_mode(self.static_test_mode);
                 self.chats.insert(id, chat);
                 Task::none()
@@ -858,12 +919,11 @@ impl Shell {
         let status_sub = iced::time::every(Duration::from_millis(STATUS_POLL_INTERVAL_MS))
             .map(|_| Msg::StatusTick);
 
-        let active_sub = self.tab_subscription(&self.pane_model);
-        let other_sub = self
-            .split_pane
-            .as_ref()
-            .map(|other| self.tab_subscription(other))
-            .unwrap_or_else(Subscription::none);
+        let pane_subs = self
+            .panes
+            .models()
+            .into_iter()
+            .map(|model| self.tab_subscription(model));
 
         let windows = iced::window::events().filter_map(|(id, event)| match event {
             iced::window::Event::CloseRequested => Some(Msg::WindowCloseRequested(id)),
@@ -884,7 +944,11 @@ impl Shell {
         } else {
             Subscription::none()
         };
-        Subscription::batch([status_sub, active_sub, other_sub, windows, cancel_create])
+        Subscription::batch(
+            [status_sub, windows, cancel_create]
+                .into_iter()
+                .chain(pane_subs),
+        )
     }
 
     /// Assinatura de atualização da aba ativa de um pane (terminal ou chat).
@@ -905,12 +969,12 @@ impl Shell {
     }
 
     /// Conteúdo da aba ativa de um pane.
-    fn pane_content<'a>(&'a self, model: &'a PaneModel) -> Element<'a, Msg> {
+    fn pane_content<'a>(&'a self, pane: Pane, model: &'a PaneModel) -> Element<'a, Msg> {
         match model.active_tab() {
-            Some(PaneTab::Terminal(id)) => self
+            Some(&PaneTab::Terminal(id)) => self
                 .terminals
-                .get(id)
-                .map(|term| term.view().map(Msg::Terminal))
+                .get(&id)
+                .map(|term| term.view().map(move |m| Msg::TerminalIn(id, m)))
                 .unwrap_or_else(pane_chrome::view_empty_body),
             Some(&PaneTab::Chat(id)) => self
                 .chats
@@ -937,15 +1001,8 @@ impl Shell {
             Some(PaneTab::Database) => self.database.view().map(Msg::Database),
             Some(PaneTab::Settings) => {
                 let index = model.active_index().unwrap_or(0);
-                let focused = std::ptr::eq(model, &self.pane_model);
                 settings::view::view(&self.settings).map(move |message| match message {
-                    settings::Message::Back => {
-                        if focused {
-                            Msg::CloseTab(index)
-                        } else {
-                            Msg::CloseOther(index)
-                        }
-                    }
+                    settings::Message::Back => Msg::CloseTabIn(pane, index),
                     other => Msg::Settings(other),
                 })
             }
@@ -953,53 +1010,38 @@ impl Shell {
         }
     }
 
-    /// Um pane inteiro (barra de abas + conteúdo). O focado recebe os controles de divisão.
-    fn pane_view<'a>(&'a self, model: &'a PaneModel, focused: bool) -> Element<'a, Msg> {
-        let content = self.pane_content(model);
+    /// Um pane inteiro (barra de abas + conteúdo); todo pane tem os botões de dividir e fechar.
+    fn pane_view<'a>(&'a self, pane: Pane, model: &'a PaneModel) -> Element<'a, Msg> {
+        let content = self.pane_content(pane, model);
         let dirty = |path: &Path| {
             self.editors
                 .get(path)
                 .is_some_and(|editor| editor.state.buffer.is_dirty())
         };
-        let split_open = self.split_pane.is_some();
-        let right = split_open && (focused == self.split_focus_right);
         let hovered = self
             .hovered_tab
-            .and_then(|(side, index)| (side == right).then_some(index));
-        if focused {
-            pane_chrome::view(
-                model,
-                content,
-                ChromeCallbacks {
-                    on_select_tab: Msg::SelectTab,
-                    on_close_tab: Msg::CloseTab,
-                    on_new_terminal: Msg::NewTerminalTab,
-                    noop_msg: Msg::Noop,
-                    // ponytail: uma divisão só; some enquanto ela existe ou com 1 aba (nada a mover).
-                    on_split: (!split_open && model.tabs().len() > 1).then_some(Msg::SplitRight),
-                    on_close_split: split_open.then_some(Msg::CloseSplit),
-                },
-                &dirty,
-                hovered,
-                move |index| Msg::TabHover(index.map(|index| (right, index))),
-            )
-        } else {
-            pane_chrome::view(
-                model,
-                content,
-                ChromeCallbacks {
-                    on_select_tab: Msg::SelectOther,
-                    on_close_tab: Msg::CloseOther,
-                    on_new_terminal: Msg::NewTerminalOther,
-                    noop_msg: Msg::Noop,
-                    on_split: None,
-                    on_close_split: None,
-                },
-                &dirty,
-                hovered,
-                move |index| Msg::TabHover(index.map(|index| (right, index))),
-            )
-        }
+            .and_then(|(hovered_pane, index)| (hovered_pane == pane).then_some(index));
+        // Foca o pane no clique sem engolir o botão: o `mouse_area` só vê o clique que
+        // nenhum filho capturou, e cada botão da barra já foca o próprio pane.
+        let chrome = pane_chrome::view(
+            model,
+            content,
+            ChromeCallbacks {
+                on_select_tab: move |index| Msg::SelectTabIn(pane, index),
+                on_close_tab: move |index| Msg::CloseTabIn(pane, index),
+                on_new_terminal: Msg::NewTerminalIn(pane),
+                noop_msg: Msg::Noop,
+                on_split_right: Msg::SplitPane(pane, Axis::Vertical),
+                on_split_down: Msg::SplitPane(pane, Axis::Horizontal),
+                on_close_pane: Msg::ClosePane(pane),
+                // a dica é uma camada acima de tudo: não pode vazar por cima do diálogo
+                show_tooltips: self.pending_close_pane.is_none(),
+            },
+            &dirty,
+            hovered,
+            move |index| Msg::TabHover(index.map(|index| (pane, index))),
+        );
+        mouse_area(chrome).on_press(Msg::FocusPane(pane)).into()
     }
 
     fn view(&self) -> Element<'_, Msg> {
@@ -1046,26 +1088,27 @@ impl Shell {
         ]
         .align_y(iced::Alignment::Center);
 
-        let focused_el = self.pane_view(&self.pane_model, true);
-        let center_pane: Element<'_, Msg> = match self.split_pane.as_ref() {
-            Some(other) => {
-                let other_el = self.pane_view(other, false);
-                let (left, right) = if self.split_focus_right {
-                    (other_el, focused_el)
-                } else {
-                    (focused_el, other_el)
-                };
-                let divider = container(iced::widget::Space::new())
-                    .width(1)
-                    .height(Fill)
-                    .style(|_: &Theme| container::Style {
-                        background: Some(Background::Color(theme::BORDER)),
-                        ..Default::default()
-                    });
-                row![left, divider, right].height(Fill).width(Fill).into()
-            }
-            None => focused_el,
-        };
+        // o fundo `border` aparece só no vão de 1px entre os panes: é a linha do divisor
+        let center_pane: Element<'_, Msg> = container(
+            pane_grid::PaneGrid::new(self.panes.grid(), |pane, model, _| {
+                pane_grid::Content::new(self.pane_view(pane, model))
+            })
+            .width(Fill)
+            .height(Fill)
+            .spacing(theme::PANE_DIVIDER_LINE)
+            .on_resize(
+                theme::PANE_DIVIDER_HANDLE - theme::PANE_DIVIDER_LINE,
+                Msg::ResizePane,
+            )
+            .style(pane_chrome::grid_style),
+        )
+        .width(Fill)
+        .height(Fill)
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(theme::palette().border)),
+            ..Default::default()
+        })
+        .into();
 
         let mut body = row![].height(Fill).width(Fill);
         if self.rail_open {
@@ -1114,7 +1157,7 @@ impl Shell {
                 ..Default::default()
             });
 
-        if self.island.is_expanded() {
+        let layered: Element<'_, Msg> = if self.island.is_expanded() {
             let panel_overlay = container(self.island.view_panel().map(Msg::Island))
                 .width(Fill)
                 .center_x(Fill)
@@ -1135,6 +1178,23 @@ impl Shell {
             stack![base, backdrop, panel_overlay].into()
         } else {
             base.into()
+        };
+
+        match self
+            .pending_close_pane
+            .and_then(|pane| self.panes.model(pane))
+        {
+            Some(model) => stack![
+                layered,
+                pane_close_dialog::view(
+                    model.tabs().len(),
+                    Msg::CancelClosePane,
+                    Msg::ConfirmClosePane,
+                    Msg::Noop,
+                )
+            ]
+            .into(),
+            None => layered,
         }
     }
 }
@@ -1200,9 +1260,8 @@ mod tests {
             farm: farm::FarmPane::default(),
             database: db_pane::DbPane::default(),
             settings: settings::Settings::default(),
-            pane_model: PaneModel::new(),
-            split_pane: None,
-            split_focus_right: false,
+            panes: PaneTree::default(),
+            pending_close_pane: None,
             hovered_tab: None,
             terminals,
             chats: BTreeMap::new(),
@@ -1224,11 +1283,17 @@ mod tests {
     fn settings_abre_e_reativa_sem_duplicar() {
         let mut shell = test_shell();
         let _ = shell.update(Msg::OpenSettings);
-        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Settings));
+        assert_eq!(
+            shell.panes.focused_model().active_tab(),
+            Some(&PaneTab::Settings)
+        );
         let _ = shell.update(Msg::SelectTab(0));
         let _ = shell.update(Msg::OpenSettings);
-        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Settings));
-        assert_eq!(shell.pane_model.tabs().len(), 2);
+        assert_eq!(
+            shell.panes.focused_model().active_tab(),
+            Some(&PaneTab::Settings)
+        );
+        assert_eq!(shell.panes.focused_model().tabs().len(), 2);
     }
 
     #[test]
@@ -1264,7 +1329,7 @@ mod tests {
         let _ = shell.update(Msg::Files(FilesMsg::SelectFile(file.clone())));
         let _ = shell.update(Msg::Files(FilesMsg::SelectFile(alias)));
         assert_eq!(shell.editors.len(), 1);
-        assert_eq!(shell.pane_model.tabs().len(), 2);
+        assert_eq!(shell.panes.focused_model().tabs().len(), 2);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1281,7 +1346,7 @@ mod tests {
         ));
         assert!(shell.editors.get(&path).unwrap().state.buffer.is_dirty());
         let _ = shell.update(Msg::CloseTab(1));
-        assert_eq!(shell.pane_model.tabs().len(), 2);
+        assert_eq!(shell.panes.focused_model().tabs().len(), 2);
         assert!(matches!(
             shell.editors.get(&path).unwrap().state.notice,
             Some(editor_state::EditorNotice::ConfirmClose)
@@ -1301,7 +1366,7 @@ mod tests {
         assert!(shell.rail_open);
         assert!(shell.files_open);
         assert_eq!(shell.workspaces.selected_index(), 0);
-        assert_eq!(shell.pane_model.tabs(), &[PaneTab::Terminal(1)]);
+        assert_eq!(shell.panes.focused_model().tabs(), &[PaneTab::Terminal(1)]);
 
         // Abre uma pasta escolhida no seletor
         let picked =
@@ -1318,10 +1383,10 @@ mod tests {
         let _ = shell.update(Msg::Files(FilesMsg::SelectFile(target_file.clone())));
         assert_eq!(shell.file_tree.selected_file(), Some(target_file.as_path()));
         assert_eq!(
-            shell.pane_model.tabs(),
+            shell.panes.focused_model().tabs(),
             &[PaneTab::Terminal(1), PaneTab::File(target_file.clone())]
         );
-        assert_eq!(shell.pane_model.active_index(), Some(1));
+        assert_eq!(shell.panes.focused_model().active_index(), Some(1));
         assert_eq!(
             shell.editors.get(&target_file).unwrap().state.buffer.text(),
             "# GSH\nLinha 2\n"
@@ -1329,15 +1394,18 @@ mod tests {
 
         // Clica novamente no mesmo arquivo depois de voltar ao terminal -> só ativa a aba existente
         let _ = shell.update(Msg::SelectTab(0));
-        assert_eq!(shell.pane_model.active_index(), Some(0));
+        assert_eq!(shell.panes.focused_model().active_index(), Some(0));
         let _ = shell.update(Msg::Files(FilesMsg::SelectFile(target_file.clone())));
-        assert_eq!(shell.pane_model.tabs().len(), 2);
-        assert_eq!(shell.pane_model.active_index(), Some(1));
+        assert_eq!(shell.panes.focused_model().tabs().len(), 2);
+        assert_eq!(shell.panes.focused_model().active_index(), Some(1));
 
         // Clica em "+" -> abre novo terminal no cwd do workspace ativo
         let _ = shell.update(Msg::NewTerminalTab);
-        assert_eq!(shell.pane_model.tabs().len(), 3);
-        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(2)));
+        assert_eq!(shell.panes.focused_model().tabs().len(), 3);
+        assert_eq!(
+            shell.panes.focused_model().active_tab(),
+            Some(&PaneTab::Terminal(2))
+        );
         assert_eq!(
             shell.terminals.get(&2).and_then(|t| t.cwd()),
             Some(picked.as_path())
@@ -1346,14 +1414,14 @@ mod tests {
         // Fecha a aba de arquivo (índice 1) -> remove do modelo e do cache de viewers
         let _ = shell.update(Msg::CloseTab(1));
         assert_eq!(
-            shell.pane_model.tabs(),
+            shell.panes.focused_model().tabs(),
             &[PaneTab::Terminal(1), PaneTab::Terminal(2)]
         );
         assert!(!shell.file_viewers.contains_key(&target_file));
 
         // Fecha a aba de terminal (índice 1 = Terminal(2)) -> encerra e remove a sessão
         let _ = shell.update(Msg::CloseTab(1));
-        assert_eq!(shell.pane_model.tabs(), &[PaneTab::Terminal(1)]);
+        assert_eq!(shell.panes.focused_model().tabs(), &[PaneTab::Terminal(1)]);
         assert!(!shell.terminals.contains_key(&2));
 
         let _ = shell.update(Msg::ToggleRail);
@@ -1384,7 +1452,10 @@ mod tests {
         assert_eq!(shell.farm.agent_states(), vec![farm::AgentState::Idle]);
         let _ = shell.update(Msg::OpenFarm);
         let _ = shell.update(Msg::Farm(farm::Message::Focus("t1".into())));
-        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(1)));
+        assert_eq!(
+            shell.panes.focused_model().active_tab(),
+            Some(&PaneTab::Terminal(1))
+        );
         let _ = shell.update(Msg::CloseTab(0));
         assert!(shell.farm.agent_states().is_empty());
     }
@@ -1394,7 +1465,10 @@ mod tests {
         let mut shell = test_shell();
         // Abre segundo terminal (t2)
         let _ = shell.update(Msg::NewTerminalTab);
-        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(2)));
+        assert_eq!(
+            shell.panes.focused_model().active_tab(),
+            Some(&PaneTab::Terminal(2))
+        );
 
         // t1 entra em Working
         let u1 = StatusUpdate {
@@ -1430,7 +1504,10 @@ mod tests {
 
         // Clicar na linha do agente na ilha (RevealTab("t1")) foca o Terminal(1) e limpa o Finished
         let _ = shell.update(Msg::Island(IslandMsg::RevealTab("t1".to_string())));
-        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(1)));
+        assert_eq!(
+            shell.panes.focused_model().active_tab(),
+            Some(&PaneTab::Terminal(1))
+        );
         assert!(shell.island.agents().is_empty());
 
         // t1 volta a trabalhar e o usuário aperta ESC cru -> interrompe para Idle sem Finished
@@ -1465,7 +1542,10 @@ mod tests {
         let mut shell = test_shell();
 
         let _ = shell.update(Msg::NewChatTab);
-        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Chat(1)));
+        assert_eq!(
+            shell.panes.focused_model().active_tab(),
+            Some(&PaneTab::Chat(1))
+        );
         assert!(shell.chats.contains_key(&1));
 
         let _ = shell.update(Msg::Chat(1, ChatMsg::InputChanged("oi".to_string())));
@@ -1473,44 +1553,129 @@ mod tests {
 
         let _ = shell.update(Msg::CloseTab(1));
         assert!(!shell.chats.contains_key(&1));
-        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(1)));
-    }
-
-    #[test]
-    fn dividir_move_aba_ativa_para_o_painel_novo_e_fechar_junta() {
-        let mut shell = test_shell();
-        let _ = shell.update(Msg::OpenSettings);
-        let before = shell.pane_model.tabs().len();
-        let _ = shell.update(Msg::SplitRight);
-        assert!(shell.split_pane.is_some());
-        assert!(shell.split_focus_right);
-        assert_eq!(shell.pane_model.tabs(), &[PaneTab::Settings]);
         assert_eq!(
-            shell.split_pane.as_ref().map(|p| p.tabs().len()),
-            Some(before - 1)
+            shell.panes.focused_model().active_tab(),
+            Some(&PaneTab::Terminal(1))
         );
-        let _ = shell.update(Msg::CloseSplit);
-        assert!(shell.split_pane.is_none());
-        assert_eq!(shell.pane_model.tabs().len(), before);
     }
 
     #[test]
-    fn selecionar_aba_do_outro_painel_troca_o_foco() {
+    fn dividir_cria_pane_com_terminal_novo_nos_dois_eixos_e_foca_o_novo() {
         let mut shell = test_shell();
-        let _ = shell.update(Msg::OpenSettings);
-        let _ = shell.update(Msg::SplitRight);
-        let _ = shell.update(Msg::SelectOther(0));
-        assert!(!shell.split_focus_right);
-        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(1)));
+        let first = shell.panes.focused();
+        let _ = shell.update(Msg::SplitPane(first, Axis::Vertical));
+        assert_eq!(shell.panes.leaves().len(), 2);
+        assert_ne!(shell.panes.focused(), first);
+        assert_eq!(shell.panes.focused_model().tabs(), &[PaneTab::Terminal(2)]);
+        assert!(shell.terminals.contains_key(&2));
+        let second = shell.panes.focused();
+        let _ = shell.update(Msg::SplitPane(second, Axis::Horizontal));
+        assert_eq!(shell.panes.leaves().len(), 3);
+        assert_eq!(shell.panes.focused_model().tabs(), &[PaneTab::Terminal(3)]);
+        // o pane de origem não perdeu nada
+        assert_eq!(
+            shell.panes.model(first).map(PaneModel::tabs),
+            Some(&[PaneTab::Terminal(1)][..])
+        );
     }
 
     #[test]
-    fn fechar_ultima_aba_do_painel_focado_cede_lugar_ao_outro() {
+    fn fechar_pane_pede_confirmacao_e_so_mata_os_terminais_ao_confirmar() {
+        let mut shell = test_shell();
+        let first = shell.panes.focused();
+        let _ = shell.update(Msg::SplitPane(first, Axis::Vertical));
+        let second = shell.panes.focused();
+
+        let _ = shell.update(Msg::ClosePane(second));
+        assert_eq!(shell.pending_close_pane, Some(second));
+        assert_eq!(shell.panes.leaves().len(), 2);
+        assert!(shell.terminals.contains_key(&2));
+
+        let _ = shell.update(Msg::CancelClosePane);
+        assert_eq!(shell.pending_close_pane, None);
+        assert_eq!(shell.panes.leaves().len(), 2);
+
+        let _ = shell.update(Msg::ClosePane(second));
+        let _ = shell.update(Msg::ConfirmClosePane);
+        assert_eq!(shell.pending_close_pane, None);
+        assert_eq!(shell.panes.leaves(), vec![first]);
+        assert_eq!(shell.panes.focused(), first);
+        assert!(!shell.terminals.contains_key(&2));
+        assert!(shell.terminals.contains_key(&1));
+    }
+
+    #[test]
+    fn fechar_o_unico_pane_encerra_as_abas_e_abre_um_terminal_novo() {
         let mut shell = test_shell();
         let _ = shell.update(Msg::OpenSettings);
-        let _ = shell.update(Msg::SplitRight);
+        let only = shell.panes.focused();
+        let _ = shell.update(Msg::ClosePane(only));
+        let _ = shell.update(Msg::ConfirmClosePane);
+        assert_eq!(shell.panes.leaves(), vec![only]);
+        assert_eq!(shell.panes.focused_model().tabs(), &[PaneTab::Terminal(2)]);
+        assert!(!shell.terminals.contains_key(&1));
+        assert!(shell.terminals.contains_key(&2));
+    }
+
+    #[test]
+    fn selecionar_aba_de_pane_nao_focado_move_o_foco() {
+        let mut shell = test_shell();
+        let first = shell.panes.focused();
+        let _ = shell.update(Msg::SplitPane(first, Axis::Vertical));
+        let _ = shell.update(Msg::SelectTabIn(first, 0));
+        assert_eq!(shell.panes.focused(), first);
+        assert_eq!(
+            shell.panes.focused_model().active_tab(),
+            Some(&PaneTab::Terminal(1))
+        );
+    }
+
+    #[test]
+    fn terminal_novo_em_outro_pane_nao_reaproveita_id() {
+        let mut shell = test_shell();
+        let first = shell.panes.focused();
+        let _ = shell.update(Msg::SplitPane(first, Axis::Vertical));
+        let _ = shell.update(Msg::NewTerminalIn(first));
+        assert_eq!(shell.panes.focused(), first);
+        assert_eq!(
+            shell.panes.focused_model().tabs(),
+            &[PaneTab::Terminal(1), PaneTab::Terminal(3)]
+        );
+        assert_eq!(shell.terminals.len(), 3);
+    }
+
+    #[test]
+    fn fechar_ultima_aba_do_pane_remove_o_pane_quando_ha_outro() {
+        let mut shell = test_shell();
+        let first = shell.panes.focused();
+        let _ = shell.update(Msg::SplitPane(first, Axis::Horizontal));
+        let second = shell.panes.focused();
         let _ = shell.update(Msg::CloseTab(0));
-        assert!(shell.split_pane.is_none());
-        assert_eq!(shell.pane_model.active_tab(), Some(&PaneTab::Terminal(1)));
+        assert_eq!(shell.panes.leaves(), vec![first]);
+        assert_eq!(shell.panes.focused(), first);
+        assert!(!shell.terminals.contains_key(&2));
+        let _ = shell.update(Msg::ClosePane(second));
+        assert_eq!(shell.pending_close_pane, None);
+    }
+
+    #[test]
+    fn clicar_em_fechar_de_pane_nao_focado_foca_e_abre_a_confirmacao() {
+        let mut shell = test_shell();
+        let first = shell.panes.focused();
+        let _ = shell.update(Msg::SplitPane(first, Axis::Vertical));
+        assert_ne!(shell.panes.focused(), first);
+        let _ = shell.update(Msg::ClosePane(first));
+        assert_eq!(shell.panes.focused(), first);
+        assert_eq!(shell.pending_close_pane, Some(first));
+    }
+
+    #[test]
+    fn clique_no_canvas_do_terminal_foca_o_pane_dele() {
+        let mut shell = test_shell();
+        let first = shell.panes.focused();
+        let _ = shell.update(Msg::SplitPane(first, Axis::Vertical));
+        assert_ne!(shell.panes.focused(), first);
+        let _ = shell.update(Msg::TerminalIn(1, TerminalMsg::ClearSelection));
+        assert_eq!(shell.panes.focused(), first);
     }
 }

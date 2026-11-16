@@ -5,6 +5,7 @@
 //! inativas em `BG` com texto `TEXT3`, botão `×` por aba, botão `+` que abre
 //! novo terminal e controles de split/fechar) e corpo em `PANEL` com borda `BORDER`.
 
+use iced::widget::pane_grid;
 use iced::widget::{button, canvas, column, container, row, text, tooltip};
 use iced::{Background, Border, Element, Fill, Theme};
 
@@ -20,10 +21,12 @@ pub struct ChromeCallbacks<M, FSelect, FClose> {
     pub on_close_tab: FClose,
     pub on_new_terminal: M,
     pub noop_msg: M,
-    /// Divide o pane à direita; `None` quando o pane não pode dividir (ex.: é o lado não focado).
-    pub on_split: Option<M>,
-    /// Fecha a divisão, juntando as abas do outro pane; `None` quando não há divisão.
-    pub on_close_split: Option<M>,
+    pub on_split_right: M,
+    pub on_split_down: M,
+    /// Pede para fechar o pane (a confirmação é do chamador).
+    pub on_close_pane: M,
+    /// `false` com um diálogo aberto: a dica é um overlay e ficaria por cima dele.
+    pub show_tooltips: bool,
 }
 
 /// Envolve o conteúdo ativo do pane (terminal ou viewer) com a barra de abas.
@@ -41,8 +44,12 @@ where
     FClose: Fn(usize) -> M + 'a,
     FHover: Fn(Option<usize>) -> M,
 {
-    let split_controls =
-        split_controls(callbacks.on_split.clone(), callbacks.on_close_split.clone());
+    let split_controls = split_controls(
+        callbacks.on_split_right.clone(),
+        callbacks.on_split_down.clone(),
+        callbacks.on_close_pane.clone(),
+        callbacks.show_tooltips,
+    );
     // as ferramentas ficam dentro da barra (mesmo fundo e borda de baixo), como em pane_view.dart
     let tab_strip = view_tab_strip(model, callbacks, dirty, hovered, on_hover, split_controls);
 
@@ -63,30 +70,39 @@ where
     column![tab_strip, body].width(Fill).height(Fill).into()
 }
 
-/// Botões de divisão no canto direito da barra: dividir, ou fechar a divisão.
+/// Botões do canto direito da barra, na ordem do Flutter: dividir à direita, dividir abaixo, fechar.
 fn split_controls<'a, M: Clone + 'a>(
-    on_split: Option<M>,
-    on_close_split: Option<M>,
+    on_split_right: M,
+    on_split_down: M,
+    on_close_pane: M,
+    show_tooltips: bool,
 ) -> Element<'a, M> {
-    let mut controls = row![].spacing(theme::PANE_TOOL_GAP).padding(iced::Padding {
-        right: theme::PANE_TOOL_SIZE,
-        ..iced::Padding::ZERO
-    });
-    if let Some(msg) = on_split {
-        controls = controls.push(tool_button(
+    row![
+        tool_button(
             PaneToolIcon::SplitRight,
             labels::PANE_SPLIT_RIGHT,
-            msg,
-        ));
-    }
-    if let Some(msg) = on_close_split {
-        controls = controls.push(tool_button(
+            on_split_right,
+            show_tooltips
+        ),
+        tool_button(
+            PaneToolIcon::SplitDown,
+            labels::PANE_SPLIT_DOWN,
+            on_split_down,
+            show_tooltips
+        ),
+        tool_button(
             PaneToolIcon::Close,
-            labels::PANE_CLOSE_SPLIT,
-            msg,
-        ));
-    }
-    controls.into()
+            labels::PANE_CLOSE,
+            on_close_pane,
+            show_tooltips
+        ),
+    ]
+    .spacing(theme::PANE_TOOL_GAP)
+    .padding(iced::Padding {
+        right: theme::PANE_TOOL_SIZE,
+        ..iced::Padding::ZERO
+    })
+    .into()
 }
 
 /// Botão fantasma 13px com ícone desenhado e tooltip (`btn` de `_PaneTools`).
@@ -94,6 +110,7 @@ fn tool_button<'a, M: Clone + 'a>(
     icon: PaneToolIcon,
     tip: &'static str,
     on_press: M,
+    show_tooltip: bool,
 ) -> Element<'a, M> {
     let size = theme::PANE_TOOL_SIZE;
     let button = button(canvas::Canvas::new(icon).width(size).height(size))
@@ -102,6 +119,9 @@ fn tool_button<'a, M: Clone + 'a>(
         .padding(0)
         .on_press(on_press)
         .style(theme::ghost_button);
+    if !show_tooltip {
+        return button.into();
+    }
     tooltip(
         button,
         container(
@@ -123,6 +143,23 @@ fn tool_button<'a, M: Clone + 'a>(
         tooltip::Position::Bottom,
     )
     .into()
+}
+
+/// Divisor entre panes (`PaneDivider`): a linha de 1px é `border` (fundo do grid) e vira `accent`
+/// ao passar o mouse ou arrastar.
+pub fn grid_style(_: &Theme) -> pane_grid::Style {
+    let accent = pane_grid::Line {
+        color: theme::palette().accent,
+        width: theme::PANE_DIVIDER_LINE,
+    };
+    pane_grid::Style {
+        hovered_region: pane_grid::Highlight {
+            background: Background::Color(iced::Color::TRANSPARENT),
+            border: Border::default(),
+        },
+        picked_split: accent,
+        hovered_split: accent,
+    }
 }
 
 /// Estado visual vazio quando todas as abas do pane foram fechadas.

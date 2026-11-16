@@ -99,34 +99,15 @@ pub fn file_display_name(path: &Path) -> String {
 pub struct PaneModel {
     tabs: Vec<PaneTab>,
     active: Option<usize>,
-    next_term_id: TermId,
-    next_chat_id: ChatId,
-}
-
-impl Default for PaneModel {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl PaneModel {
-    /// Inicia o pane com uma aba de terminal ativa (`Terminal(1)`).
-    pub fn new() -> Self {
-        Self {
-            tabs: vec![PaneTab::Terminal(1)],
-            active: Some(0),
-            next_term_id: 2,
-            next_chat_id: 1,
-        }
-    }
-
-    /// Cria um pane inicialmente sem abas.
+    /// Cria um pane inicialmente sem abas. Os ids de terminal e chat vêm de
+    /// `PaneTree`, que os aloca para a árvore inteira (sem colisão entre panes).
     pub fn empty() -> Self {
         Self {
             tabs: Vec::new(),
             active: None,
-            next_term_id: 1,
-            next_chat_id: 1,
         }
     }
 
@@ -145,22 +126,16 @@ impl PaneModel {
         self.active.and_then(|idx| self.tabs.get(idx))
     }
 
-    /// Abre uma nova aba de terminal ao final da lista, torna-a ativa e devolve seu [`TermId`].
-    pub fn open_terminal(&mut self) -> TermId {
-        let id = self.next_term_id;
-        self.next_term_id = self.next_term_id.saturating_add(1);
+    /// Abre uma aba de terminal `id` ao final da lista e a torna ativa.
+    pub fn open_terminal(&mut self, id: TermId) {
         self.tabs.push(PaneTab::Terminal(id));
         self.active = Some(self.tabs.len().saturating_sub(1));
-        id
     }
 
-    /// Abre uma nova aba de chat ao final da lista, torna-a ativa e devolve seu [`ChatId`].
-    pub fn open_chat(&mut self) -> ChatId {
-        let id = self.next_chat_id;
-        self.next_chat_id = self.next_chat_id.saturating_add(1);
+    /// Abre uma aba de chat `id` ao final da lista e a torna ativa.
+    pub fn open_chat(&mut self, id: ChatId) {
         self.tabs.push(PaneTab::Chat(id));
         self.active = Some(self.tabs.len().saturating_sub(1));
-        id
     }
 
     /// Abre ou ativa a aba única do cenário.
@@ -203,19 +178,6 @@ impl PaneModel {
             self.tabs.push(PaneTab::Database);
             self.active = Some(self.tabs.len().saturating_sub(1));
         }
-    }
-
-    /// Recebe uma aba já existente (movida de outro pane): adiciona ao final, ou só
-    /// ativa se a mesma aba já estiver aberto aqui. Devolve o índice ativo.
-    pub fn adopt(&mut self, tab: PaneTab) -> usize {
-        if let Some(existing) = self.tabs.iter().position(|t| t == &tab) {
-            self.active = Some(existing);
-            return existing;
-        }
-        self.tabs.push(tab);
-        let idx = self.tabs.len().saturating_sub(1);
-        self.active = Some(idx);
-        idx
     }
 
     /// Abre um arquivo como aba: se já estiver aberto, apenas ativa a aba existente;
@@ -274,15 +236,20 @@ impl PaneModel {
 mod tests {
     use super::*;
 
+    fn with_terminal() -> PaneModel {
+        let mut model = PaneModel::empty();
+        model.open_terminal(1);
+        model
+    }
+
     #[test]
-    fn inicia_com_terminal_ativo_e_abre_novos_terminais_com_id_incremental() {
-        let mut model = PaneModel::new();
+    fn abre_terminais_com_o_id_informado_e_ativa_o_ultimo() {
+        let mut model = with_terminal();
         assert_eq!(model.tabs(), &[PaneTab::Terminal(1)]);
         assert_eq!(model.active_index(), Some(0));
         assert_eq!(model.active_tab(), Some(&PaneTab::Terminal(1)));
 
-        let id2 = model.open_terminal();
-        assert_eq!(id2, 2);
+        model.open_terminal(2);
         assert_eq!(model.tabs().len(), 2);
         assert_eq!(model.active_index(), Some(1));
         assert_eq!(model.active_tab(), Some(&PaneTab::Terminal(2)));
@@ -290,7 +257,7 @@ mod tests {
 
     #[test]
     fn abrir_arquivo_ja_aberto_apenas_ativa_sem_duplicar() {
-        let mut model = PaneModel::new();
+        let mut model = with_terminal();
         let idx1 = model.open_file("/proj/src/main.rs");
         assert_eq!(idx1, 1);
         assert_eq!(model.tabs().len(), 2);
@@ -308,10 +275,10 @@ mod tests {
 
     #[test]
     fn fechar_abas_preserva_ou_ajusta_aba_ativa_corretamente() {
-        let mut model = PaneModel::new();
+        let mut model = with_terminal();
         model.open_file("/proj/Cargo.toml");
         model.open_file("/proj/README.md");
-        model.open_terminal();
+        model.open_terminal(2);
         // Abas: [0: Terminal(1), 1: Cargo.toml, 2: README.md, 3: Terminal(2)], ativa = 3
         assert_eq!(model.tabs().len(), 4);
         assert_eq!(model.active_index(), Some(3));
@@ -367,9 +334,8 @@ mod tests {
         assert_eq!(chat.icon(), labels::ICON_CHAT);
         assert!(chat.is_chat());
 
-        let mut model = PaneModel::new();
-        let cid = model.open_chat();
-        assert_eq!(cid, 1);
+        let mut model = with_terminal();
+        model.open_chat(1);
         assert_eq!(model.active_tab(), Some(&PaneTab::Chat(1)));
     }
 }

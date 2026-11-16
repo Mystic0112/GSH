@@ -387,7 +387,16 @@ pub const FARM_IDLE: &str = "Ocioso";
 pub const FARM_DONE: &str = "Terminou";
 pub const FARM_ALERT: &str = "!";
 pub const PANE_SPLIT_RIGHT: &str = "Dividir à direita";
-pub const PANE_CLOSE_SPLIT: &str = "Fechar divisão";
+pub const PANE_SPLIT_DOWN: &str = "Dividir abaixo";
+pub const PANE_CLOSE: &str = "Fechar painel";
+pub const PANE_CLOSE_TITLE: &str = "Fechar painel?";
+pub const PANE_CLOSE_CONFIRM: &str = "Fechar";
+pub const DIALOG_CANCEL: &str = "Cancelar";
+
+/// Aviso do diálogo de fechar painel (`closePaneMessage` do Flutter).
+pub fn pane_close_message(count: usize) -> String {
+    format!("Isso fecha todas as {count} aba(s) deste painel e encerra os agentes/terminais nele.")
+}
 pub const FARM_NEED_YOU_ONE: &str = "1 precisa de você";
 pub const FARM_NEED_YOU_MANY: &str = "precisam de você";
 

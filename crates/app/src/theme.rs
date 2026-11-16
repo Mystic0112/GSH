@@ -175,6 +175,15 @@ pub fn contrast_ratio(a: Color, b: Color) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
+/// Cor de texto legível sobre `background` (`onColor` do Flutter): branco ou preto, o de maior contraste.
+pub fn on_color(background: Color) -> Color {
+    if contrast_ratio(background, Color::WHITE) >= contrast_ratio(background, Color::BLACK) {
+        Color::WHITE
+    } else {
+        Color::BLACK
+    }
+}
+
 // Tokens principais do tema `gsh` escuro (valores de compilação; o tema ativo vem de `palette()`)
 pub const BG: Color = GshPalette::DARK.bg;
 pub const PANEL: Color = GshPalette::DARK.panel;
@@ -443,6 +452,19 @@ pub const PANE_TOOL_SIZE: f32 = 13.0;
 pub const PANE_TOOL_GAP: f32 = 12.0;
 /// Espessura do traço dos ícones da barra do pane, como fração do lado.
 pub const PANE_TOOL_STROKE_RATIO: f32 = 0.10;
+/// Divisor entre panes (`PaneDivider`): linha de 1px dentro de uma área de arraste de 12px.
+pub const PANE_DIVIDER_LINE: f32 = 1.0;
+pub const PANE_DIVIDER_HANDLE: f32 = 12.0;
+/// Diálogo de confirmação (`AlertDialog` do shadcn no Flutter).
+pub const DIALOG_CONTENT_WIDTH: f32 = 380.0;
+pub const DIALOG_PADDING: f32 = 24.0;
+pub const DIALOG_GAP: f32 = 16.0;
+pub const DIALOG_TITLE_GAP: f32 = 8.0;
+pub const DIALOG_ACTIONS_GAP: f32 = 8.0;
+pub const DIALOG_TITLE_SIZE: f32 = 15.0;
+pub const DIALOG_MESSAGE_SIZE: f32 = 13.5;
+pub const DIALOG_BUTTON_SIZE: f32 = 14.0;
+pub const DIALOG_RADIUS: f32 = 12.0;
 pub const FILE_TREE_ROW_HEIGHT: f32 = 26.0;
 pub const FILE_TREE_ROW_INDENT: f32 = 14.0;
 pub const FILE_TREE_ROW_PADDING: f32 = 6.0;

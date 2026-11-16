@@ -1,17 +1,18 @@
 //! Ícones desenhados da barra do pane (`_SplitterScreenIcon` de `pane_view.dart`).
 //!
-//! Dois retângulos de contorno lado a lado (dividir à direita) ou um × de duas
-//! barras redondas (fechar), ambos em `TEXT3`, com traço de 10% do lado.
+//! Dois retângulos de contorno lado a lado (dividir à direita), empilhados
+//! (dividir abaixo) ou um × de duas barras redondas (fechar), todos em `TEXT3`,
+//! com traço de 10% do lado.
 
 use iced::widget::canvas::{self, LineCap, Path, Stroke};
 use iced::{mouse, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::theme;
 
-// ponytail: sem "dividir abaixo" porque o núcleo só divide em colunas; ele entra com o split horizontal.
 #[derive(Debug, Clone, Copy)]
 pub enum PaneToolIcon {
     SplitRight,
+    SplitDown,
     Close,
 }
 
@@ -39,6 +40,17 @@ impl<M> canvas::Program<M> for PaneToolIcon {
                     let path = Path::rounded_rectangle(
                         Point::new(left + line / 2.0, line / 2.0),
                         Size::new(box_width - line, side - line),
+                        (line / 2.0).into(),
+                    );
+                    frame.stroke(&path, stroke);
+                }
+            }
+            Self::SplitDown => {
+                let box_height = (side - line) / 2.0;
+                for top in [0.0, box_height + line] {
+                    let path = Path::rounded_rectangle(
+                        Point::new(line / 2.0, top + line / 2.0),
+                        Size::new(side - line, box_height - line),
                         (line / 2.0).into(),
                     );
                     frame.stroke(&path, stroke);
