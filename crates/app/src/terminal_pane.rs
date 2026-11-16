@@ -260,6 +260,16 @@ impl TerminalPane {
         let _ = self.session.take();
     }
 
+    /// Envia um comando seguido de quebra de linha para a sessão PTY, se ativa.
+    pub fn send_command(&mut self, command: &str) {
+        if let Some(session) = &self.session {
+            session.scroll_to_bottom();
+            let line = format!("{command}\n");
+            let _ = session.send(line.as_bytes());
+            self.sync_snapshot();
+        }
+    }
+
     /// Fotografia atual do grid visível.
     pub fn snapshot(&self) -> &TermSnapshot {
         &self.snapshot

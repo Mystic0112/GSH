@@ -794,8 +794,6 @@ pub fn db_error_message(error: &gsh_db::DbError) -> String {
 pub const SETTINGS_NAV_SEARCH: &str = "Buscar configurações";
 pub const SETTINGS_NAV_NO_RESULTS: &str = "Nenhum resultado";
 pub const SETTINGS_NAV_CLAUDE: &str = "Claude";
-pub const SETTINGS_CLAUDE_UNAVAILABLE: &str =
-    "As configurações do Claude ainda não estão disponíveis neste app.";
 
 pub const SETTINGS_LOCALE_SYSTEM: &str = "Sistema";
 pub const SETTINGS_LOCALE_EN: &str = "English";
@@ -993,4 +991,409 @@ pub const ICON_CHECK: &str = "\u{e668}";
 
 pub fn format_edited_by(label: &str, time: &str) -> String {
     format!("Editado por {label} · {time}")
+}
+
+// Aba Claude das Configurações (`pt_BR.i18n.json` -> `settings.page.claudeCode`, `account`, `privacy`,
+// `generalClaude`, `claude`, `nav`)
+pub const SETTINGS_CC_SECTION_GENERAL: &str = "Geral";
+pub const SETTINGS_CC_CLASSIFY_TITLE: &str = "Classificar estados das sessões";
+pub const SETTINGS_CC_CLASSIFY_DESC: &str = "Mostra no cabeçalho do chat o estado que o Claude Code atribui ao fim de cada turno: concluída, pronta para revisão ou bloqueada. O Claude Code classifica de qualquer jeito; desligar só esconde o selo.";
+pub const SETTINGS_CC_SWITCH_MODELS_TITLE: &str =
+    "Alternar modelos quando uma mensagem for sinalizada";
+pub const SETTINGS_CC_SWITCH_MODELS_DESC: &str = "Quando as salvaguardas sinalizarem uma mensagem, alternar automaticamente para um modelo diferente para continuar a conversa. Quando desativado, sua sessão será pausada. Fica no ~/.claude/settings.json (switchModelsOnFlag).";
+pub const SETTINGS_CC_SECTION_CODE_APPEARANCE: &str = "Aparência do código";
+pub const SETTINGS_CC_FOLLOW_THEME: &str = "Do tema ativo";
+pub const SETTINGS_CC_CODE_THEME_LIGHT_HINT: &str = "Cores do código no modo claro";
+pub const SETTINGS_CC_CODE_THEME_DARK_HINT: &str = "Cores do código no modo escuro";
+pub const SETTINGS_CC_CODE_FONT_TITLE: &str = "Fonte de código";
+pub const SETTINGS_CC_CODE_FONT_DESC: &str = "Defina uma fonte monoespaçada personalizada para código: viewer, editor, diffs e blocos de código do chat. O terminal tem fonte própria em Aparência.";
+pub const SETTINGS_CC_CODE_FONT_PLACEHOLDER: &str = "ex.: JetBrains Mono";
+pub const SETTINGS_CC_SECTION_APPEARANCE: &str = "Aparência";
+pub const SETTINGS_CC_TRANSCRIPT_TITLE: &str = "Visualização padrão da transcrição";
+pub const SETTINGS_CC_TRANSCRIPT_DESC: &str =
+    "A visualização com que novas conversas do chat abrem. Conversas já abertas mantêm a delas.";
+pub const SETTINGS_CC_VIEW_NORMAL: &str = "Normal";
+pub const SETTINGS_CC_VIEW_THINKING: &str = "Raciocínio";
+pub const SETTINGS_CC_VIEW_VERBOSE: &str = "Detalhado";
+pub const SETTINGS_CC_SECTION_REMOTE_CONTROL: &str = "Remote Control";
+pub const SETTINGS_CC_CHAT_REMOTE_CONTROL_TITLE: &str = "Chat com Remote Control (experimental)";
+pub const SETTINGS_CC_CHAT_REMOTE_CONTROL_DESC: &str = "O chat do GSH roda o claude interativo num terminal escondido, conectado ao Remote Control: a conversa aparece no celular e em claude.ai/code, e sessões de outras máquinas enxergam ela. A resposta chega por mensagem (sem aparecer letra a letra). Vale para chats abertos depois da troca; desligue para voltar ao motor rápido.";
+pub const SETTINGS_CC_REMOTE_CONTROL_TITLE: &str = "Conectar novas sessões ao Remote Control";
+pub const SETTINGS_CC_REMOTE_CONTROL_DESC: &str = "Toda sessão do claude que você iniciar num terminal se conecta ao Remote Control, para continuar no celular ou em claude.ai/code. Fica no ~/.claude/settings.json (remoteControlAtStartup). Exige login claude.ai (Pro, Max, Team ou Enterprise).";
+pub const SETTINGS_CC_SECTION_SESSIONS: &str = "Sessões";
+pub const SETTINGS_CC_PROMPT_SUGGESTIONS_TITLE: &str = "Sugestões de prompts";
+pub const SETTINGS_CC_PROMPT_SUGGESTIONS_DESC: &str = "Mostrar uma sugestão de próximo prompt depois que o Claude responder. As sugestões consomem um pouco do seu uso.";
+pub const SETTINGS_CC_OUTPUT_STYLE_TITLE: &str = "Estilo de saída";
+pub const SETTINGS_CC_OUTPUT_STYLE_DESC: &str =
+    "Como o Claude estrutura suas respostas nas sessões do Code. Aplica-se a novas sessões.";
+pub const SETTINGS_CC_OUTPUT_STYLE_DEFAULT: &str = "Padrão";
+pub const SETTINGS_CC_CROSS_SESSION_TITLE: &str = "Mensagens de outras sessões";
+pub const SETTINGS_CC_CROSS_SESSION_DESC: &str = "O que fazer quando outra sessão do Claude Code manda mensagem para esta (SendMessage). O GSH deixa Aceitar para toda sessão da máquina; Segurar guarda para você aprovar, Recusar descarta. Fica em crossSessionInbound.";
+pub const SETTINGS_CC_CROSS_SESSION_ACCEPT: &str = "Aceitar";
+pub const SETTINGS_CC_CROSS_SESSION_HOLD: &str = "Segurar para aprovar";
+pub const SETTINGS_CC_CROSS_SESSION_REFUSE: &str = "Recusar";
+pub const SETTINGS_CC_SANDBOX_TITLE: &str = "Sandbox local";
+pub const SETTINGS_CC_SANDBOX_DESC: &str =
+    "Executa os comandos bash do Claude Code num sandbox isolado. Aplica-se a novas sessões.";
+pub const SETTINGS_CC_SANDBOX_STRICT_TITLE: &str = "Modo sandbox estrito";
+pub const SETTINGS_CC_SANDBOX_STRICT_DESC: &str = "Bloqueia comandos que não podem ser executados dentro do sandbox em vez de executá-los fora dele.";
+pub const SETTINGS_CC_SECTION_SECURITY: &str = "Segurança";
+pub const SETTINGS_CC_PROTECTED_HOSTS_TITLE: &str = "Hosts protegidos";
+pub const SETTINGS_CC_PROTECTED_HOSTS_DESC: &str = "Hosts que nenhum agente pode tocar num comando: ssh, scp, workspace remoto, qualquer coisa que cite o nome. O GSH bloqueia o comando antes de rodar, em toda sessão do Claude Code e do Codex nesta máquina, e manda o agente pedir a você. Separe por vírgula; vale a palavra inteira (prod bloqueia \"ssh prod\" e \"prod.x.com\", não \"production\"). Fica em ~/.gsh/protected-hosts.json.";
+pub const SETTINGS_CC_SECTION_BROWSER: &str = "Navegador";
+pub const SETTINGS_CC_LINKS_IN_APP_TITLE: &str = "Abrir links no navegador integrado";
+pub const SETTINGS_CC_LINKS_IN_APP_DESC: &str = "Links clicados nos terminais abrem numa aba de navegador do GSH em vez do seu navegador padrão.";
+pub const SETTINGS_ACCOUNT_TITLE: &str = "Conta";
+pub const SETTINGS_ACCOUNT_PROFILE: &str = "Perfil";
+pub const SETTINGS_ACCOUNT_INSTRUCTIONS: &str = "Instruções para o Claude";
+pub const SETTINGS_ACCOUNT_INSTRUCTIONS_DESC: &str =
+    "Gravado em ~/.claude/CLAUDE.md: o Claude Code carrega em toda sessão deste computador.";
+pub const SETTINGS_ACCOUNT_INSTRUCTIONS_HINT: &str = "ex.: manter explicações breves e diretas";
+pub const SETTINGS_ACCOUNT_LOGGED_IN: &str = "Conectado";
+pub const SETTINGS_ACCOUNT_LOGGED_OUT: &str = "Desconectado";
+pub const SETTINGS_ACCOUNT_LOGGED_IN_DESC: &str = "O Claude Code deste computador usa esta conta.";
+pub const SETTINGS_ACCOUNT_LOGGED_OUT_DESC: &str =
+    "Entre para usar sua assinatura do Claude no Claude Code.";
+pub const SETTINGS_ACCOUNT_LOGIN: &str = "Entrar";
+pub const SETTINGS_ACCOUNT_LOGOUT: &str = "Sair";
+pub const SETTINGS_ACCOUNT_LOGOUT_CONFIRM_TITLE: &str = "Sair do Claude Code?";
+pub const SETTINGS_ACCOUNT_LOGOUT_CONFIRM_MESSAGE: &str = "Roda `claude auth logout`. As sessões deste computador deixam de usar sua assinatura até você entrar de novo.";
+pub const SETTINGS_ACCOUNT_EMAIL: &str = "E-mail";
+pub const SETTINGS_ACCOUNT_ORGANIZATION: &str = "Organização";
+pub const SETTINGS_ACCOUNT_ORG_ID: &str = "ID da organização";
+pub const SETTINGS_ACCOUNT_PLAN: &str = "Plano";
+pub const SETTINGS_ACCOUNT_METHOD: &str = "Método de login";
+pub const SETTINGS_PRIVACY_TITLE: &str = "Dados";
+pub const SETTINGS_PRIVACY_GSH_TELEMETRY: &str = "Telemetria do GSH";
+pub const SETTINGS_PRIVACY_GSH_TELEMETRY_DESC: &str =
+    "Só local: erros e logs ficam num SQLite deste computador e nunca são enviados.";
+pub const SETTINGS_PRIVACY_CC_TELEMETRY: &str = "Desligar a telemetria do Claude Code";
+pub const SETTINGS_PRIVACY_CC_TELEMETRY_DESC: &str = "Define DISABLE_TELEMETRY no env do ~/.claude/settings.json (métricas de uso não são enviadas).";
+pub const SETTINGS_PRIVACY_CC_ERRORS: &str = "Desligar relatórios de erro do Claude Code";
+pub const SETTINGS_PRIVACY_CC_ERRORS_DESC: &str =
+    "Define DISABLE_ERROR_REPORTING no env do ~/.claude/settings.json.";
+pub const SETTINGS_GC_SECTION_APPEARANCE: &str = "Aparência";
+pub const SETTINGS_GC_THEME: &str = "Tema";
+pub const SETTINGS_GC_THEME_SYSTEM: &str = "Sistema";
+pub const SETTINGS_GC_THEME_LIGHT: &str = "Claro";
+pub const SETTINGS_GC_THEME_DARK: &str = "Escuro";
+pub const SETTINGS_GC_TEXT_SIZE: &str = "Tamanho do texto da conversa";
+pub const SETTINGS_GC_TEXT_SIZE_DESC: &str =
+    "Tamanho base do texto do app (o mesmo ajuste de Aparência).";
+pub const SETTINGS_GC_SIZE_SMALL: &str = "Pequeno";
+pub const SETTINGS_GC_SIZE_MEDIUM: &str = "Médio";
+pub const SETTINGS_GC_SIZE_LARGE: &str = "Grande";
+pub const SETTINGS_GC_TRANSCRIPT_WIDTH: &str = "Largura da transcrição";
+pub const SETTINGS_GC_TRANSCRIPT_WIDTH_DESC: &str =
+    "Largura máxima das colunas da transcrição e do campo de mensagem.";
+pub const SETTINGS_GC_WIDTH_NARROW: &str = "Estreito";
+pub const SETTINGS_GC_WIDTH_MEDIUM: &str = "Médio";
+pub const SETTINGS_GC_WIDTH_WIDE: &str = "Largo";
+pub const SETTINGS_GC_REDUCED_MOTION: &str = "Movimento reduzido";
+pub const SETTINGS_GC_REDUCED_MOTION_DESC: &str = "Menos animações no Claude Code (brilho do spinner, piscadas). Gravado como prefersReducedMotion no ~/.claude/settings.json.";
+pub const SETTINGS_GC_SECTION_NOTIFICATIONS: &str = "Notificações";
+pub const SETTINGS_GC_NOTIFY_TURN_DONE: &str = "Conclusão de respostas";
+pub const SETTINGS_GC_NOTIFY_TURN_DONE_DESC: &str =
+    "Receba uma notificação quando um agente terminar uma resposta e a janela não estiver em foco.";
+pub const SETTINGS_GC_NOTIFY_PERMISSION: &str = "Solicitações de permissão do Code";
+pub const SETTINGS_GC_NOTIFY_PERMISSION_DESC: &str =
+    "Toca um som quando um agente estiver esperando sua aprovação ou resposta.";
+pub const SETTINGS_GC_PUSH_INPUT_NEEDED: &str = "Push no celular quando precisar de você";
+pub const SETTINGS_GC_PUSH_INPUT_NEEDED_DESC: &str = "O Claude Code manda um push quando uma permissão ou pergunta estiver esperando (inputNeededNotifEnabled).";
+pub const SETTINGS_GC_PUSH_AGENT: &str = "Notificações proativas no celular";
+pub const SETTINGS_GC_PUSH_AGENT_DESC: &str = "Deixa o Claude avisar no celular sobre atualizações importantes de uma sessão (agentPushNotifEnabled).";
+pub const SETTINGS_CLAUDE_GROUP: &str = "Configurações";
+pub const SETTINGS_CLAUDE_GROUP_COMPUTER: &str = "Este computador";
+pub const SETTINGS_CLAUDE_GROUP_PERSONALIZATION: &str = "Personalização";
+pub const SETTINGS_CLAUDE_GROUP_PLATFORM: &str = "Plataforma";
+pub const SETTINGS_NAV_ACCOUNT: &str = "Conta";
+pub const SETTINGS_NAV_PRIVACY: &str = "Privacidade";
+pub const SETTINGS_NAV_USAGE: &str = "Uso";
+pub const SETTINGS_NAV_RESOURCES: &str = "Recursos";
+pub const SETTINGS_NAV_MEMORY: &str = "Memória";
+pub const SETTINGS_NAV_DESIGN_SYSTEMS: &str = "Design systems";
+pub const SETTINGS_NAV_CLAUDE_CODE: &str = "Claude Code";
+pub const SETTINGS_NAV_COWORK: &str = "Cowork";
+pub const SETTINGS_NAV_SYSTEM: &str = "Sistema";
+pub const SETTINGS_NAV_EXTENSIONS: &str = "Extensões";
+pub const SETTINGS_NAV_DEVELOPER: &str = "Desenvolvedor";
+pub const SETTINGS_NAV_SKILLS: &str = "Skills";
+pub const SETTINGS_NAV_CONNECTORS: &str = "Conectores";
+pub const SETTINGS_NAV_PLUGINS: &str = "Plugins";
+pub const SETTINGS_NAV_API_KEYS: &str = "Chaves de API";
+pub const SETTINGS_CLAUDE_REFRESH: &str = "Atualizar";
+pub const SETTINGS_CLAUDE_LOADING: &str = "Carregando…";
+pub const SETTINGS_CLAUDE_TERMINAL_TITLE: &str = "Abrir um terminal";
+pub const SETTINGS_CLAUDE_NO_WORKSPACE: &str =
+    "Abra um workspace local antes: isto roda a CLI `claude` num terminal dele, para você acompanhar.";
+pub const SETTINGS_COMMON_OPEN: &str = "Abrir";
+pub const SETTINGS_COMMON_ADD: &str = "Adicionar";
+pub const ICON_ACCOUNT_CIRCLE: &str = "\u{f20b}";
+pub const ICON_CANCEL: &str = "\u{e888}";
+pub const ICON_CODE: &str = "\u{e86f}";
+pub const ICON_DARK_MODE: &str = "\u{e51c}";
+pub const ICON_DESKTOP_WINDOWS: &str = "\u{e30c}";
+pub const ICON_LIGHT_MODE: &str = "\u{e518}";
+pub const ICON_DATA_USAGE: &str = "\u{eff2}";
+pub const ICON_WORK_OUTLINE: &str = "\u{e943}";
+pub const ICON_PSYCHOLOGY: &str = "\u{ea4a}";
+pub const ICON_CHECKLIST: &str = "\u{e6b1}";
+pub const ICON_BUILD: &str = "\u{f8cd}";
+pub const ICON_HISTORY_EDU: &str = "\u{ea3e}";
+pub const ICON_WIDGETS: &str = "\u{e1bd}";
+pub const ICON_POWER: &str = "\u{e63c}";
+pub const ICON_VPN_KEY: &str = "\u{e0da}";
+pub const ICON_NORTH_EAST: &str = "\u{f1e1}";
+pub const ICON_STOREFRONT: &str = "\u{ea12}";
+pub const ICON_LANGUAGE: &str = "\u{ea07}";
+pub const ICON_KEY: &str = "\u{e73c}";
+pub const ICON_PAUSE: &str = "\u{e034}";
+pub const ICON_HELP_OUTLINE: &str = "\u{e8fd}";
+pub const ICON_DELETE_OUTLINE: &str = "\u{e92e}";
+
+// Fontes (`generalClaude` + `appearance.fontPicker*`)
+pub const SETTINGS_GC_UI_FONT: &str = "Fonte da interface";
+pub const SETTINGS_GC_UI_FONT_DESC: &str =
+    "Fonte para toda a interface — menus, barras laterais e painéis.";
+pub const SETTINGS_GC_UI_FONT_HINT: &str = "Montserrat · Hanken";
+pub const SETTINGS_GC_CHAT_FONT: &str = "Fonte do chat";
+pub const SETTINGS_GC_CHAT_FONT_DESC: &str = "Texto da conversa no chat com o Claude.";
+pub const SETTINGS_GC_CHAT_FONT_DEFAULT: &str = "Mesma da interface";
+pub const SETTINGS_FONT_PICKER_TITLE: &str = "Escolher uma fonte";
+pub const SETTINGS_FONT_PICKER_SEARCH: &str = "Buscar fontes";
+pub const SETTINGS_FONT_PICKER_EMPTY: &str = "Nenhuma fonte correspondente nesta máquina.";
+pub const SETTINGS_FONT_PICKER_BUNDLED: &str = "inclusa";
+pub const SETTINGS_FONT_PICKER_CUSTOM: &str = "Não está na lista? Digite o nome exato da família.";
+pub const SETTINGS_FONT_PICKER_CUSTOM_HINT: &str = "Nome da família";
+pub const SETTINGS_FONT_PICKER_USE: &str = "Usar";
+pub const SETTINGS_FONT_MISSING: &str = "Não encontrada nesta máquina — usando o fallback.";
+
+// Aba Uso (`usage`)
+pub const SETTINGS_USAGE_TITLE: &str = "Seus limites de uso";
+pub const SETTINGS_USAGE_WEEKLY_TITLE: &str = "Limites semanais";
+pub const SETTINGS_USAGE_UNAVAILABLE: &str =
+    "Limites de plano não se aplicam a este login (chave de API ou provedor terceiro).";
+pub const SETTINGS_USAGE_WINDOW_SESSION: &str = "Sessão atual";
+pub const SETTINGS_USAGE_WINDOW_WEEKLY: &str = "Todos os modelos";
+pub const SETTINGS_USAGE_JUST_NOW: &str = "há menos de um minuto";
+pub const SETTINGS_USAGE_PLAN_PRO: &str = "Pro";
+pub const SETTINGS_USAGE_PLAN_MAX: &str = "Max";
+pub const SETTINGS_USAGE_PLAN_TEAM: &str = "Equipe";
+pub const SETTINGS_USAGE_PLAN_ENTERPRISE: &str = "Empresa";
+
+pub fn usage_resets_in(when: &str) -> String {
+    format!("Reinicia em {when}")
+}
+pub fn usage_resets_at(when: &str) -> String {
+    format!("Reinicia {when}")
+}
+pub fn usage_percent_used(pct: i64) -> String {
+    format!("{pct}% usado")
+}
+pub fn usage_updated(when: &str) -> String {
+    format!("Última atualização: {when}")
+}
+pub fn usage_minutes_ago(n: i64) -> String {
+    format!("há {n} min")
+}
+pub fn usage_minutes(m: i64) -> String {
+    format!("{m} min")
+}
+pub fn usage_hours_minutes(h: i64, m: i64) -> String {
+    format!("{h} h {m} min")
+}
+pub fn usage_plan_label(plan: &str) -> String {
+    match plan.to_lowercase().as_str() {
+        "pro" => String::from(SETTINGS_USAGE_PLAN_PRO),
+        "max" => String::from(SETTINGS_USAGE_PLAN_MAX),
+        "team" => String::from(SETTINGS_USAGE_PLAN_TEAM),
+        "enterprise" => String::from(SETTINGS_USAGE_PLAN_ENTERPRISE),
+        _ => plan.to_owned(),
+    }
+}
+
+// Aba Recursos (`resources`)
+pub const SETTINGS_RESOURCES_SKILLS_MOVED: &str = "As Skills foram movidas para ";
+
+// Aba Memória (`memory`)
+pub const SETTINGS_MEMORY_INTRO: &str = "O que uma sessão do Claude Code no workspace ativo carrega: suas instruções e a memória que o próprio Claude grava. Clique para abrir o arquivo.";
+pub const SETTINGS_MEMORY_INSTRUCTIONS_TITLE: &str = "Instruções";
+pub const SETTINGS_MEMORY_AUTO_TITLE: &str = "Memória automática";
+pub const SETTINGS_MEMORY_EMPTY: &str = "Nenhum CLAUDE.md encontrado.";
+pub const SETTINGS_MEMORY_AUTO_EMPTY: &str =
+    "O Claude ainda não gravou memórias para este workspace.";
+pub const SETTINGS_MEMORY_SCOPE_USER: &str = "Usuário (todos os projetos)";
+pub const SETTINGS_MEMORY_SCOPE_PROJECT: &str = "Projeto";
+
+pub fn memory_updated(when: &str) -> String {
+    format!("Atualizado {when}")
+}
+
+// Aba Design Systems (`designSystems` + `appearance.themeImported`)
+pub const SETTINGS_DS_TITLE: &str = "Design systems";
+pub const SETTINGS_DS_DESC: &str =
+    "No GSH, são os temas: cores da interface, do terminal e do código num pacote só.";
+pub const SETTINGS_DS_ADD: &str = "Novo design system";
+pub const SETTINGS_DS_SEARCH: &str = "Pesquisar por nome";
+pub const SETTINGS_DS_COL_NAME: &str = "Nome";
+pub const SETTINGS_DS_COL_ORIGIN: &str = "Origem";
+pub const SETTINGS_DS_COL_AUTHOR: &str = "Autor";
+pub const SETTINGS_DS_ACTIVE: &str = "Ativo";
+pub const SETTINGS_DS_IMPORTED: &str = "Importado";
+pub const SETTINGS_DS_BUILT_IN: &str = "Embutido";
+pub const SETTINGS_DS_ACTIVATE: &str = "Usar este tema";
+pub const SETTINGS_DS_REMOVE: &str = "Remover";
+pub const SETTINGS_DS_IMPORT_DIALOG: &str = "Escolha um arquivo de tema";
+
+pub fn ds_showing(n: usize, total: usize) -> String {
+    format!("Exibindo {n} de {total}")
+}
+pub fn ds_theme_imported(name: &str) -> String {
+    format!("Tema \"{name}\" importado.")
+}
+
+// Placeholders (`placeholder`)
+pub const SETTINGS_PH_COWORK_1: &str =
+    "O Cowork é um recurso do Claude Desktop (tarefas que rodam neste computador com arquivos locais, navegador e MCPs).";
+pub const SETTINGS_PH_COWORK_2: &str =
+    "No GSH, o equivalente é o chat com o Claude num workspace e a Fazenda, onde os loops de agente rodam em terminais.";
+pub const SETTINGS_PH_EXTENSIONS_DESC: &str =
+    "Permitir que o Claude interaja diretamente com aplicativos, dados e ferramentas no seu computador.";
+pub const SETTINGS_PH_EXTENSIONS_EMPTY: &str = "Nenhuma extensão instalada";
+pub const SETTINGS_PH_EXTENSIONS: &str =
+    "Extensões .MCPB/.DXT são do Claude Desktop. No GSH, os servidores MCP ficam em Conectores e Desenvolvedor.";
+
+// Aba Sistema + Armazenamento (`system` + `general.launchAtStartup*` + `storage`)
+pub const SETTINGS_SYSTEM_TITLE: &str = "Sistema";
+pub const SETTINGS_SYSTEM_VERSION: &str = "Versão do aplicativo";
+pub const SETTINGS_SYSTEM_LAUNCH_TITLE: &str = "Iniciar ao ligar";
+pub const SETTINGS_SYSTEM_LAUNCH_DESC: &str =
+    "Inicia o GSH Desktop automaticamente quando você faz login no computador.";
+pub const SETTINGS_SYSTEM_KEEP_AWAKE_TITLE: &str = "Manter computador ativo";
+pub const SETTINGS_SYSTEM_KEEP_AWAKE_DESC: &str = "Impede a suspensão por inatividade enquanto ligado (o mesmo botão de raio do rail). Desliga ao fechar o app; fechar a tampa ainda suspende.";
+pub const SETTINGS_STORAGE_SECTION_TITLE: &str = "Armazenamento";
+pub const SETTINGS_STORAGE_LOCATION_TITLE: &str = "Local de armazenamento";
+pub const SETTINGS_STORAGE_USE_DEFAULT: &str = "Usar padrão";
+pub const SETTINGS_STORAGE_WORKING: &str = "Trabalhando…";
+pub const SETTINGS_STORAGE_CHANGE: &str = "Alterar…";
+pub const SETTINGS_STORAGE_RESET_TITLE: &str = "Redefinir o GSH Desktop";
+pub const SETTINGS_STORAGE_RESET_DESC: &str = "Exclui todos os dados locais — projetos, layouts, configurações e histórico do terminal — e volta ao local padrão.";
+pub const SETTINGS_STORAGE_RESET_BUTTON: &str = "Redefinir…";
+pub const SETTINGS_STORAGE_RESET_CONFIRM: &str = "Redefinir";
+pub const SETTINGS_STORAGE_RESET_DIALOG_TITLE: &str = "Redefinir o GSH Desktop?";
+pub const SETTINGS_STORAGE_RESET_DIALOG_CONTENT: &str = "Isso exclui permanentemente todos os dados locais do GSH Desktop — projetos, layouts, configurações e histórico do terminal. Isso não pode ser desfeito. O GSH Desktop será fechado para você começar do zero.";
+pub const SETTINGS_STORAGE_RESTART_TITLE: &str = "Reinicialização necessária";
+pub const SETTINGS_STORAGE_RESTART_DEFAULT_MSG: &str = "O GSH Desktop usará o local padrão do sistema a partir da próxima abertura. Seus dados na pasta personalizada permanecem intactos.";
+pub const SETTINGS_STORAGE_RESTART_RESET_MSG: &str =
+    "Todos os dados do GSH Desktop foram apagados. Reinicie para começar do zero.";
+pub const SETTINGS_STORAGE_LATER: &str = "Mais tarde";
+pub const SETTINGS_STORAGE_QUIT: &str = "Sair do GSH Desktop";
+pub const SETTINGS_STORAGE_CHOOSE_DIALOG: &str = "Escolha uma pasta para os dados do GSH Desktop";
+
+pub fn storage_location_desc(root: &str) -> String {
+    format!(
+        "O GSH Desktop guarda seus projetos, layouts e configurações aqui. Aponte para uma pasta sincronizada para fazer backup.\n{root}"
+    )
+}
+pub fn storage_restart_change_msg(path: &str) -> String {
+    format!("O GSH Desktop usará esta pasta a partir da próxima abertura:\n{path}")
+}
+
+// Aba Desenvolvedor (`developer` + `general.developerMode*`)
+pub const SETTINGS_DEV_TITLE: &str = "Desenvolvedor";
+pub const SETTINGS_DEV_MCP_TITLE: &str = "Servidores MCP locais";
+pub const SETTINGS_DEV_MCP_DESC: &str =
+    "Servidores MCP stdio que o Claude Code sobe neste computador. Eles ficam no ~/.claude.json.";
+pub const SETTINGS_DEV_MCP_EMPTY: &str = "Nenhum servidor MCP local.";
+pub const SETTINGS_DEV_EDIT_CONFIG: &str = "Editar configuração";
+pub const SETTINGS_DEV_COMMAND: &str = "Comando";
+pub const SETTINGS_DEV_ARGUMENTS: &str = "Argumentos";
+pub const SETTINGS_DEV_ERROR: &str = "Erro";
+pub const SETTINGS_DEV_MODE_TITLE: &str = "Modo desenvolvedor";
+pub const SETTINGS_DEV_MODE_DESC: &str = "Registra os erros e avisos do próprio GSH Desktop numa base separada da Telemetria (chip “GSH Desktop”) e liga as métricas de performance. Só serve a quem mantém o app.";
+pub const SETTINGS_DEV_TELEMETRY_TITLE: &str = "Telemetria";
+pub const SETTINGS_DEV_TELEMETRY_DESC: &str = "Erros e logs dos processos do workspace ficam no painel Telemetria do shell; com o modo desenvolvedor ele mostra também os do próprio GSH Desktop.";
+pub const SETTINGS_DEV_CLAUDE_SETTINGS_TITLE: &str = "Arquivo de configurações do Claude Code";
+pub const SETTINGS_DEV_CLAUDE_SETTINGS_DESC: &str =
+    "~/.claude/settings.json — permissões, hooks, ambiente e modelo.";
+pub const SETTINGS_DEV_API_KEY_TITLE: &str = "Quer uma chave de API?";
+pub const SETTINGS_DEV_API_KEY_DESC: &str = "Crie chaves e veja o uso no Claude Console. Isso requer outra conta, e o uso da API é cobrado separadamente.";
+pub const SETTINGS_DEV_API_KEY_BUTTON: &str = "Ir para o Console";
+pub const API_KEYS_URL: &str = "https://console.anthropic.com/settings/keys";
+pub const MCP_DOCS_URL: &str = "https://docs.anthropic.com/en/docs/claude-code/mcp";
+
+// Abas-catálogo: Skills, Conectores, Plugins (`catalog`, `skills`, `connectors`, `plugins`)
+pub const SETTINGS_CAT_MINE: &str = "Meus";
+pub const SETTINGS_CAT_DISCOVER: &str = "Descobrir";
+pub const SETTINGS_CAT_ADD: &str = "Adicionar";
+pub const SETTINGS_CAT_ALL: &str = "Todos";
+pub const SETTINGS_CAT_NEW_SKILL: &str = "Nova skill…";
+pub const SETTINGS_CAT_ADD_MARKETPLACE: &str = "Adicionar marketplace…";
+pub const SETTINGS_SKILLS_GROUP_USER: &str = "Criado por você";
+pub const SETTINGS_SKILLS_GROUP_PROJECT: &str = "Do projeto";
+pub const SETTINGS_SKILLS_GROUP_PLUGINS: &str = "Dos plugins";
+pub const SETTINGS_SKILLS_BY_YOU: &str = "por você";
+pub const SETTINGS_SKILLS_BY_PROJECT: &str = "do projeto";
+pub const SETTINGS_SKILLS_EMPTY: &str = "Nenhuma skill instalada.";
+pub const SETTINGS_CONN_CHECKING: &str = "Verificando cada servidor… pode levar alguns segundos.";
+pub const SETTINGS_CONN_EMPTY: &str = "Nenhum servidor MCP configurado.";
+pub const SETTINGS_CONN_ADD_SERVER: &str = "Adicionar servidor MCP";
+pub const SETTINGS_CONN_COL_CONNECTOR: &str = "Conector";
+pub const SETTINGS_CONN_COL_TYPE: &str = "Tipo";
+pub const SETTINGS_CONN_COL_STATUS: &str = "Status";
+pub const SETTINGS_CONN_TYPE_WEB: &str = "Web";
+pub const SETTINGS_CONN_TYPE_LOCAL: &str = "Local";
+pub const SETTINGS_CONN_ORIGIN_PLUGIN: &str = "Plugin";
+pub const SETTINGS_CONN_LINK: &str = "Vincular";
+pub const SETTINGS_CONN_DISCOVER_INTRO: &str = "O diretório de conectores do claude.ai não tem API pública, então o GSH não o lista. Adicione qualquer servidor MCP aqui: o GSH roda `claude mcp add` num terminal.";
+pub const SETTINGS_CONN_FORM_NAME: &str = "Nome";
+pub const SETTINGS_CONN_FORM_TYPE: &str = "Tipo";
+pub const SETTINGS_CONN_FORM_URL: &str = "URL";
+pub const SETTINGS_CONN_FORM_COMMAND: &str = "Comando";
+pub const SETTINGS_CONN_FORM_SCOPE: &str = "Escopo";
+pub const SETTINGS_CONN_FORM_SCOPE_DESC: &str =
+    "Usuário = todos os projetos; Local = só o projeto do terminal.";
+pub const SETTINGS_CONN_SCOPE_USER: &str = "Usuário";
+pub const SETTINGS_CONN_SCOPE_LOCAL: &str = "Local";
+pub const SETTINGS_CONN_DOCS: &str = "Docs de MCP";
+pub const SETTINGS_CONN_ADD_IN_TERMINAL: &str = "Adicionar no terminal";
+pub const SETTINGS_CONN_STATUS_CONNECTED: &str = "Conectado";
+pub const SETTINGS_CONN_STATUS_NEEDS_AUTH: &str = "Precisa autenticar";
+pub const SETTINGS_CONN_STATUS_FAILED: &str = "Falhou";
+pub const SETTINGS_CONN_STATUS_PENDING: &str = "Aprovação pendente";
+pub const SETTINGS_CONN_STATUS_UNKNOWN: &str = "Desconhecido";
+pub const SETTINGS_PLUGINS_SEARCH: &str = "Pesquisar skills e plugins";
+pub const SETTINGS_PLUGINS_GROUP_PROJECT: &str = "Neste projeto";
+pub const SETTINGS_PLUGINS_GROUP_MARKETPLACES: &str = "Dos marketplaces que você adicionou";
+pub const SETTINGS_PLUGINS_NO_WORKSPACE: &str =
+    "Abra um workspace para ver os plugins habilitados nele.";
+pub const SETTINGS_PLUGINS_PROJECT_EMPTY: &str =
+    "Nenhum plugin habilitado no .claude/settings.json deste projeto.";
+pub const SETTINGS_PLUGINS_EMPTY: &str = "Nenhum plugin instalado.";
+pub const SETTINGS_PLUGINS_DISABLED: &str = "Desabilitado";
+
+pub fn catalog_by(author: &str) -> String {
+    format!("por {author}")
+}
+pub fn connectors_from_plugin(plugin: &str) -> String {
+    format!("Fornecido pelo plugin {plugin}")
+}
+
+/// Frase do erro da CLI (o stderr entra cru como detalhe).
+pub fn claude_info_error(error: &crate::settings::claude::cli::InfoError) -> String {
+    use crate::settings::claude::cli::InfoError;
+    match error {
+        InfoError::CliMissing => {
+            String::from("CLI do Claude Code (`claude`) não encontrada neste computador.")
+        }
+        InfoError::Timeout => String::from("A CLI `claude` demorou demais para responder."),
+        InfoError::Failed(detail) => format!(
+            "A CLI `claude` falhou: {}",
+            detail.as_deref().unwrap_or("—")
+        ),
+    }
+}
+
+pub fn settings_save_failed(detail: &str) -> String {
+    format!("Não consegui salvar: {detail}")
 }

@@ -9,7 +9,7 @@ use serde::de::{Deserialize, Deserializer, Error, MapAccess, SeqAccess, Visitor}
 use serde_json::Number;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Json {
+pub enum Json {
     Null,
     Bool(bool),
     Num(Number),
@@ -19,49 +19,49 @@ pub(crate) enum Json {
 }
 
 impl Json {
-    pub(crate) fn parse(text: &str) -> Result<Self, serde_json::Error> {
+    pub fn parse(text: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(text)
     }
 
-    pub(crate) fn get(&self, key: &str) -> Option<&Json> {
+    pub fn get(&self, key: &str) -> Option<&Json> {
         match self {
             Self::Obj(items) => items.iter().find(|(k, _)| k == key).map(|(_, v)| v),
             _ => None,
         }
     }
 
-    pub(crate) fn as_str(&self) -> Option<&str> {
+    pub fn as_str(&self) -> Option<&str> {
         match self {
             Self::Str(text) => Some(text),
             _ => None,
         }
     }
 
-    pub(crate) fn as_arr(&self) -> Option<&[Json]> {
+    pub fn as_arr(&self) -> Option<&[Json]> {
         match self {
             Self::Arr(items) => Some(items),
             _ => None,
         }
     }
 
-    pub(crate) fn as_obj(&self) -> Option<&[(String, Json)]> {
+    pub fn as_obj(&self) -> Option<&[(String, Json)]> {
         match self {
             Self::Obj(items) => Some(items),
             _ => None,
         }
     }
 
-    pub(crate) fn is_null(&self) -> bool {
+    pub fn is_null(&self) -> bool {
         matches!(self, Self::Null)
     }
 
     /// Valor do `key` quando existe e não é `null` (o `??` do Dart).
-    pub(crate) fn non_null(&self, key: &str) -> Option<&Json> {
+    pub fn non_null(&self, key: &str) -> Option<&Json> {
         self.get(key).filter(|value| !value.is_null())
     }
 
     /// Como o `toString()` do Dart interpola o valor.
-    pub(crate) fn dart_string(&self) -> String {
+    pub fn dart_string(&self) -> String {
         match self {
             Self::Null => String::from("null"),
             Self::Bool(b) => b.to_string(),
@@ -82,7 +82,7 @@ impl Json {
     }
 
     /// `JsonEncoder.withIndent('  ')` do Dart: 2 espaços, `{}` e `[]` vazios.
-    pub(crate) fn to_pretty(&self) -> String {
+    pub fn to_pretty(&self) -> String {
         let mut out = String::new();
         self.write(&mut out, 0);
         out
