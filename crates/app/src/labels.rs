@@ -379,7 +379,6 @@ pub fn format_git_error(err: &gsh_git::GitError) -> String {
 pub const FARM_TAB_TITLE: &str = "Cenário";
 pub const FARM_OFFICE: &str = "Escritório";
 pub const FARM_FARM: &str = "Fazenda";
-pub const FARM_CENTER: &str = "Centralizar";
 
 pub const FARM_WORKING: &str = "Trabalhando";
 pub const FARM_WAITING: &str = "Esperando";

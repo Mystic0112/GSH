@@ -21,12 +21,16 @@ use agents::Agents;
 pub use agents::{AgentInput, AgentState};
 use backdrop::{Backdrop, ScreenState};
 use camera::Camera;
+use iced::advanced::mouse::{click, Click};
 use iced::widget::{
     button,
     canvas::{self, Action, Event},
-    column, row, text,
+    column, container, row, stack, text,
 };
-use iced::{mouse, window, Element, Fill, Point, Rectangle, Renderer, Size, Theme, Vector};
+use iced::{
+    mouse, window, Background, Border, Element, Fill, Point, Rectangle, Renderer, Size, Theme,
+    Vector,
+};
 use world::{Mode, Prop};
 
 #[derive(Debug, Clone)]
@@ -149,28 +153,48 @@ impl FarmPane {
             .collect()
     }
     pub fn view(&self) -> Element<'_, Message> {
-        let control = |label, msg, active| {
-            button(text(label).size(theme::SIZE_LABEL))
-                .on_press(msg)
-                .style(move |theme, status| {
-                    if active {
-                        button::primary(theme, status)
-                    } else {
-                        button::secondary(theme, status)
-                    }
-                })
+        // Fazenda | Escritório: pílula no canto da cena (_SceneryToggle em farm_hud.dart).
+        let option = |label: &'static str, msg, active| {
+            let (fg, bg) = if active {
+                (theme::scene::HUD_TEXT, Some(theme::scene::HUD_INK))
+            } else {
+                (theme::scene::HUD_MUTED, None)
+            };
+            button(
+                text(label.to_uppercase())
+                    .font(theme::FONT_MONO_BOLD)
+                    .size(theme::scene::TOGGLE_TEXT_SIZE)
+                    .line_height(text::LineHeight::Relative(theme::scene::TOGGLE_LINE_HEIGHT)),
+            )
+            .padding(theme::scene::TOGGLE_PADDING)
+            .on_press_maybe((!active).then_some(msg))
+            .style(move |_: &Theme, _| button::Style {
+                background: bg.map(Background::Color),
+                text_color: fg,
+                ..button::Style::default()
+            })
         };
-        let toolbar = row![
-            control(
-                labels::FARM_OFFICE,
-                Message::Office,
-                self.mode == Mode::Office
-            ),
-            control(labels::FARM_FARM, Message::Farm, self.mode == Mode::Farm),
-            control(labels::FARM_CENTER, Message::Center, false)
-        ]
-        .spacing(6)
-        .padding(6);
+        let toggle = container(
+            row![
+                option(labels::FARM_FARM, Message::Farm, self.mode == Mode::Farm),
+                option(
+                    labels::FARM_OFFICE,
+                    Message::Office,
+                    self.mode == Mode::Office
+                )
+            ]
+            .spacing(theme::scene::TOGGLE_GAP),
+        )
+        .padding(theme::scene::HUD_BOX_PADDING)
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(theme::scene::HUD_BG)),
+            border: Border {
+                color: theme::scene::HUD_INK,
+                width: theme::scene::HUD_BORDER,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        });
         let count = |state| {
             self.agents
                 .items
@@ -200,9 +224,14 @@ impl FarmPane {
         .spacing(16)
         .padding(6);
         column![
-            toolbar,
             hud,
-            canvas::Canvas::new(Program(self)).width(Fill).height(Fill)
+            stack![
+                canvas::Canvas::new(Program(self)).width(Fill).height(Fill),
+                container(toggle)
+                    .width(Fill)
+                    .align_right(Fill)
+                    .padding(theme::scene::HUD_MARGIN)
+            ]
         ]
         .width(Fill)
         .height(Fill)
@@ -215,6 +244,7 @@ struct State {
     last: Option<Point>,
     pressed: Option<Point>,
     dragged: bool,
+    click: Option<Click>,
 }
 impl canvas::Program<Message> for Program<'_> {
     type State = State;
@@ -236,7 +266,14 @@ impl canvas::Program<Message> for Program<'_> {
                 state.last = cursor.position_in(bounds);
                 state.pressed = state.last;
                 state.dragged = false;
-                state.last.map(|_| Action::request_redraw().and_capture())
+                // duplo clique recentraliza a câmera (onDoubleTap em farm_view.dart)
+                let at = state.last?;
+                let click = Click::new(at, mouse::Button::Left, state.click);
+                state.click = Some(click);
+                if click.kind() == click::Kind::Double {
+                    return Some(Action::publish(Message::Center).and_capture());
+                }
+                Some(Action::request_redraw().and_capture())
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 state.last = None;

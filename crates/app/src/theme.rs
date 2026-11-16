@@ -806,6 +806,19 @@ pub mod scene {
     pub const MONITOR_STAND: Color = Color::from_rgb8(0x5a, 0x60, 0x6c);
     pub const METAL: Color = Color::from_rgb8(0x7c, 0x82, 0x8e);
 
+    // HUD da cena em farm_view.dart (_hudBg, _hudInk, _hudText, _hudMuted) e _SceneryToggle em farm_hud.dart.
+    pub const HUD_BG: Color = Color::from_rgba8(0x18, 0x24, 0x14, 230.0 / 255.0);
+    pub const HUD_INK: Color = Color::from_rgb8(0x0b, 0x12, 0x08);
+    pub const HUD_TEXT: Color = Color::from_rgb8(0xff, 0xf8, 0xe8);
+    pub const HUD_MUTED: Color = Color::from_rgb8(0xc9, 0xd6, 0xa8);
+    pub const HUD_MARGIN: f32 = 10.0;
+    pub const HUD_BORDER: f32 = 2.0;
+    pub const HUD_BOX_PADDING: [f32; 2] = [5.0, 8.0];
+    pub const TOGGLE_PADDING: [f32; 2] = [3.0, 8.0];
+    pub const TOGGLE_GAP: f32 = 2.0;
+    pub const TOGGLE_TEXT_SIZE: f32 = 11.0;
+    pub const TOGGLE_LINE_HEIGHT: f32 = 1.2;
+
     // ARGB do campo e das árvores de farm_world.dart e farm_world_paint.dart (usado por farm/world_paint.rs).
     pub mod field {
         pub const G0: u32 = 0xff4a6524;
