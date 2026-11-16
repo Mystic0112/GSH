@@ -32,3 +32,9 @@ toml_edit = "0.25"
 # (alacritty_terminal, dirs-sys), então não traz crate novo ao build.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+iced_test = "0.14"
+# só os testes do banco criam arquivos SQLite temporários
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+tempfile = "3.27.0"

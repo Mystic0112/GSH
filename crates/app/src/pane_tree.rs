@@ -9,7 +9,7 @@
 
 use iced::widget::pane_grid::{self, Axis, Node, Pane, Split};
 
-use crate::pane_model::{ChatId, PaneModel, PaneTab, TermId};
+use crate::pane_model::{ChatId, PaneModel, PaneTab, QueryId, TermId};
 
 /// Limites da proporção de uma divisão (`resizeSplitBy` do Flutter: `clamp(0.16, 0.84)`).
 pub const MIN_RATIO: f32 = 0.16;
@@ -31,6 +31,7 @@ pub struct PaneTree {
     fallback: PaneModel,
     next_term_id: TermId,
     next_chat_id: ChatId,
+    next_query_id: QueryId,
 }
 
 impl Default for PaneTree {
@@ -45,6 +46,7 @@ impl Default for PaneTree {
             fallback: PaneModel::empty(),
             next_term_id: 2,
             next_chat_id: 1,
+            next_query_id: 1,
         }
     }
 }
@@ -104,6 +106,20 @@ impl PaneTree {
             .map(|(pane, _)| *pane)
     }
 
+    /// Pane que contém a aba da query `id` e o índice dela.
+    pub fn query_location(&self, id: QueryId) -> Option<(Pane, usize)> {
+        self.grid
+            .iter()
+            .find_map(|(pane, model)| model.query_index(id).map(|index| (*pane, index)))
+    }
+
+    /// Atualiza o título da aba da query `id` em todos os panes.
+    pub fn retitle_query(&mut self, id: QueryId, title: &str) {
+        for (_, model) in self.grid.iter_mut() {
+            model.retitle_query(id, title);
+        }
+    }
+
     /// Foca `pane` (`focus()` do Flutter); ignora ids que não existem mais.
     pub fn focus(&mut self, pane: Pane) {
         if self.grid.get(pane).is_some() {
@@ -120,6 +136,12 @@ impl PaneTree {
     pub fn alloc_chat_id(&mut self) -> ChatId {
         let id = self.next_chat_id;
         self.next_chat_id = self.next_chat_id.saturating_add(1);
+        id
+    }
+
+    pub fn alloc_query_id(&mut self) -> QueryId {
+        let id = self.next_query_id;
+        self.next_query_id = self.next_query_id.saturating_add(1);
         id
     }
 

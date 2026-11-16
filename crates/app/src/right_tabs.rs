@@ -3,8 +3,8 @@
 //!
 //! Cada ícone só aparece se o painel existe; se a aba ativa deixa de existir
 //! (saiu do repo git, fechou o workspace), a aba efetiva volta para Arquivos.
-//! Para acrescentar banco ou telemetria: uma variante, um item em
-//! [`RightTab::ORDER`] (na ordem do Flutter) e um braço em cada `match`.
+//! Para acrescentar telemetria: uma variante, um item em [`RightTab::ORDER`] (na ordem do
+//! Flutter) e um braço em cada `match`.
 
 use iced::widget::{button, container, row, text, tooltip};
 use iced::{Alignment, Border, Element, Fill, Length, Padding, Theme};
@@ -17,6 +17,7 @@ pub enum RightTab {
     Files,
     Search,
     Git,
+    Database,
     Gallery,
 }
 
@@ -28,18 +29,27 @@ pub struct Available {
     /// A pasta do workspace é um repositório git.
     pub git: bool,
     /// Há um workspace selecionado.
+    pub database: bool,
+    /// Há um workspace selecionado.
     pub gallery: bool,
 }
 
 impl RightTab {
-    /// Ordem dos ícones: arquivos, busca, git, (banco), (telemetria), galeria.
-    pub const ORDER: [Self; 4] = [Self::Files, Self::Search, Self::Git, Self::Gallery];
+    /// Ordem dos ícones: arquivos, busca, git, banco, (telemetria), galeria.
+    pub const ORDER: [Self; 5] = [
+        Self::Files,
+        Self::Search,
+        Self::Git,
+        Self::Database,
+        Self::Gallery,
+    ];
 
     fn exists(self, available: Available) -> bool {
         match self {
             Self::Files => true,
             Self::Search => available.search,
             Self::Git => available.git,
+            Self::Database => available.database,
             Self::Gallery => available.gallery,
         }
     }
@@ -58,6 +68,7 @@ impl RightTab {
             Self::Files => labels::ICON_FOLDER,
             Self::Search => labels::ICON_SEARCH_TAB,
             Self::Git => labels::ICON_ACCOUNT_TREE,
+            Self::Database => labels::ICON_STORAGE,
             Self::Gallery => labels::ICON_GALLERY,
         }
     }
@@ -67,6 +78,7 @@ impl RightTab {
             Self::Files => labels::FILES_TOOLTIP,
             Self::Search => labels::SEARCH_TOOLTIP,
             Self::Git => labels::SOURCE_CONTROL_TOOLTIP,
+            Self::Database => labels::DB_TOOLTIP,
             Self::Gallery => labels::GALLERY_TOOLTIP,
         }
     }
@@ -139,11 +151,13 @@ mod tests {
     const NOTHING: Available = Available {
         search: false,
         git: false,
+        database: false,
         gallery: false,
     };
     const ALL: Available = Available {
         search: true,
         git: true,
+        database: true,
         gallery: true,
     };
 
@@ -155,9 +169,12 @@ mod tests {
         assert_eq!(RightTab::Gallery.effective(NOTHING), RightTab::Files);
         assert_eq!(RightTab::Git.effective(ALL), RightTab::Git);
         assert_eq!(RightTab::Gallery.effective(ALL), RightTab::Gallery);
+        assert_eq!(RightTab::Database.effective(NOTHING), RightTab::Files);
+        assert_eq!(RightTab::Database.effective(ALL), RightTab::Database);
         let only_gallery = Available {
             search: false,
             git: false,
+            database: false,
             gallery: true,
         };
         assert_eq!(RightTab::Git.effective(only_gallery), RightTab::Files);
@@ -172,13 +189,14 @@ mod tests {
     }
 
     #[test]
-    fn order_is_files_search_git_gallery_like_flutter() {
+    fn order_is_files_search_git_database_gallery_like_flutter() {
         assert_eq!(
             RightTab::ORDER,
             [
                 RightTab::Files,
                 RightTab::Search,
                 RightTab::Git,
+                RightTab::Database,
                 RightTab::Gallery
             ]
         );

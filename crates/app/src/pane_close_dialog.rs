@@ -5,7 +5,7 @@
 //! `showDialog`) e um cartão com título, aviso e os botões Cancelar / Fechar.
 
 use iced::widget::{button, column, container, mouse_area, row, text, Space};
-use iced::{Alignment, Background, Border, Color, Element, Fill, Theme};
+use iced::{Alignment, Background, Border, Color, Element, Fill, Length, Theme};
 
 use crate::labels;
 use crate::theme;
@@ -42,6 +42,26 @@ pub fn notice<'a, M: Clone + 'a>(
         Emphasis::Primary,
         on_close.clone(),
         Some(on_close),
+        on_noop,
+    )
+}
+
+/// `showConfirmDialog(danger: true)`: título, mensagem e Cancelar / `confirm_label` (destrutivo).
+pub fn confirm<'a, M: Clone + 'a>(
+    title: String,
+    message: String,
+    confirm_label: &'static str,
+    on_cancel: M,
+    on_confirm: M,
+    on_noop: M,
+) -> Element<'a, M> {
+    dialog(
+        title,
+        message_body(message),
+        confirm_label,
+        Emphasis::Danger,
+        on_cancel,
+        Some(on_confirm),
         on_noop,
     )
 }
@@ -108,21 +128,99 @@ fn dialog<'a, M: Clone + 'a>(
 
     // largura do conteúdo (a mensagem quebra em 380), ações à direita, como no AlertDialog
     let header = column![title, body].spacing(theme::DIALOG_TITLE_GAP);
-    let card = container(
+    overlay(
         column![header, actions]
             .spacing(theme::DIALOG_GAP)
-            .align_x(Alignment::End),
+            .align_x(Alignment::End)
+            .into(),
+        on_cancel,
+        on_noop,
     )
-    .padding(theme::DIALOG_PADDING)
-    .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(theme::palette().panel)),
-        border: Border {
-            color: theme::palette().panel2,
-            width: 1.0,
-            radius: theme::DIALOG_RADIUS.into(),
-        },
-        ..Default::default()
-    });
+}
+
+/// Estilo de um botão de ação do diálogo (`DestructiveButton`, `PrimaryButton`, `OutlineButton`
+/// e `GhostButton` do shadcn).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ButtonKind {
+    Danger,
+    Primary,
+    Outline,
+    Ghost,
+}
+
+/// Botão de ação para os diálogos com corpo e ações próprios ([`form`]).
+pub fn action<'a, M: Clone + 'a>(
+    label: &'static str,
+    kind: ButtonKind,
+    on_press: Option<M>,
+) -> Element<'a, M> {
+    match kind {
+        ButtonKind::Danger => dialog_button(label, on_press, Some(Emphasis::Danger)),
+        ButtonKind::Primary => dialog_button(label, on_press, Some(Emphasis::Primary)),
+        ButtonKind::Outline => dialog_button(label, on_press, None),
+        ButtonKind::Ghost => button(
+            text(label)
+                .font(theme::FONT_BODY_MEDIUM)
+                .size(theme::DIALOG_BUTTON_SIZE)
+                .color(theme::palette().text),
+        )
+        .padding([8, 16])
+        .on_press_maybe(on_press)
+        .style(|_: &Theme, status| button::Style {
+            background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                .then(|| Background::Color(theme::palette().panel3)),
+            text_color: theme::palette().text,
+            border: Border {
+                radius: theme::RADIUS_BUTTON.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into(),
+    }
+}
+
+/// `AlertDialog` com título, corpo e linha de ações livres.
+///
+/// `actions_width` é a largura do conteúdo quando a linha de ações precisa ocupá-la inteira (o
+/// `Spacer` do Flutter, com um botão na extrema esquerda); `None` deixa as ações encolhidas e à
+/// direita. O iced não deriva a largura do card de um filho `Fill`, por isso ela é explícita.
+pub fn form<'a, M: Clone + 'a>(
+    title: Element<'a, M>,
+    body: Element<'a, M>,
+    actions: Element<'a, M>,
+    actions_width: Option<f32>,
+    on_cancel: M,
+    on_noop: M,
+) -> Element<'a, M> {
+    let header = column![title, body].spacing(theme::DIALOG_TITLE_GAP);
+    let actions = match actions_width {
+        Some(width) => container(actions).width(Length::Fixed(width)),
+        None => container(actions),
+    };
+    overlay(
+        column![header, actions]
+            .spacing(theme::DIALOG_GAP)
+            .align_x(Alignment::End)
+            .into(),
+        on_cancel,
+        on_noop,
+    )
+}
+
+/// Scrim sobre a janela e o card centrado com `content`.
+fn overlay<'a, M: Clone + 'a>(content: Element<'a, M>, on_cancel: M, on_noop: M) -> Element<'a, M> {
+    let card = container(content)
+        .padding(theme::DIALOG_PADDING)
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(theme::palette().panel)),
+            border: Border {
+                color: theme::palette().panel2,
+                width: 1.0,
+                radius: theme::DIALOG_RADIUS.into(),
+            },
+            ..Default::default()
+        });
 
     let scrim = mouse_area(
         container(Space::new().width(Fill).height(Fill))
@@ -161,6 +259,8 @@ fn dialog_button<'a, M: Clone + 'a>(
     let foreground = match emphasis {
         Some(Emphasis::Danger) => theme::on_color(theme::palette().error),
         Some(Emphasis::Primary) => theme::ON_ACCENT,
+        // `OutlineButton` desabilitado: texto esmaecido
+        None if on_press.is_none() => theme::palette().text4,
         None => theme::palette().text,
     };
     button(content(foreground))

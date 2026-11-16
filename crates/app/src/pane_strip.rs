@@ -11,7 +11,7 @@ use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
 pub(crate) fn view_tab_strip<'a, M, FSelect, FClose, FHover>(
     model: &'a PaneModel,
     callbacks: ChromeCallbacks<M, FSelect, FClose>,
-    dirty: &dyn Fn(&std::path::Path) -> bool,
+    dirty: &dyn Fn(&PaneTab) -> bool,
     hovered: Option<usize>,
     on_hover: FHover,
     tools: Element<'a, M>,
@@ -29,7 +29,7 @@ where
         tabs_row = tabs_row.push(view_tab(
             tab,
             is_active,
-            matches!(tab, PaneTab::File(path) if dirty(path)),
+            dirty(tab),
             hovered == Some(idx),
             (callbacks.on_select_tab)(idx),
             (callbacks.on_close_tab)(idx),

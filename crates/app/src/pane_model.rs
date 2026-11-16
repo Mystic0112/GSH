@@ -16,6 +16,9 @@ pub type TermId = u64;
 /// Identificador numérico estável de uma sessão de chat no pane.
 pub type ChatId = u64;
 
+/// Identificador numérico estável de uma aba de query (`.dbq`).
+pub type QueryId = u64;
+
 /// Aba aberta no pane central.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaneTab {
@@ -29,8 +32,8 @@ pub enum PaneTab {
     Farm,
     /// Configurações do aplicativo.
     Settings,
-    /// Consulta SQL (PostgreSQL).
-    Database,
+    /// Aba de query SQL (`.dbq`, arquivo ou untitled). O título muda quando o untitled vira arquivo.
+    Query { id: QueryId, title: String },
     /// Harness do workspace de `PathBuf`: o que o Claude Code carrega ali. Uma por workspace.
     Harness(PathBuf),
 }
@@ -59,7 +62,7 @@ impl PaneTab {
             Self::File(path) => file_display_name(path),
             Self::Farm => labels::FARM_TAB_TITLE.to_string(),
             Self::Settings => labels::SETTINGS_TITLE.to_string(),
-            Self::Database => labels::DB_TAB_TITLE.to_string(),
+            Self::Query { title, .. } => title.clone(),
             Self::Harness(_) => labels::HARNESS_TAB_TITLE.to_string(),
         }
     }
@@ -71,7 +74,7 @@ impl PaneTab {
             Self::Chat(_) => labels::ICON_CHAT,
             Self::Farm => labels::ICON_FARM,
             Self::Settings => labels::ICON_SETTINGS,
-            Self::Database => labels::ICON_DATABASE,
+            Self::Query { .. } => labels::ICON_DATABASE,
             Self::Harness(_) => labels::ICON_TUNE,
             Self::File(path) => {
                 let name = file_display_name(path);
@@ -170,17 +173,27 @@ impl PaneModel {
         }
     }
 
-    /// Abre ou ativa a aba única de consulta SQL.
-    pub fn open_database(&mut self) {
-        if let Some(index) = self
-            .tabs
+    /// Abre uma aba de query ao final da lista e a torna ativa.
+    pub fn open_query(&mut self, id: QueryId, title: String) {
+        self.tabs.push(PaneTab::Query { id, title });
+        self.active = Some(self.tabs.len().saturating_sub(1));
+    }
+
+    /// Índice da aba da query `id`, se estiver neste pane.
+    pub fn query_index(&self, id: QueryId) -> Option<usize> {
+        self.tabs
             .iter()
-            .position(|tab| matches!(tab, PaneTab::Database))
-        {
-            self.active = Some(index);
-        } else {
-            self.tabs.push(PaneTab::Database);
-            self.active = Some(self.tabs.len().saturating_sub(1));
+            .position(|tab| matches!(tab, PaneTab::Query { id: open, .. } if *open == id))
+    }
+
+    /// Atualiza o título da aba da query `id` (o untitled virou arquivo).
+    pub fn retitle_query(&mut self, id: QueryId, new_title: &str) {
+        for tab in &mut self.tabs {
+            if let PaneTab::Query { id: open, title } = tab {
+                if *open == id && title != new_title {
+                    new_title.clone_into(title);
+                }
+            }
         }
     }
 

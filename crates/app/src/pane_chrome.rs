@@ -37,7 +37,7 @@ pub fn view<'a, M, FSelect, FClose, FHover>(
     model: &'a PaneModel,
     active_content: Element<'a, M>,
     callbacks: ChromeCallbacks<M, FSelect, FClose>,
-    dirty: &dyn Fn(&std::path::Path) -> bool,
+    dirty: &dyn Fn(&crate::pane_model::PaneTab) -> bool,
     hovered: Option<usize>,
     on_hover: FHover,
 ) -> Element<'a, M>

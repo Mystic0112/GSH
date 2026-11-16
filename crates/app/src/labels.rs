@@ -470,23 +470,154 @@ pub const SETTINGS_INVALID_TERMINAL_SIZE: &str = "Informe um tamanho de fonte en
 pub const SETTINGS_INVALID_TAB_SIZE: &str = "Informe 2 ou 4 para a tabulação.";
 pub const SETTINGS_TERMINAL_RESTART: &str = "As alterações valem para novos terminais.";
 
-// Banco de dados (pane de consulta PostgreSQL)
-pub const DB_TAB_TITLE: &str = "Banco";
+// Banco de dados (`pt_BR.i18n.json` -> `gsh.dbPanel`, `gsh.dbConnectionDialog`, `gsh.dbQueryView`)
+pub const DB_TOOLTIP: &str = "Banco de dados";
 pub const ICON_DATABASE: &str = "\u{f20e}";
-pub const DB_CONN_PLACEHOLDER: &str = "postgres://usuario@host:5432/banco";
-pub const DB_SQL_PLACEHOLDER: &str = "select * from tabela limit 100;";
-pub const DB_RUN: &str = "Executar";
-pub const DB_IDLE: &str = "Informe a conexão e escreva uma consulta.";
-pub const DB_RUNNING: &str = "Executando…";
-pub const DB_NO_ROWS: &str = "Nenhuma linha.";
-pub const DB_ROWS_AFFECTED: &str = "Linhas afetadas:";
-pub const DB_NULL: &str = "∅";
-pub const DB_TRUNCATED: &str = "Resultado limitado às primeiras linhas.";
-pub const DB_ERR_INVALID: &str = "Conexão inválida. Use postgres://usuario@host/banco.";
-pub const DB_ERR_CONNECT: &str = "Não foi possível conectar ao banco.";
-pub const DB_ERR_QUERY: &str = "Erro na consulta";
-pub const DB_ERR_TIMEOUT: &str = "A consulta demorou demais e foi cancelada.";
-pub const DB_ERR_RUNTIME: &str = "Falha interna ao executar a consulta.";
+pub const ICON_STORAGE: &str = "\u{e1db}";
+pub const ICON_EXPAND_MORE: &str = "\u{e5cf}";
+pub const ICON_MORE_HORIZ: &str = "\u{e5d3}";
+pub const ICON_VISIBILITY: &str = "\u{e8f4}";
+pub const ICON_TABLE_CHART: &str = "\u{e265}";
+pub const ICON_CONTENT_COPY: &str = "\u{e14d}";
+pub const ICON_DELETE: &str = "\u{e92e}";
+pub const ICON_PLAY_ARROW: &str = "\u{e037}";
+pub const ICON_HOURGLASS_TOP: &str = "\u{ea5b}";
+pub const ICON_CHECK_CIRCLE: &str = "\u{f0be}";
+pub const ICON_FOLDER_OPEN: &str = "\u{e2c8}";
+
+pub const DB_SECTION: &str = "BANCO DE DADOS";
+pub const DB_EDIT: &str = "Editar…";
+pub const DB_COPY_NAME: &str = "Copiar nome";
+pub const DB_NEW_QUERY: &str = "Nova query";
+pub const DB_DELETE_CONNECTION_TITLE: &str = "Excluir conexão";
+pub const DB_NO_CONNECTIONS: &str = "Nenhuma conexão ainda.";
+pub const DB_FOOTER_ONE: &str = ".gsh/databases.json · 1 conexão";
+pub const DB_LOADING: &str = "Loading…";
+pub const DB_NO_TABLES: &str = "No tables.";
+pub const DB_DEFAULT_SCHEMA: &str = "(default)";
+pub const DB_PRIMARY_KEY: &str = "PK";
+// Selos da linha: texto fixo em inglês no Flutter
+pub const DB_CHIP_DETECTED: &str = "detected";
+pub const DB_CHIP_LOCAL: &str = "local";
+pub const DB_CHIP_READWRITE: &str = "rw";
+pub const DB_CHIP_NO_AGENTS: &str = "no agents";
+
+pub fn db_delete_connection_message(name: &str) -> String {
+    format!(
+        "Remover \"{name}\" deste workspace? Qualquer senha salva será descartada. Arquivos .dbq que fazem referência a ela não são afetados."
+    )
+}
+
+pub fn db_footer(count: usize) -> String {
+    format!(".gsh/databases.json · {count} conexões")
+}
+
+pub const DB_DIALOG_CHOOSE_FILE_TITLE: &str = "Escolher banco SQLite";
+pub const DB_DIALOG_FILE: &str = "Arquivo";
+pub const DB_DIALOG_CHOOSE_FILE_PLACEHOLDER: &str = "Escolha um arquivo SQLite…";
+pub const DB_DIALOG_NAME: &str = "Nome";
+pub const DB_DIALOG_NAME_HINT: &str = "dev-local";
+pub const DB_DIALOG_PASSWORD: &str = "Senha";
+pub const DB_DIALOG_SAVE_PASSWORD: &str = "Salvar senha";
+pub const DB_DIALOG_ALLOW_WRITES: &str = "Permitir escrita (agentes)";
+pub const DB_DIALOG_ALLOW_WRITES_HINT: &str = "desligado = agentes só leem via CLI";
+pub const DB_DIALOG_VISIBLE_TO_AGENTS: &str = "Visível para agentes";
+pub const DB_DIALOG_VISIBLE_TO_AGENTS_HINT: &str = "desligado = oculto da CLI, só na GUI";
+pub const DB_DIALOG_TESTING: &str = "Testando conexão…";
+pub const DB_DIALOG_CONNECTION_OK: &str = "Conexão OK";
+pub const DB_DIALOG_CONNECTION_FAILED: &str = "Falha na conexão";
+pub const DB_DIALOG_EDIT_TITLE: &str = "Editar conexão";
+pub const DB_DIALOG_NEW_TITLE: &str = "Nova conexão";
+pub const DB_DIALOG_CONNECTION_STRING: &str = "Connection string";
+pub const DB_DIALOG_INVALID_URL: &str = "URL de conexão inválida.";
+pub const DB_DIALOG_SAVE: &str = "Salvar";
+pub const DB_DIALOG_ADD: &str = "Adicionar";
+pub const DB_DIALOG_DELETE: &str = "Excluir";
+pub const DB_DIALOG_TEST: &str = "Testar";
+pub const DB_DEFAULT_CONNECTION_NAME: &str = "new-connection";
+
+pub const UNSAVED_CHANGES_TITLE: &str = "Alterações não salvas";
+pub const UNSAVED_DONT_SAVE: &str = "Não salvar";
+pub const UNSAVED_SAVE_AND_CLOSE: &str = "Salvar e fechar";
+
+pub fn unsaved_changes_message(file_name: &str) -> String {
+    format!("“{file_name}” tem alterações não salvas. Salvar antes de fechar?")
+}
+
+pub const DB_QUERY_SAVE_AS: &str = "Salvar query como";
+pub const DB_QUERY_COULD_NOT_SAVE: &str = "Não foi possível salvar";
+pub const DB_QUERY_SELECT_DATABASE: &str = "Selecionar banco de dados";
+pub const DB_QUERY_NO_SQL_CONNECTIONS: &str = "Nenhuma conexão SQL";
+pub const DB_QUERY_RUNNING: &str = "Executando…";
+pub const DB_QUERY_RUN_SELECTION: &str = "Executar seleção";
+pub const DB_QUERY_RUN: &str = "Executar";
+pub const DB_QUERY_RUN_SHORTCUT: &str = "⌘↵";
+pub const DB_QUERY_PICK_DATABASE_HINT: &str =
+    "Escolha um banco de dados acima e depois Executar (⌘↵).";
+pub const DB_QUERY_RUN_HINT: &str = "Execute a query (⌘↵) para ver os resultados aqui.";
+pub const DB_QUERY_NO_ROWS: &str = "Nenhuma linha.";
+pub const DB_QUERY_TRUNCATED_SUFFIX: &str = " · truncado (aumente -- limit)";
+pub const DB_QUERY_TABLE: &str = "Tabela";
+pub const DB_QUERY_JSON: &str = "JSON";
+pub const DB_QUERY_UNSAVED: &str = "não salvo";
+pub const DB_QUERY_SAVED: &str = "salvo";
+pub const DB_QUERY_COPIED: &str = "Copiado";
+pub const DB_QUERY_COPY: &str = "Copiar";
+pub const DB_QUERY_DEFAULT_FILE_NAME: &str = "query.dbq";
+pub const DB_NULL_CELL: &str = "NULL";
+
+pub fn db_rows_affected(count: u64) -> String {
+    if count == 1 {
+        "1 linha afetada".to_string()
+    } else {
+        format!("{count} linhas afetadas")
+    }
+}
+
+pub fn db_rows_footer(count: usize) -> String {
+    format!("{count} linhas")
+}
+
+/// Aviso do modo JSON (texto fixo em inglês no Flutter).
+pub fn db_json_preview_limited(shown: usize, total: usize) -> String {
+    format!("Preview limited to the first {shown} of {total} rows — use Copy for the full JSON.")
+}
+
+pub const DB_ERR_SAVE_EMPTY_NAME: &str = "O nome não pode ficar vazio.";
+pub const DB_ERR_SAVE_NAME_HAS_SLASH: &str = "O nome não pode conter “/”.";
+pub const DB_ERR_SAVE_INVALID_NAME: &str = "Nome inválido.";
+pub const DB_ERR_SAVE_NO_WORKSPACE: &str = "Nenhum workspace selecionado.";
+pub const DB_ERR_SAVE_WRITE_FAILED: &str = "Não foi possível gravar o arquivo.";
+
+pub fn db_err_save_already_exists(name: &str) -> String {
+    format!("Já existe: “{name}”.")
+}
+
+/// Frase de um erro do banco. O texto do driver sai como veio (não se traduz); as frases que o
+/// próprio GSH inventa são as do Flutter, em inglês.
+pub fn db_error_message(error: &gsh_db::DbError) -> String {
+    use gsh_db::DbError;
+    match error {
+        DbError::ConnectionFailed(detail) | DbError::QueryFailed(detail) => detail.clone(),
+        DbError::Timeout(secs) => format!("Query exceeded {secs}s"),
+        DbError::UnsupportedEngine(engine) => {
+            format!("{} support is not available yet.", engine.label())
+        }
+        DbError::TlsUnavailable(mode) => {
+            format!("TLS connections (sslmode={mode}) are not available yet.")
+        }
+        DbError::UnknownConnection { name, available } => {
+            let list = if available.is_empty() {
+                "(none)".to_string()
+            } else {
+                available.join(", ")
+            };
+            format!("No connection named \"{name}\" in this workspace. Available: {list}")
+        }
+        DbError::NothingToRun => "Nothing to run.".to_string(),
+        DbError::InvalidIdentifier(name) => format!("Invalid table name: \"{name}\""),
+    }
+}
 
 pub const SETTINGS_NAV_SEARCH: &str = "Buscar configurações";
 pub const SETTINGS_NAV_NO_RESULTS: &str = "Nenhum resultado";

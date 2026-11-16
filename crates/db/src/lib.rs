@@ -1,7 +1,8 @@
-//! Consultas SQL no PostgreSQL, sem UI (MVP).
+//! Banco de dados do GSH, sem UI: conexões do workspace (`.gsh/databases*.json`), cofre de
+//! senhas, drivers SQLite e PostgreSQL, introspecção de schema e execução com limites.
 //!
-//! Usa `simple_query`, que devolve cada valor como texto: funciona para qualquer
-//! tipo de coluna sem mapear tipos. Limite de linhas e de tempo protegem a UI.
+//! MySQL, SQL Server, Redis, MongoDB e túnel SSH não têm driver ainda: as conexões desses motores
+//! são lidas, mantidas ao regravar o arquivo e recusadas com [`DbError::UnsupportedEngine`].
 
 #![cfg_attr(
     not(test),
@@ -13,111 +14,80 @@
     )
 )]
 
-use std::time::Duration;
+pub mod connection;
+pub mod dbq;
+pub mod driver;
+pub mod error;
+pub mod postgres;
+pub mod result;
+pub mod schema;
+pub mod secrets;
+pub mod sqlite;
+pub mod statements;
+pub mod store;
+pub mod url;
 
-use thiserror::Error;
-use tokio_postgres::{NoTls, SimpleQueryMessage};
+pub use connection::{Access, Connection, Engine, Origin, SshTunnel};
+pub use dbq::DbqDocument;
+pub use driver::{Endpoint, DEFAULT_LIMIT};
+pub use error::{DbError, StoreError};
+pub use result::{Cell, Column, QueryResult};
+pub use schema::{SchemaColumn, SchemaTable};
+pub use secrets::SecretStore;
+pub use statements::SqlStatement;
 
-/// Máximo de linhas devolvidas; o resto é descartado e sinalizado em `truncated`.
-pub const MAX_ROWS: usize = 1_000;
+use std::path::Path;
 
-/// Tempo máximo para conectar e executar a consulta.
-pub const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Resultado de uma consulta: nomes das colunas e linhas como texto (`None` = NULL).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct QueryResult {
-    pub columns: Vec<String>,
-    pub rows: Vec<Vec<Option<String>>>,
-    pub truncated: bool,
-    /// Linhas afetadas por comandos sem resultado (INSERT, UPDATE...).
-    pub affected: Option<u64>,
-}
-
-/// Erro tipado; a UI escolhe a frase. Detalhes vêm do driver, sem a senha.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum DbError {
-    #[error("invalid connection string")]
-    InvalidConfig,
-    #[error("connection failed: {0}")]
-    Connect(String),
-    #[error("query failed: {0}")]
-    Query(String),
-    #[error("timed out")]
-    Timeout,
-    #[error("runtime failed: {0}")]
-    Runtime(String),
-}
-
-/// Conecta em `conn` (formato libpq ou URL `postgres://`) e executa `sql`.
-/// Bloqueante: chame fora da thread de UI.
-pub fn run_query(conn: &str, sql: &str) -> Result<QueryResult, DbError> {
-    let config: tokio_postgres::Config = conn.parse().map_err(|_| DbError::InvalidConfig)?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| DbError::Runtime(e.to_string()))?;
-    runtime.block_on(async {
-        tokio::time::timeout(QUERY_TIMEOUT, execute(config, sql))
-            .await
-            .map_err(|_| DbError::Timeout)?
-    })
-}
-
-async fn execute(config: tokio_postgres::Config, sql: &str) -> Result<QueryResult, DbError> {
-    let (client, connection) = config
-        .connect(NoTls)
-        .await
-        .map_err(|e| DbError::Connect(e.to_string()))?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
-    let messages = client
-        .simple_query(sql)
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
-    Ok(collect(messages))
-}
-
-fn collect(messages: Vec<SimpleQueryMessage>) -> QueryResult {
-    let mut result = QueryResult::default();
-    for message in messages {
-        match message {
-            SimpleQueryMessage::Row(row) => {
-                if result.columns.is_empty() {
-                    result.columns = row.columns().iter().map(|c| c.name().to_string()).collect();
-                }
-                if result.rows.len() >= MAX_ROWS {
-                    result.truncated = true;
-                    continue;
-                }
-                result.rows.push(
-                    (0..row.len())
-                        .map(|i| row.get(i).map(str::to_string))
-                        .collect(),
-                );
-            }
-            SimpleQueryMessage::CommandComplete(n) => result.affected = Some(n),
-            _ => {}
+/// Senha da conexão, na ordem do Flutter: cofre (se `save_password`) e depois a embutida na URL.
+/// SQLite não tem senha.
+pub fn resolve_password(conn: &Connection, root: &Path, secrets: &SecretStore) -> Option<String> {
+    if conn.engine == Engine::Sqlite {
+        return None;
+    }
+    if conn.save_password {
+        if let Some(saved) = secrets.read(&root.to_string_lossy(), &conn.name) {
+            return Some(saved);
         }
     }
-    result
+    conn.url_password()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn string_de_conexao_invalida_falha_sem_rede() {
-        let err = run_query("port=nao-e-numero", "select 1").unwrap_err();
-        assert_eq!(err, DbError::InvalidConfig);
+    fn postgres(name: &str, url: &str, save_password: bool) -> Connection {
+        let mut conn = Connection::from_json(
+            &serde_json::json!({"name": name, "url": url}),
+            Origin::Registered,
+        )
+        .unwrap();
+        conn.save_password = save_password;
+        conn
     }
 
     #[test]
-    fn servidor_inacessivel_falha_como_connect() {
-        let conn = "host=127.0.0.1 port=1 user=x dbname=x connect_timeout=2";
-        let err = run_query(conn, "select 1").unwrap_err();
-        assert!(matches!(err, DbError::Connect(_)), "{err:?}");
+    fn password_comes_from_the_vault_then_the_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = SecretStore::new(dir.path().join("s.json"));
+        let root = Path::new("/w");
+        let with_url = postgres("pg", "postgres://u:fromurl@h/db", true);
+        assert_eq!(
+            resolve_password(&with_url, root, &secrets).as_deref(),
+            Some("fromurl")
+        );
+        secrets.write("/w", "pg", "fromvault").unwrap();
+        assert_eq!(
+            resolve_password(&with_url, root, &secrets).as_deref(),
+            Some("fromvault")
+        );
+        // sem "Save Password" o cofre é ignorado
+        let unsaved = postgres("pg", "postgres://u:fromurl@h/db", false);
+        assert_eq!(
+            resolve_password(&unsaved, root, &secrets).as_deref(),
+            Some("fromurl")
+        );
+        let sqlite = Connection::sqlite("s", "a.db", Origin::Registered, Access::Read, true);
+        assert_eq!(resolve_password(&sqlite, root, &secrets), None);
     }
 }

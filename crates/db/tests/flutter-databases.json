@@ -1,0 +1,39 @@
+{
+  "databases": [
+    {
+      "name": "analytics",
+      "url": "postgres://ana@db.internal:5432/analytics?sslmode=disable",
+      "savePassword": true,
+      "access": "readwrite",
+      "agents": false,
+      "ssh": {
+        "host": "bastion.example.com",
+        "port": 2222,
+        "user": "ana",
+        "keyPath": "~/.ssh/id_ed25519",
+        "savePassphrase": true
+      }
+    },
+    {
+      "name": "app",
+      "url": "sqlite:data/app.db",
+      "savePassword": false,
+      "access": "read",
+      "agents": true
+    },
+    {
+      "name": "beta\\path\ttab",
+      "url": "sqlite:x.db",
+      "savePassword": false,
+      "access": "read",
+      "agents": true
+    },
+    {
+      "name": "Zeta \"quoted\" ação",
+      "url": "sqlite:data/z é.db",
+      "savePassword": false,
+      "access": "readwrite",
+      "agents": false
+    }
+  ]
+}

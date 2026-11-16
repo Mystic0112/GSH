@@ -61,6 +61,7 @@ impl EditorPane {
             count
         };
         let tab_size = self.config.tab_size;
+        let submit_shortcut = self.submit_shortcut;
         let editor = iced::widget::text_editor(&self.content)
             .width(editor_width)
             .font(theme::FONT_MONO)
@@ -77,7 +78,9 @@ impl EditorPane {
                 iced::widget::text::Wrapping::None
             })
             .on_action(EditorMsg::Action)
-            .key_binding(move |key| crate::editor_keys::bind_key(key, page_lines, tab_size))
+            .key_binding(move |key| {
+                crate::editor_keys::bind_key(key, page_lines, tab_size, submit_shortcut)
+            })
             .style(|_: &Theme, _| text_editor::Style {
                 background: theme::palette().panel.into(),
                 border: iced::Border::default(),

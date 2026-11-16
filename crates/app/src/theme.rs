@@ -598,6 +598,165 @@ pub const AGENT_LIST_ICON_GAP: f32 = 7.0;
 pub const AGENT_LIST_NAME_SIZE: f32 = 13.0;
 pub const AGENT_LIST_TIME_SIZE: f32 = 11.0;
 
+// Banco de dados (`db_panel.dart`, `db_connection_dialog.dart`, `db_query_view.dart`)
+pub const FONT_MONO_SEMIBOLD: Font = Font {
+    weight: Weight::Semibold,
+    ..Font::with_name(FONT_FAMILY_MONO)
+};
+pub const DB_EMPTY_PADDING: f32 = 16.0;
+pub const DB_EMPTY_SIZE: f32 = 11.5;
+pub const DB_LIST_PADDING_X: f32 = 6.0;
+pub const DB_HEADER_ACTION_GAP: f32 = 2.0;
+pub const DB_TILE_GAP: f32 = 1.0;
+pub const DB_TILE_PADDING: Padding = Padding {
+    top: 5.0,
+    right: 6.0,
+    bottom: 5.0,
+    left: 4.0,
+};
+pub const DB_TILE_CHEVRON_SIZE: f32 = 15.0;
+pub const DB_TILE_DOT_SIZE: f32 = 5.0;
+pub const DB_TILE_CHEVRON_GAP: f32 = 2.0;
+pub const DB_TILE_DOT_GAP: f32 = 7.0;
+pub const DB_TILE_ENGINE_ICON: f32 = 13.0;
+pub const DB_TILE_ENGINE_GAP: f32 = 7.0;
+pub const DB_TILE_NAME_SIZE: f32 = 12.5;
+pub const DB_TILE_TARGET_SIZE: f32 = 10.0;
+pub const DB_TILE_MORE_SIZE: f32 = 14.0;
+pub const DB_TILE_MORE_PADDING: f32 = 3.0;
+pub const DB_HOVER_RADIUS: f32 = 7.0;
+pub const DB_CHIP_GAP: f32 = 6.0;
+pub const DB_CHIP_PADDING: [f32; 2] = [1.0, 5.0];
+pub const DB_CHIP_SIZE: f32 = 9.5;
+pub const DB_CHIP_RADIUS: f32 = 4.0;
+pub const DB_TREE_LEFT: f32 = 20.0;
+pub const DB_TREE_BOTTOM: f32 = 4.0;
+pub const DB_TREE_INDENT: f32 = 16.0;
+pub const DB_TREE_ROW_PADDING: [f32; 2] = [3.0, 4.0];
+pub const DB_TREE_CHEVRON_SIZE: f32 = 13.0;
+pub const DB_TREE_CHEVRON_GAP: f32 = 3.0;
+pub const DB_TREE_ICON_SIZE: f32 = 11.0;
+pub const DB_TREE_ICON_GAP: f32 = 6.0;
+pub const DB_TREE_TABLE_SIZE: f32 = 11.5;
+pub const DB_TREE_SCHEMA_SIZE: f32 = 11.0;
+pub const DB_TREE_COUNT_SIZE: f32 = 10.0;
+pub const DB_TREE_ADD_GAP: f32 = 4.0;
+pub const DB_TREE_ADD_SIZE: f32 = 12.0;
+pub const DB_TREE_ADD_PADDING: f32 = 2.0;
+pub const DB_TREE_HINT_SIZE: f32 = 10.5;
+pub const DB_TREE_HINT_PADDING: [f32; 2] = [4.0, 6.0];
+pub const DB_COLUMNS_LEFT: f32 = 22.0;
+pub const DB_COLUMN_ROW_PADDING: [f32; 2] = [1.5, 6.0];
+pub const DB_COLUMN_NAME_SIZE: f32 = 11.0;
+pub const DB_COLUMN_TYPE_SIZE: f32 = 9.5;
+pub const DB_COLUMN_PK_SIZE: f32 = 8.5;
+pub const DB_COLUMN_TYPE_GAP: f32 = 6.0;
+pub const DB_COLUMN_PK_GAP: f32 = 5.0;
+pub const DB_COLUMN_LOADING_SIZE: f32 = 10.0;
+pub const DB_FOOTER_PADDING: [f32; 2] = [8.0, 12.0];
+pub const DB_FOOTER_SIZE: f32 = 10.5;
+// Diálogo de conexão
+pub const DB_DIALOG_CONTENT_WIDTH: f32 = 600.0;
+pub const DB_DIALOG_TITLE_ICON: f32 = 18.0;
+pub const DB_DIALOG_FIELD_GAP: f32 = 10.0;
+pub const DB_DIALOG_LABEL_SIZE: f32 = 11.0;
+pub const DB_DIALOG_LABEL_GAP: f32 = 4.0;
+pub const DB_DIALOG_INPUT_SIZE: f32 = 12.5;
+pub const DB_DIALOG_INPUT_PADDING: [f32; 2] = [7.0, 10.0];
+pub const DB_DIALOG_URI_SIZE: f32 = 12.0;
+pub const DB_DIALOG_URI_HEIGHT: f32 = 96.0;
+pub const DB_DIALOG_URI_MIN: f32 = 58.0;
+pub const DB_DIALOG_URI_MAX: f32 = 260.0;
+pub const DB_DIALOG_GRIP_SIZE: f32 = 10.0;
+pub const DB_DIALOG_GRIP_PADDING: f32 = 3.0;
+pub const DB_DIALOG_GRIP_INSET: f32 = 2.0;
+pub const DB_DIALOG_FILE_ICON: f32 = 14.0;
+pub const DB_DIALOG_SWITCH_GAP: f32 = 8.0;
+pub const DB_DIALOG_SWITCH_ROW_BOTTOM: f32 = 8.0;
+pub const DB_DIALOG_SWITCH_LABEL_SIZE: f32 = 12.0;
+pub const DB_DIALOG_HINT_SIZE: f32 = 10.5;
+pub const DB_DIALOG_TEST_TOP: f32 = 4.0;
+pub const DB_DIALOG_TEST_ICON: f32 = 13.0;
+pub const DB_DIALOG_TEST_GAP: f32 = 6.0;
+pub const DB_DIALOG_TEST_SIZE: f32 = 11.5;
+pub const DB_DIALOG_INVALID_GAP: f32 = 4.0;
+pub const DB_DIALOG_MAX_WIDTH: f32 = 660.0;
+// Aba de query
+pub const DB_QUERY_BAR_HEIGHT: f32 = 36.0;
+pub const DB_QUERY_BAR_PADDING: f32 = 10.0;
+pub const DB_QUERY_BAR_ICON: f32 = 14.0;
+pub const DB_QUERY_BAR_GAP: f32 = 8.0;
+pub const DB_QUERY_PICK_PADDING: [f32; 2] = [3.0, 7.0];
+pub const DB_QUERY_PICK_SIZE: f32 = 11.0;
+pub const DB_QUERY_PICK_ARROW: f32 = 12.0;
+pub const DB_QUERY_PICK_RADIUS: f32 = 4.0;
+pub const DB_QUERY_ENGINE_CHIP_PADDING: [f32; 2] = [2.0, 6.0];
+pub const DB_QUERY_ENGINE_CHIP_SIZE: f32 = 10.0;
+pub const DB_QUERY_RUN_PADDING: [f32; 2] = [4.0, 12.0];
+pub const DB_QUERY_RUN_RADIUS: f32 = 5.0;
+pub const DB_QUERY_RUN_ICON: f32 = 13.0;
+pub const DB_QUERY_RUN_SIZE: f32 = 11.5;
+pub const DB_QUERY_RUN_SHORTCUT_SIZE: f32 = 9.5;
+pub const DB_QUERY_RUN_SHORTCUT_ALPHA: f32 = 0.7;
+pub const DB_QUERY_RUN_HOVER_ALPHA: f32 = 0.85;
+pub const DB_QUERY_SPLIT_DEFAULT: f32 = 0.5;
+pub const DB_QUERY_SPLIT_MIN: f32 = 0.12;
+pub const DB_QUERY_SPLIT_MAX: f32 = 0.85;
+pub const DB_QUERY_EDITOR_MIN: f32 = 90.0;
+pub const DB_QUERY_RESULT_MIN: f32 = 110.0;
+pub const DB_QUERY_DIVIDER_HEIGHT: f32 = 7.0;
+pub const DB_QUERY_ERROR_PADDING: f32 = 14.0;
+pub const DB_QUERY_ERROR_ICON: f32 = 14.0;
+pub const DB_QUERY_ERROR_KIND_SIZE: f32 = 11.5;
+pub const DB_QUERY_ERROR_GAP: f32 = 8.0;
+pub const DB_QUERY_ERROR_SIZE: f32 = 12.0;
+pub const DB_QUERY_HINT_SIZE: f32 = 12.0;
+pub const DB_QUERY_AFFECTED_SIZE: f32 = 12.5;
+pub const DB_QUERY_FOOTER_HEIGHT: f32 = 26.0;
+pub const DB_QUERY_FOOTER_PADDING: f32 = 10.0;
+pub const DB_QUERY_FOOTER_SIZE: f32 = 10.5;
+pub const DB_QUERY_TOGGLE_PADDING: [f32; 2] = [2.0, 8.0];
+pub const DB_QUERY_TOGGLE_RADIUS: f32 = 4.0;
+pub const DB_QUERY_TOGGLE_GAP: f32 = 10.0;
+// Grade de resultado
+pub const DB_GRID_INDEX_WIDTH: f32 = 44.0;
+pub const DB_GRID_HEADER_HEIGHT: f32 = 34.0;
+pub const DB_GRID_ROW_HEIGHT: f32 = 26.0;
+pub const DB_GRID_LIST_BOTTOM: f32 = 14.0;
+pub const DB_GRID_CELL_PADDING: f32 = 8.0;
+pub const DB_GRID_NAME_SIZE: f32 = 11.0;
+pub const DB_GRID_TYPE_SIZE: f32 = 8.5;
+pub const DB_GRID_INDEX_SIZE: f32 = 10.0;
+pub const DB_GRID_CELL_SIZE: f32 = 11.5;
+pub const DB_GRID_HANDLE_WIDTH: f32 = 9.0;
+pub const DB_GRID_COL_MIN: f32 = 60.0;
+pub const DB_GRID_COL_MAX: f32 = 2000.0;
+pub const DB_GRID_BASE_MIN: f32 = 64.0;
+pub const DB_GRID_BASE_MAX: f32 = 340.0;
+pub const DB_GRID_BASE_CHAR: f32 = 7.5;
+pub const DB_GRID_BASE_PAD: f32 = 26.0;
+pub const DB_GRID_SAMPLE_ROWS: usize = 20;
+pub const DB_GRID_SCROLLBAR: f32 = 12.0;
+pub const DB_JSON_PREVIEW_ROWS: usize = 500;
+pub const DB_JSON_PADDING: Padding = Padding {
+    top: 10.0,
+    right: 12.0,
+    bottom: 10.0,
+    left: 12.0,
+};
+pub const DB_JSON_SIZE: f32 = 12.0;
+pub const DB_JSON_LINE_HEIGHT: f32 = 1.45;
+pub const DB_JSON_BANNER_PADDING: [f32; 2] = [6.0, 12.0];
+pub const DB_JSON_BANNER_SIZE: f32 = 10.5;
+pub const DB_COPY_TOP: f32 = 6.0;
+pub const DB_COPY_RIGHT: f32 = 14.0;
+pub const DB_COPY_PADDING: [f32; 2] = [4.0, 8.0];
+pub const DB_COPY_RADIUS: f32 = 5.0;
+pub const DB_COPY_ICON: f32 = 12.0;
+pub const DB_COPY_GAP: f32 = 5.0;
+pub const DB_COPY_SIZE: f32 = 10.5;
+pub const DB_COPIED_MILLIS: u64 = 1200;
+
 /// Cor do agente da aba `tab_id` (hash + paleta do núcleo), igual em qualquer tema.
 pub fn agent_color(tab_id: &str) -> Color {
     let c = gsh_core::agent_color::agent_color(tab_id);

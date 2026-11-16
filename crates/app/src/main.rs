@@ -15,6 +15,8 @@
 pub mod agent_file_marks;
 pub mod agent_island_panel;
 pub mod agent_status;
+pub mod anchored;
+pub mod app_menu;
 pub mod chat_composer;
 pub mod chat_pane;
 pub mod chat_view;
@@ -22,7 +24,13 @@ pub mod claude_hook_installer;
 pub mod clock;
 pub mod content_search_panel;
 pub mod content_search_state;
-pub mod db_pane;
+pub mod db_dialog;
+pub mod db_engine_icon;
+pub mod db_panel;
+pub mod db_query;
+pub mod db_query_view;
+pub mod db_state;
+pub mod drag_handle;
 pub mod editor_gutter;
 pub mod editor_highlight;
 pub mod editor_keys;
@@ -87,6 +95,8 @@ use crate::agent_status::{
 use crate::chat_pane::{ChatMsg, ChatPane};
 use crate::content_search_panel::SearchMsg;
 use crate::content_search_state::SearchState;
+use crate::db_query::{DbQuery, QueryMsg};
+use crate::db_state::{DbEffect, DbMsg, DbState};
 use crate::file_tree::{FileTree, ViewerHook};
 use crate::file_viewer::FileViewerState;
 use crate::files_panel::FilesMsg;
@@ -94,7 +104,7 @@ use crate::gallery_create::GalleryError;
 use crate::gallery_panel::GalleryMsg;
 use crate::island::{AgentIsland, IslandMsg, PermissionDecision};
 use crate::pane_chrome::ChromeCallbacks;
-use crate::pane_model::{ChatId, PaneModel, PaneTab, TermId};
+use crate::pane_model::{ChatId, PaneModel, PaneTab, QueryId, TermId};
 use crate::pane_tree::PaneTree;
 use crate::right_tabs::RightTab;
 use crate::terminal_input::{classify_key_press, KeyAction};
@@ -159,8 +169,15 @@ enum Msg {
     OpenSettings,
     Settings(settings::Message),
     Farm(farm::Message),
-    OpenDatabase,
-    Database(db_pane::Message),
+    Db(DbMsg),
+    /// Mensagem de uma aba de query específica.
+    Query(QueryId, QueryMsg),
+    /// Ctrl/Cmd+S ou Ctrl/Cmd+Enter com o foco fora do editor da query ativa.
+    QueryShortcut(QueryShortcut),
+    /// Tique que confere se algum `.dbq` aberto mudou no disco.
+    QueryDiskCheck,
+    /// Resposta do diálogo "Alterações não salvas" de uma query.
+    CloseQuery(QueryId, CloseChoice),
     OpenHarness,
     Harness(harness_pane::Msg),
     SelectWorkspace(usize),
@@ -175,11 +192,32 @@ enum Msg {
     WindowCloseButton,
 }
 
+/// Atalhos da aba de query valem em qualquer lugar da aba, não só com o editor focado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueryShortcut {
+    Save,
+    Run,
+}
+
+/// Escolha do diálogo ao fechar uma query com alterações não salvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseChoice {
+    Cancel,
+    DontSave,
+    SaveAndClose,
+}
+
+/// Intervalo da conferência de mudança externa nos `.dbq` abertos.
+const QUERY_DISK_CHECK_MS: u64 = 1000;
+
 struct Shell {
     status_runtime: StatusRuntime,
     island: AgentIsland,
     farm: farm::FarmPane,
-    database: db_pane::DbPane,
+    db: DbState,
+    queries: BTreeMap<QueryId, DbQuery>,
+    /// Query com alterações não salvas que o usuário mandou fechar (aguarda a escolha).
+    pending_close_query: Option<QueryId>,
     harness: harness_pane::HarnessState,
     settings: settings::Settings,
     panes: PaneTree,
@@ -246,7 +284,9 @@ impl Default for Shell {
             status_runtime,
             island,
             farm: farm::FarmPane::default(),
-            database: db_pane::DbPane::default(),
+            db: DbState::new(gsh_db::SecretStore::system()),
+            queries: BTreeMap::new(),
+            pending_close_query: None,
             harness: harness_pane::HarnessState::default(),
             settings,
             panes,
@@ -287,6 +327,7 @@ impl Shell {
         right_tabs::Available {
             search: self.workspaces.active().is_some(),
             git: self.git.root.is_some(),
+            database: self.workspaces.active().is_some(),
             gallery: self.workspaces.active().is_some(),
         }
     }
@@ -300,6 +341,14 @@ impl Shell {
     /// canônico que indexa `editors` e `file_viewers`.
     fn open_in_editor(&mut self, target: PathBuf) -> PathBuf {
         let target = target.canonicalize().unwrap_or(target);
+        // `.dbq` abre na aba de query (editor SQL + grade), não no editor de texto
+        if target
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("dbq"))
+            && self.open_query_file(&target)
+        {
+            return target;
+        }
         if !self.editors.contains_key(&target) && !self.file_viewers.contains_key(&target) {
             match FileViewerState::load(&target) {
                 FileViewerState::Loaded(doc) => {
@@ -459,7 +508,7 @@ impl Shell {
                 | PaneTab::File(_)
                 | PaneTab::Farm
                 | PaneTab::Settings
-                | PaneTab::Database
+                | PaneTab::Query { .. }
                 | PaneTab::Harness(_) => None,
             })
             .collect()
@@ -588,7 +637,10 @@ impl Shell {
                     self.editors.remove(&path);
                 }
             }
-            PaneTab::Farm | PaneTab::Settings | PaneTab::Database | PaneTab::Harness(_) => {}
+            PaneTab::Query { id, .. } => {
+                self.queries.remove(&id);
+            }
+            PaneTab::Farm | PaneTab::Settings | PaneTab::Harness(_) => {}
         }
     }
 
@@ -611,6 +663,90 @@ impl Shell {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Aponta o banco para a pasta do workspace ativo e recarrega as conexões.
+    fn reload_db(&mut self) -> Task<Msg> {
+        let root = self.file_tree.root().map(Path::to_path_buf);
+        self.db.set_workspace(root).map(Msg::Db)
+    }
+
+    /// `openScratchDbq`: aba untitled no pane focado, já na conexão (e com o SQL, se vier).
+    fn open_scratch_query(&mut self, conn: &str, sql: Option<&str>) -> Task<Msg> {
+        let root = self
+            .file_tree
+            .root()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        // numeração sequencial dos untitled abertos
+        let number = self.queries.values().filter(|q| q.is_scratch()).count() + 1;
+        let id = self.panes.alloc_query_id();
+        let query = DbQuery::scratch(
+            id,
+            number,
+            &db_query::scratch_content(Some(conn), sql),
+            root,
+        );
+        self.panes.focused_model_mut().open_query(id, query.title());
+        let root = Some(query.root().to_path_buf());
+        self.queries.insert(id, query);
+        self.db.ensure_workspace(root).map(Msg::Db)
+    }
+
+    /// Abre (ou foca) o `.dbq` em `path` como aba de query. `false` = não deu para ler o arquivo
+    /// (o viewer comum mostra o erro).
+    fn open_query_file(&mut self, path: &Path) -> bool {
+        let existing = self
+            .queries
+            .values()
+            .find(|query| query.path.as_deref() == Some(path))
+            .map(|query| query.id);
+        if let Some(id) = existing {
+            if let Some((pane, index)) = self.panes.query_location(id) {
+                self.panes.focus(pane);
+                self.panes.focused_model_mut().activate(index);
+                return true;
+            }
+        }
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return false;
+        };
+        let root = self
+            .file_tree
+            .root()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let id = self.panes.alloc_query_id();
+        let query = DbQuery::from_file(id, path.to_path_buf(), content, root);
+        self.panes.focused_model_mut().open_query(id, query.title());
+        self.queries.insert(id, query);
+        true
+    }
+
+    /// Fecha a aba da query `id` onde ela estiver.
+    fn close_query(&mut self, id: QueryId) {
+        let Some((pane, index)) = self.panes.query_location(id) else {
+            return;
+        };
+        self.panes.focus(pane);
+        if let Some(removed) = self.panes.focused_model_mut().close(index) {
+            self.dispose_tab(removed);
+        }
+        self.panes.close_if_empty(pane);
+    }
+
+    fn update_query(&mut self, id: QueryId, message: QueryMsg) -> Task<Msg> {
+        let secrets = self.db.secrets().clone();
+        let Some(query) = self.queries.get_mut(&id) else {
+            return Task::none();
+        };
+        let task = query.update(message, &db_query::Ctx { secrets: &secrets });
+        let (title, close) = (query.title(), query.take_close_request());
+        self.panes.retitle_query(id, &title);
+        if close {
+            self.close_query(id);
+        }
+        task.map(move |message| Msg::Query(id, message))
     }
 
     /// O harness recarrega ao montar a aba e quando ela volta a ficar ativa (o usuário pode
@@ -882,6 +1018,10 @@ impl Shell {
                     self.search.reset();
                 }
                 self.right_tab = tab;
+                if tab == RightTab::Database {
+                    // o painel recarrega ao montar (`setWorkspace(force: true)`)
+                    return self.reload_db();
+                }
                 if tab == RightTab::Git && !self.git.busy {
                     return self
                         .git
@@ -985,10 +1125,12 @@ impl Shell {
                         PaneTab::File(path) => {
                             let _ = self.file_tree.select_file(path);
                         }
-                        PaneTab::Farm
-                        | PaneTab::Settings
-                        | PaneTab::Database
-                        | PaneTab::Harness(_) => {}
+                        PaneTab::Query { id, .. } => {
+                            // a aba garante as conexões do workspace dela mesmo sem o painel aberto
+                            let root = self.queries.get(&id).map(|q| q.root().to_path_buf());
+                            return self.db.ensure_workspace(root).map(Msg::Db);
+                        }
+                        PaneTab::Farm | PaneTab::Settings | PaneTab::Harness(_) => {}
                     }
                 }
                 Task::none()
@@ -997,6 +1139,15 @@ impl Shell {
                 if self.panes.focused_model().active_index() != Some(idx) {
                     for editor in self.editors.values_mut() {
                         editor.state.cancel_close();
+                    }
+                }
+                if let Some(PaneTab::Query { id, .. }) = self.panes.focused_model().tabs().get(idx)
+                {
+                    let id = *id;
+                    if self.queries.get(&id).is_some_and(DbQuery::dirty) {
+                        self.panes.focused_model_mut().activate(idx);
+                        self.pending_close_query = Some(id);
+                        return Task::none();
                     }
                 }
                 if let Some(PaneTab::File(path)) = self.panes.focused_model().tabs().get(idx) {
@@ -1059,11 +1210,54 @@ impl Shell {
                 }
                 task.map(Msg::Harness)
             }
-            Msg::OpenDatabase => {
-                self.panes.focused_model_mut().open_database();
-                Task::none()
+            Msg::Db(message) => {
+                let (task, effect) = self.db.update(message);
+                let task = task.map(Msg::Db);
+                match effect {
+                    Some(DbEffect::NewQuery { conn, sql }) => {
+                        Task::batch([task, self.open_scratch_query(&conn, sql.as_deref())])
+                    }
+                    None => task,
+                }
             }
-            Msg::Database(message) => self.database.update(message).map(Msg::Database),
+            Msg::Query(id, message) => self.update_query(id, message),
+            Msg::QueryShortcut(shortcut) => {
+                let Some(PaneTab::Query { id, .. }) =
+                    self.panes.focused_model().active_tab().cloned()
+                else {
+                    return Task::none();
+                };
+                self.update_query(
+                    id,
+                    match shortcut {
+                        QueryShortcut::Save => QueryMsg::Save,
+                        QueryShortcut::Run => QueryMsg::Run,
+                    },
+                )
+            }
+            Msg::QueryDiskCheck => {
+                let ids: Vec<QueryId> = self
+                    .queries
+                    .values()
+                    .filter(|query| !query.is_scratch())
+                    .map(|query| query.id)
+                    .collect();
+                Task::batch(
+                    ids.into_iter()
+                        .map(|id| self.update_query(id, QueryMsg::CheckDisk)),
+                )
+            }
+            Msg::CloseQuery(id, choice) => {
+                self.pending_close_query = None;
+                match choice {
+                    CloseChoice::Cancel => Task::none(),
+                    CloseChoice::DontSave => {
+                        self.close_query(id);
+                        Task::none()
+                    }
+                    CloseChoice::SaveAndClose => self.update_query(id, QueryMsg::SaveAndClose),
+                }
+            }
             Msg::Farm(message) => {
                 self.farm.update(message);
                 Task::none()
@@ -1144,6 +1338,7 @@ impl Shell {
                 if idx != self.workspaces.selected_index() {
                     if let Some(ws) = self.workspaces.select(idx).cloned() {
                         self.activate_workspace_path(ws.path);
+                        return self.reload_db();
                     }
                 }
                 Task::none()
@@ -1155,7 +1350,7 @@ impl Shell {
                 let _ = self.workspaces.open_folder(folder.clone());
                 self.files_open = true;
                 self.activate_workspace_path(Some(folder));
-                Task::none()
+                self.reload_db()
             }
             Msg::WorkspaceFolderPicked(None) => Task::none(),
             Msg::ToggleRail => {
@@ -1250,9 +1445,41 @@ impl Shell {
         } else {
             Subscription::none()
         };
+        let query_shortcuts = if matches!(
+            self.panes.focused_model().active_tab(),
+            Some(PaneTab::Query { .. })
+        ) {
+            iced::event::listen_with(|event, status, _| match event {
+                // o editor já trata as teclas dele (e captura): aqui só o foco fora dele
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key, modifiers, ..
+                }) if status == iced::event::Status::Ignored && modifiers.command() => {
+                    match key.as_ref() {
+                        iced::keyboard::Key::Character("s") => {
+                            Some(Msg::QueryShortcut(QueryShortcut::Save))
+                        }
+                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter) => {
+                            Some(Msg::QueryShortcut(QueryShortcut::Run))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
+        let query_disk = if self.queries.values().any(|query| !query.is_scratch()) {
+            iced::time::every(Duration::from_millis(QUERY_DISK_CHECK_MS))
+                .map(|_| Msg::QueryDiskCheck)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch(
             [
                 status_sub,
+                query_shortcuts,
+                query_disk,
                 harness_spinner,
                 windows,
                 cancel_create,
@@ -1312,7 +1539,14 @@ impl Shell {
                 }
             }
             Some(PaneTab::Farm) => self.farm.view().map(Msg::Farm),
-            Some(PaneTab::Database) => self.database.view().map(Msg::Database),
+            Some(&PaneTab::Query { id, .. }) => self
+                .queries
+                .get(&id)
+                .map(|query| {
+                    db_query_view::view(query, &self.db.connections)
+                        .map(move |message| Msg::Query(id, message))
+                })
+                .unwrap_or_else(pane_chrome::view_empty_body),
             Some(PaneTab::Harness(workspace)) => {
                 harness_pane::view(&self.harness, workspace).map(Msg::Harness)
             }
@@ -1333,10 +1567,13 @@ impl Shell {
         let on_focus = (self.panes.focused() != pane).then_some(Msg::FocusPane(pane));
         let content =
             pane_focus::FocusOnPress::new(self.pane_content(pane, model), on_focus.clone()).into();
-        let dirty = |path: &Path| {
-            self.editors
+        let dirty = |tab: &PaneTab| match tab {
+            PaneTab::File(path) => self
+                .editors
                 .get(path)
-                .is_some_and(|editor| editor.state.buffer.is_dirty())
+                .is_some_and(|editor| editor.state.buffer.is_dirty()),
+            PaneTab::Query { id, .. } => self.queries.get(id).is_some_and(DbQuery::dirty),
+            _ => false,
         };
         let hovered = self
             .hovered_tab
@@ -1446,7 +1683,6 @@ impl Shell {
                 &self.workspaces,
                 Msg::SelectWorkspace,
                 Msg::PickWorkspaceFolder,
-                Msg::OpenDatabase,
                 Msg::OpenSettings,
             ));
         }
@@ -1469,6 +1705,7 @@ impl Shell {
                         .map(Msg::Search)
                 }
                 RightTab::Git => git_panel::view(&self.git).map(Msg::Git),
+                RightTab::Database => db_panel::view(&self.db).map(Msg::Db),
                 RightTab::Gallery => {
                     gallery_panel::view(self.file_tree.root().is_some()).map(Msg::Gallery)
                 }
@@ -1571,6 +1808,46 @@ impl Shell {
             .into(),
             None => layered,
         };
+        let layered: Element<'_, Msg> = match self.db.dialog.as_ref() {
+            Some(dialog) => stack![
+                layered,
+                dialog.view().map(|message| Msg::Db(DbMsg::Dialog(message)))
+            ]
+            .into(),
+            None => layered,
+        };
+        let layered: Element<'_, Msg> = match self.db.confirm_delete.as_deref() {
+            Some(name) => stack![
+                layered,
+                pane_close_dialog::confirm(
+                    labels::DB_DELETE_CONNECTION_TITLE.to_owned(),
+                    labels::db_delete_connection_message(name),
+                    labels::DB_DIALOG_DELETE,
+                    Msg::Db(DbMsg::CancelDelete),
+                    Msg::Db(DbMsg::ConfirmDelete),
+                    Msg::Noop,
+                )
+            ]
+            .into(),
+            None => layered,
+        };
+        let layered: Element<'_, Msg> = match self
+            .queries
+            .values()
+            .find_map(|query| db_query_view::overlay(query).map(|overlay| (query.id, overlay)))
+        {
+            Some((id, overlay)) => {
+                stack![layered, overlay.map(move |message| Msg::Query(id, message))].into()
+            }
+            None => layered,
+        };
+        let layered: Element<'_, Msg> = match self
+            .pending_close_query
+            .and_then(|id| self.queries.get(&id).map(|query| (id, query.title())))
+        {
+            Some((id, title)) => stack![layered, close_query_dialog(id, &title)].into(),
+            None => layered,
+        };
         let layered: Element<'_, Msg> = match self.harness.name_dialog() {
             Some(dialog) => stack![layered, dialog.map(Msg::Harness)].into(),
             None => layered,
@@ -1589,6 +1866,49 @@ impl Shell {
             None => layered,
         }
     }
+}
+
+/// `showCloseDirtyDialog`: descartar, cancelar ou salvar e fechar.
+fn close_query_dialog(id: QueryId, title: &str) -> Element<'static, Msg> {
+    use pane_close_dialog::{action, ButtonKind};
+    let heading = iced::widget::text(labels::UNSAVED_CHANGES_TITLE)
+        .font(theme::FONT_TITLE)
+        .size(theme::DIALOG_TITLE_SIZE)
+        .color(theme::palette().text);
+    let message = container(
+        iced::widget::text(labels::unsaved_changes_message(title))
+            .font(theme::FONT_BODY)
+            .size(theme::DIALOG_MESSAGE_SIZE)
+            .color(theme::palette().text2),
+    )
+    .max_width(theme::DIALOG_CONTENT_WIDTH + 20.0);
+    let actions = row![
+        action(
+            labels::UNSAVED_DONT_SAVE,
+            ButtonKind::Danger,
+            Some(Msg::CloseQuery(id, CloseChoice::DontSave))
+        ),
+        action(
+            labels::DIALOG_CANCEL,
+            ButtonKind::Outline,
+            Some(Msg::CloseQuery(id, CloseChoice::Cancel))
+        ),
+        action(
+            labels::UNSAVED_SAVE_AND_CLOSE,
+            ButtonKind::Primary,
+            Some(Msg::CloseQuery(id, CloseChoice::SaveAndClose))
+        ),
+    ]
+    .spacing(theme::DIALOG_ACTIONS_GAP)
+    .align_y(iced::Alignment::Center);
+    pane_close_dialog::form(
+        heading.into(),
+        message.into(),
+        actions.into(),
+        None,
+        Msg::CloseQuery(id, CloseChoice::Cancel),
+        Msg::Noop,
+    )
 }
 
 /// Botão de controle de janela (minimizar, maximizar, fechar) da barra própria.
@@ -1614,6 +1934,9 @@ fn main() -> iced::Result {
 
     app.run()
 }
+
+#[cfg(test)]
+mod db_interaction_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1650,7 +1973,11 @@ mod tests {
             status_runtime,
             island: AgentIsland::default(),
             farm: farm::FarmPane::default(),
-            database: db_pane::DbPane::default(),
+            db: DbState::new(gsh_db::SecretStore::new(PathBuf::from(
+                "/nonexistent/gsh-secrets.json",
+            ))),
+            queries: BTreeMap::new(),
+            pending_close_query: None,
             harness: harness_pane::HarnessState::default(),
             settings: settings::Settings::default(),
             panes: PaneTree::default(),

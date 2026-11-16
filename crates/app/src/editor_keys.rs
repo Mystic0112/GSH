@@ -6,8 +6,15 @@ pub(crate) fn bind_key(
     key: KeyPress,
     page_lines: usize,
     tab_size: u8,
+    submit_shortcut: bool,
 ) -> Option<Binding<EditorMsg>> {
     if matches!(key.status, Status::Focused { .. }) {
+        if submit_shortcut
+            && key.modifiers.command()
+            && matches!(key.key, keyboard::Key::Named(keyboard::key::Named::Enter))
+        {
+            return Some(Binding::Custom(EditorMsg::Submit));
+        }
         if key.modifiers.command() {
             if let keyboard::Key::Character(c) = &key.key {
                 match c.to_lowercase().as_str() {

@@ -11,6 +11,9 @@ pub enum EditorMsg {
     Redo,
     Overwrite,
     Viewport(f32, f32),
+    /// Ctrl/Cmd+Enter, só nos editores que o pedem (`with_submit_shortcut`): a aba de query o usa
+    /// para executar. Não faz nada no editor de arquivo.
+    Submit,
 }
 
 #[derive(Debug)]
@@ -26,6 +29,7 @@ pub struct EditorPane {
     pub(crate) gutter: crate::editor_gutter::Gutter,
     pub(crate) longest_line: usize,
     pub(crate) config: gsh_config::schema::Editor,
+    pub(crate) submit_shortcut: bool,
 }
 impl EditorPane {
     pub fn new(path: std::path::PathBuf, text: String) -> Self {
@@ -45,7 +49,13 @@ impl EditorPane {
             gutter,
             longest_line,
             config: gsh_config::schema::Editor::default(),
+            submit_shortcut: false,
         }
+    }
+    /// Ctrl/Cmd+Enter vira `EditorMsg::Submit` em vez de uma quebra de linha.
+    pub fn with_submit_shortcut(mut self) -> Self {
+        self.submit_shortcut = true;
+        self
     }
     pub fn with_config(mut self, config: gsh_config::schema::Editor) -> Self {
         self.set_config(config);
@@ -118,6 +128,7 @@ impl EditorPane {
                     }
                 }
             }
+            EditorMsg::Submit => {}
             EditorMsg::Save => self.state.save(),
             EditorMsg::Overwrite => self.state.overwrite_confirmed(),
             EditorMsg::Undo => {

@@ -76,7 +76,8 @@ fn segmented<'a>(choices: iced::widget::Row<'a, Message>) -> Element<'a, Message
         .into()
 }
 
-fn switch(value: bool, message: Message) -> Element<'static, Message> {
+/// `Switch` do shadcn (também usado nos diálogos de outras abas).
+pub fn switch<M: Clone + 'static>(value: bool, message: M) -> Element<'static, M> {
     let p = theme::palette();
     let knob = container(
         iced::widget::Space::new()

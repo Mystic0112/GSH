@@ -34,7 +34,6 @@ pub fn view<'a, M: Clone + 'a>(
     workspaces: &'a WorkspaceList,
     on_select: impl Fn(usize) -> M,
     on_add_workspace: M,
-    on_database: M,
     on_settings: M,
 ) -> Element<'a, M> {
     let add_button = button(
@@ -121,8 +120,6 @@ pub fn view<'a, M: Clone + 'a>(
                 .size(theme::SIZE_LABEL)
                 .color(theme::palette().text3),
             Space::new().width(Fill),
-            // ponytail: banco não tem entrada no Flutter; fica no rodapé até decidir
-            footer_icon_button(labels::ICON_DATABASE, on_database),
             footer_icon_button(labels::ICON_SETTINGS, on_settings),
         ]
         .align_y(Alignment::Center),
