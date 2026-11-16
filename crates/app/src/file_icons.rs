@@ -105,12 +105,12 @@ fn resolve(name: &str, is_dir: bool, open: bool) -> Option<&'static [u8]> {
 }
 
 fn gsh_logo<Message: 'static>(size: f32) -> Element<'static, Message> {
-    image(image::Handle::from_bytes(
-        &include_bytes!("../assets/branding/gsh_logo.png")[..],
-    ))
-    .width(size)
-    .height(size)
-    .into()
+    // um handle só: cada `from_bytes` ganha id novo e o iced redecodifica a cada quadro
+    static LOGO: OnceLock<image::Handle> = OnceLock::new();
+    let handle = LOGO.get_or_init(|| {
+        image::Handle::from_bytes(&include_bytes!("../assets/branding/gsh_logo.png")[..])
+    });
+    image(handle.clone()).width(size).height(size).into()
 }
 
 /// Ícone pelo nome do asset (SVG do tema ou `gsh_logo`), em `size` px: cartões da Galeria.
