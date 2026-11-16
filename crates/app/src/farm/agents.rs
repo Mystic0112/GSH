@@ -47,7 +47,25 @@ pub struct Agent {
 pub struct Agents {
     pub items: Vec<Agent>,
 }
+/// Contadores da topbar (`FarmStrip` do Flutter): `Done` conta como parado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FarmCounts {
+    pub working: usize,
+    pub waiting: usize,
+    pub idle: usize,
+}
 impl Agents {
+    pub fn counts(&self) -> FarmCounts {
+        let mut counts = FarmCounts::default();
+        for agent in &self.items {
+            match agent.input.state {
+                AgentState::Working => counts.working += 1,
+                AgentState::Waiting => counts.waiting += 1,
+                AgentState::Idle | AgentState::Done => counts.idle += 1,
+            }
+        }
+        counts
+    }
     pub fn sync(&mut self, inputs: Vec<AgentInput>) -> bool {
         let old = self.items.clone();
         self.items
@@ -96,6 +114,23 @@ mod tests {
         assert_eq!(
             AgentState::from_status(TurnStatus::Idle, true).pose(),
             Pose::Happy
+        );
+    }
+    #[test]
+    fn counts_group_done_with_idle() {
+        let mut agents = Agents::default();
+        let mut inputs = vec![input("a"), input("b"), input("c"), input("d")];
+        inputs[1].state = AgentState::Working;
+        inputs[2].state = AgentState::Waiting;
+        inputs[3].state = AgentState::Done;
+        agents.sync(inputs);
+        assert_eq!(
+            agents.counts(),
+            FarmCounts {
+                working: 1,
+                waiting: 1,
+                idle: 2
+            }
         );
     }
     #[test]

@@ -439,6 +439,8 @@ pub const PANE_TAB_ADD_WIDTH: f32 = 32.0;
 pub const PANE_TAB_ADD_ICON_SIZE: f32 = 14.0;
 pub const PANE_TOOL_SIZE: f32 = 13.0;
 pub const PANE_TOOL_GAP: f32 = 12.0;
+/// Espessura do traço dos ícones da barra do pane, como fração do lado.
+pub const PANE_TOOL_STROKE_RATIO: f32 = 0.10;
 pub const FILE_TREE_ROW_HEIGHT: f32 = 26.0;
 pub const FILE_TREE_ROW_INDENT: f32 = 14.0;
 pub const FILE_TREE_ROW_PADDING: f32 = 6.0;
@@ -470,6 +472,7 @@ pub const FARM_STRIP_DOT_SIZE: f32 = 7.0;
 pub const FARM_STRIP_COUNTER_GAP: f32 = 10.0;
 pub const FARM_STRIP_DOT_GAP: f32 = 5.0;
 pub const FARM_STRIP_BUTTON_PADDING: f32 = 7.0;
+pub const FARM_STRIP_TRAILING_GAP: f32 = 4.0;
 pub const FARM_STRIP_PILL_HEIGHT: f32 = 22.0;
 pub const FARM_STRIP_PILL_RADIUS: f32 = 11.0;
 pub const FARM_STRIP_PILL_PADDING: f32 = 9.0;

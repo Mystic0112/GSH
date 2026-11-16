@@ -31,7 +31,7 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
     let mode = container(
         row![
             panel_widgets::ghost(labels::ICON_FOLDER, Some(GitMsg::Files), false),
-            panel_widgets::ghost(labels::ICON_GIT_BRANCH, None, true),
+            panel_widgets::ghost(labels::ICON_ACCOUNT_TREE, None, true),
             Space::new().width(Fill)
         ]
         .align_y(iced::Alignment::Center)

@@ -16,7 +16,7 @@ pub struct TopbarProps<'a> {
     pub workspace_title: &'a str,
     pub rail_open: bool,
     pub files_open: bool,
-    pub counts: crate::island::IslandCounts,
+    pub counts: crate::farm::FarmCounts,
 }
 
 /// Ações dos botões da topbar (mensagens do shell).
@@ -175,19 +175,15 @@ fn counter<'a, M: 'a>(count: usize, color: iced::Color) -> Element<'a, M> {
     .into()
 }
 
-fn farm_strip<'a, M: Clone + 'a>(
-    counts: crate::island::IslandCounts,
-    on_open: M,
-) -> Element<'a, M> {
-    let waiting = counts.waiting_badge();
-    if counts.working == 0 && waiting == 0 && counts.finished == 0 {
-        return Space::new().width(0).into();
-    }
+/// Contadores sempre visíveis, mesmo zerados: o Flutter só os esconde sem loops, mas
+/// aqui os loops vêm só dos terminais observados por hook, e esconder deixaria a barra vazia.
+fn farm_strip<'a, M: Clone + 'a>(counts: crate::farm::FarmCounts, on_open: M) -> Element<'a, M> {
+    let waiting = counts.waiting;
     let counters = button(
         row![
-            counter(counts.working, theme::palette().accent),
+            counter(counts.working, theme::palette().online),
             counter(waiting, theme::palette().warn),
-            counter(counts.finished, theme::palette().ok),
+            counter(counts.idle, theme::palette().git_untracked),
         ]
         .spacing(theme::FARM_STRIP_COUNTER_GAP)
         .align_y(Alignment::Center),
@@ -204,7 +200,7 @@ fn farm_strip<'a, M: Clone + 'a>(
         },
         ..Default::default()
     });
-    let summary = labels::format_summary(counts.working, waiting, counts.finished);
+    let summary = labels::format_farm_summary(counts.working, waiting, counts.idle);
     let tooltip = tooltip(
         counters,
         text(summary).size(theme::SIZE_LABEL),
@@ -246,7 +242,13 @@ fn farm_strip<'a, M: Clone + 'a>(
         });
         strip = strip.push(pill);
     }
-    strip.into()
+    // Flutter: 8px depois do strip; o `spacing(4)` da barra já cobre metade.
+    container(strip)
+        .padding(iced::Padding {
+            right: theme::FARM_STRIP_TRAILING_GAP,
+            ..iced::Padding::ZERO
+        })
+        .into()
 }
 
 fn counter_dot<'a, M: 'a>(color: iced::Color) -> Element<'a, M> {

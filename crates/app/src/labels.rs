@@ -125,6 +125,7 @@ pub const ICON_SEND: &str = "\u{e163}";
 pub const ICON_STOP: &str = "\u{e047}";
 pub const ICON_TOOL_RUNNING: &str = "◌";
 pub const ICON_GIT_BRANCH: &str = "\u{e0b6}";
+pub const ICON_ACCOUNT_TREE: &str = "\u{e97a}";
 pub const ICON_DIFF: &str = "\u{eb7d}";
 pub const ICON_MINUS: &str = "\u{e15b}";
 
@@ -195,8 +196,7 @@ pub const ALWAYS_TOOLTIP_PREFIX: &str = "Sempre permitir ";
 // Ilha de agentes — estado vazio e separadores
 pub const ISLAND_EMPTY: &str = "Nenhum agente rodando agora.";
 pub const SUMMARY_WORKING: &str = "trabalhando";
-pub const SUMMARY_WAITING: &str = "esperando você";
-pub const SUMMARY_FINISHED: &str = "terminaram";
+pub const SUMMARY_IDLE: &str = "parados";
 pub const SUMMARY_SEPARATOR: &str = " · ";
 pub const TOOL_SUMMARY_SEPARATOR: &str = " · ";
 
@@ -217,10 +217,11 @@ pub const DEMO_TAB_3_ID: &str = "tab-3";
 pub const DEMO_TAB_3_NAME: &str = "claude — layout";
 pub const DEMO_TAB_3_WORKSPACE: &str = "Projeto de exemplo";
 
-/// Resumo textual de acessibilidade da ilha (`tr.summary` do Flutter).
-pub fn format_summary(working: usize, waiting: usize, finished: usize) -> String {
+/// Tooltip dos contadores da topbar (`FarmStrip` do Flutter).
+pub fn format_farm_summary(working: usize, waiting: usize, idle: usize) -> String {
     format!(
-        "{working} {SUMMARY_WORKING}{SUMMARY_SEPARATOR}{waiting} {SUMMARY_WAITING}{SUMMARY_SEPARATOR}{finished} {SUMMARY_FINISHED}"
+        "{working} {SUMMARY_WORKING}{SUMMARY_SEPARATOR}{}{SUMMARY_SEPARATOR}{idle} {SUMMARY_IDLE}",
+        farm_need_you(waiting)
     )
 }
 
@@ -385,6 +386,8 @@ pub const FARM_WAITING: &str = "Esperando";
 pub const FARM_IDLE: &str = "Ocioso";
 pub const FARM_DONE: &str = "Terminou";
 pub const FARM_ALERT: &str = "!";
+pub const PANE_SPLIT_RIGHT: &str = "Dividir à direita";
+pub const PANE_CLOSE_SPLIT: &str = "Fechar divisão";
 pub const FARM_NEED_YOU_ONE: &str = "1 precisa de você";
 pub const FARM_NEED_YOU_MANY: &str = "precisam de você";
 

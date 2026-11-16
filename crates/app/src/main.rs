@@ -48,6 +48,7 @@ pub mod pane_chrome;
 pub mod pane_model;
 pub mod pane_strip;
 pub mod pane_tab;
+pub mod pane_tool_icon;
 pub mod panel_widgets;
 pub mod rail;
 pub mod settings;
@@ -102,8 +103,6 @@ enum Msg {
     CloseTab(usize),
     NewTerminalTab,
     NewChatTab,
-    // ponytail: sem botão na barra; o menu do `+` volta a construir esta mensagem
-    #[allow(dead_code)]
     SplitRight,
     CloseSplit,
     SelectOther(usize),
@@ -976,8 +975,8 @@ impl Shell {
                     on_close_tab: Msg::CloseTab,
                     on_new_terminal: Msg::NewTerminalTab,
                     noop_msg: Msg::Noop,
-                    // ponytail: botão de dividir sai da barra a pedido; volta no menu do `+`
-                    on_split: None,
+                    // ponytail: uma divisão só; some enquanto ela existe ou com 1 aba (nada a mover).
+                    on_split: (!split_open && model.tabs().len() > 1).then_some(Msg::SplitRight),
                     on_close_split: split_open.then_some(Msg::CloseSplit),
                 },
                 &dirty,
@@ -1014,7 +1013,7 @@ impl Shell {
                 workspace_title,
                 rail_open: self.rail_open,
                 files_open: self.files_open,
-                counts: self.island.counts(),
+                counts: self.farm.counts(),
             },
             || self.island.view_pill().map(Msg::Island),
             topbar::TopbarActions {

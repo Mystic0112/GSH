@@ -65,7 +65,7 @@ fn view_mode_bar<'a>() -> Element<'a, FilesMsg> {
     container(
         row![
             mode_icon(labels::ICON_FOLDER, None, true),
-            mode_icon(labels::ICON_GIT_BRANCH, Some(FilesMsg::OpenGit), false),
+            mode_icon(labels::ICON_ACCOUNT_TREE, Some(FilesMsg::OpenGit), false),
             Space::new().width(Fill)
         ]
         .align_y(Alignment::Center)

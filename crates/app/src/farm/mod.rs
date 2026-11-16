@@ -18,7 +18,7 @@ mod world_props;
 
 use crate::{labels, theme};
 use agents::Agents;
-pub use agents::{AgentInput, AgentState};
+pub use agents::{AgentInput, AgentState, FarmCounts};
 use backdrop::{Backdrop, ScreenState};
 use camera::Camera;
 use iced::advanced::mouse::{click, Click};
@@ -73,6 +73,9 @@ impl FarmPane {
             .iter()
             .map(|agent| agent.input.state)
             .collect()
+    }
+    pub fn counts(&self) -> FarmCounts {
+        self.agents.counts()
     }
     pub fn sync_agents(&mut self, inputs: Vec<AgentInput>) {
         if self.agents.sync(inputs) {
