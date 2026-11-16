@@ -1623,6 +1623,7 @@ dependencies = [
  "gsh-search",
  "gsh-term",
  "iced",
+ "libc",
  "rfd",
  "serde_json",
  "thiserror 2.0.21",

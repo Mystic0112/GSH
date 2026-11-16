@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use gsh_core::file_activity::AgentFileActivity;
 use gsh_core::status::{AgentHarness, Applied, HookEvent, StatusUpdate, TurnStatus, TurnTracker};
 use gsh_core::wire::{ENV_PANE_ID, ENV_TAB_ID};
 use gsh_ipc::{gsh_dir_from_env, Delivery, Endpoint, ServerConfig, ServerError, StatusServer};
@@ -305,6 +306,8 @@ pub struct StatusRuntime {
     receiver: Option<Receiver<Delivery>>,
     server_error: Option<IslandServerError>,
     panes: BTreeMap<String, PaneAgentRecord>,
+    /// Arquivos tocados por aba, acumulados entre lotes do hook (`agentFiles` do Flutter).
+    activity: AgentFileActivity,
     malformed_count: u64,
 }
 
@@ -324,6 +327,7 @@ impl StatusRuntime {
                 receiver: Some(receiver),
                 server_error: None,
                 panes: BTreeMap::new(),
+                activity: AgentFileActivity::default(),
                 malformed_count: 0,
             },
             Err(err) => Self {
@@ -331,6 +335,7 @@ impl StatusRuntime {
                 receiver: None,
                 server_error: Some(IslandServerError::from(&err)),
                 panes: BTreeMap::new(),
+                activity: AgentFileActivity::default(),
                 malformed_count: 0,
             },
         }
@@ -343,6 +348,7 @@ impl StatusRuntime {
             receiver: None,
             server_error,
             panes: BTreeMap::new(),
+            activity: AgentFileActivity::default(),
             malformed_count: 0,
         }
     }
@@ -380,7 +386,13 @@ impl StatusRuntime {
 
     /// Remove o registro de status de um terminal fechado.
     pub fn remove_pane(&mut self, pane_id: &str) -> bool {
+        self.activity.forget_tab(pane_id);
         self.panes.remove(pane_id).is_some()
+    }
+
+    /// Arquivos tocados pelos agentes de cada terminal (`agentFiles` do Flutter).
+    pub fn file_activity(&self) -> &AgentFileActivity {
+        &self.activity
     }
 
     /// Consulta o estado acumulado de um terminal pelo `pane_id`.
@@ -442,6 +454,10 @@ impl StatusRuntime {
         let Some(record) = self.panes.get_mut(&update.pane_id) else {
             return false;
         };
+        // Como o Flutter, registra os arquivos de todo lote com `files`, antes de o rastreador
+        // de turno decidir se o status é obsoleto.
+        self.activity
+            .record(&update.pane_id, &update.files, false, now_ms);
         record.apply_update(&update, now_ms)
     }
 
@@ -701,6 +717,64 @@ mod tests {
         let agents = runtime.island_agents(&descriptors);
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].tab_id, "t2");
+    }
+
+    fn files_update(pane_id: &str, event: HookEvent, files: &[&str]) -> StatusUpdate {
+        StatusUpdate {
+            pane_id: pane_id.into(),
+            status: TurnStatus::Working,
+            event: Some(event),
+            session_id: None,
+            transcript_path: None,
+            harness: Some(AgentHarness::Claude),
+            files: files.iter().map(|f| (*f).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn arquivos_tocados_acumulam_entre_lotes_e_somem_com_a_aba() {
+        let mut runtime = StatusRuntime::without_server(None);
+        runtime.register_pane("t1");
+        runtime.register_pane("t2");
+
+        runtime.apply_update(
+            files_update("t1", HookEvent::PostToolUse, &["/p/a.rs"]),
+            1_000,
+        );
+        runtime.apply_update(
+            files_update("t1", HookEvent::PostToolUse, &["/p/b.rs"]),
+            2_000,
+        );
+        runtime.apply_update(
+            files_update("t2", HookEvent::PostToolUse, &["/p/a.rs"]),
+            3_000,
+        );
+        // Lote sem arquivos não apaga o que já foi registrado.
+        runtime.apply_update(files_update("t1", HookEvent::PreToolUse, &[]), 4_000);
+
+        let activity = runtime.file_activity();
+        assert_eq!(activity.touched_count("t1"), 2);
+        let quem: Vec<&str> = activity
+            .touchers_of("/p/a.rs")
+            .iter()
+            .map(|t| t.tab_id)
+            .collect();
+        assert_eq!(quem, ["t2", "t1"]);
+        assert!(activity
+            .touchers_of("/p/a.rs")
+            .iter()
+            .all(|t| !t.touch.inferred));
+
+        // Pane não registrado não grava nada.
+        runtime.apply_update(
+            files_update("t9", HookEvent::PostToolUse, &["/p/z.rs"]),
+            5_000,
+        );
+        assert!(runtime.file_activity().touchers_of("/p/z.rs").is_empty());
+
+        assert!(runtime.remove_pane("t1"));
+        assert_eq!(runtime.file_activity().touched_count("t1"), 0);
+        assert_eq!(runtime.file_activity().touchers_of("/p/a.rs").len(), 1);
     }
 
     #[cfg(unix)]

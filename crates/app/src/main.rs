@@ -12,12 +12,14 @@
     )
 )]
 
+pub mod agent_file_marks;
 pub mod agent_island_panel;
 pub mod agent_status;
 pub mod chat_composer;
 pub mod chat_pane;
 pub mod chat_view;
 pub mod claude_hook_installer;
+pub mod clock;
 pub mod content_search_panel;
 pub mod content_search_state;
 pub mod db_pane;
@@ -78,6 +80,7 @@ use iced::widget::pane_grid::{self, Axis, Pane};
 use iced::widget::{column, container, mouse_area, row, stack, Space};
 use iced::{Background, Element, Fill, Padding, Subscription, Task, Theme};
 
+use crate::agent_file_marks::{AgentFiles, AgentTab};
 use crate::agent_status::{
     now_epoch_ms, pane_id_for_term, term_id_from_pane_id, PaneDescriptor, StatusRuntime,
 };
@@ -195,6 +198,11 @@ struct Shell {
     git: git_state::GitState,
     /// Aba escolhida do painel direito; a exibida é `right_tab()` (cai em Arquivos se sumiu).
     right_tab: RightTab,
+    /// Agente escolhido no filtro de Arquivos (`None` = todos); a aba pode ter fechado, ver
+    /// `agent_file_marks::effective_filter`.
+    agent_filter: Option<String>,
+    /// Menu do botão robô aberto.
+    agent_menu_open: bool,
     /// Aba Busca: campo, toggles e resultados (somem ao sair da aba, como no Flutter).
     search: SearchState,
     /// Falha da criação de um modelo da Galeria, mostrada num diálogo.
@@ -255,6 +263,8 @@ impl Default for Shell {
             file_create_generation: 0,
             git,
             right_tab: RightTab::default(),
+            agent_filter: None,
+            agent_menu_open: false,
             search: SearchState::default(),
             gallery_error: None,
             rail_open: true,
@@ -451,6 +461,32 @@ impl Shell {
                 | PaneTab::Settings
                 | PaneTab::Database
                 | PaneTab::Harness(_) => None,
+            })
+            .collect()
+    }
+
+    /// Abas do menu do filtro por agente: terminais com harness ativo ou com arquivos tocados
+    /// (`agentTabs` em `gsh_page.dart`).
+    fn agent_tabs(&self) -> Vec<AgentTab> {
+        let activity = self.status_runtime.file_activity();
+        self.panes
+            .models()
+            .into_iter()
+            .flat_map(PaneModel::tabs)
+            .filter_map(|tab| {
+                let PaneTab::Terminal(id) = tab else {
+                    return None;
+                };
+                let pane_id = pane_id_for_term(*id);
+                let by_hook = self
+                    .status_runtime
+                    .pane_record(&pane_id)
+                    .is_some_and(|record| record.harness().is_some());
+                (by_hook || activity.touched_count(&pane_id) > 0).then(|| AgentTab {
+                    id: pane_id,
+                    label: tab.title(),
+                    by_hook,
+                })
             })
             .collect()
     }
@@ -812,6 +848,12 @@ impl Shell {
                                 },
                             );
                         }
+                    }
+                    FilesMsg::ToggleAgentMenu => self.agent_menu_open = !self.agent_menu_open,
+                    FilesMsg::CloseAgentMenu => self.agent_menu_open = false,
+                    FilesMsg::SetAgentFilter(tab) => {
+                        self.agent_filter = tab;
+                        self.agent_menu_open = false;
                     }
                     FilesMsg::CreateFinished(generation, root, result) => {
                         if generation == self.file_create_generation
@@ -1387,6 +1429,17 @@ impl Shell {
         })
         .into();
 
+        let agent_tabs = self.agent_tabs();
+        let agents = AgentFiles {
+            activity: self.status_runtime.file_activity(),
+            tabs: &agent_tabs,
+            filter: agent_file_marks::effective_filter(
+                self.agent_filter.as_deref(),
+                self.status_runtime.file_activity(),
+                &agent_tabs,
+            ),
+            now_ms: now_epoch_ms(),
+        };
         let mut body = row![].height(Fill).width(Fill);
         if self.rail_open {
             body = body.push(rail::view(
@@ -1408,6 +1461,7 @@ impl Shell {
                     self.git.root.as_deref(),
                     self.git.busy,
                     self.file_create.as_ref(),
+                    agents,
                 )
                 .map(Msg::Files),
                 RightTab::Search => {
@@ -1469,6 +1523,36 @@ impl Shell {
             stack![base, backdrop, panel_overlay].into()
         } else {
             base.into()
+        };
+
+        // Menu do filtro por agente: popover sob o botão robô, fecha ao clicar fora.
+        let layered: Element<'_, Msg> = if self.agent_menu_open
+            && self.files_open
+            && self.right_tab() == RightTab::Files
+            && self.file_tree.root().is_some()
+        {
+            let menu = container(agent_file_marks::menu(agents).map(Msg::Files))
+                .width(Fill)
+                .height(Fill)
+                .align_x(iced::alignment::Horizontal::Right)
+                .padding(Padding {
+                    top: theme::TOPBAR_HEIGHT
+                        + theme::TAB_STRIP_HEIGHT
+                        + theme::FILE_PANEL_HEADER_TOP
+                        + theme::AGENT_FILTER_BUTTON_HEIGHT
+                        + theme::AGENT_MENU_OFFSET,
+                    right: theme::AGENT_MENU_EDGE_MARGIN,
+                    bottom: 0.0,
+                    left: 0.0,
+                });
+            stack![
+                layered,
+                agent_file_marks::menu_backdrop().map(Msg::Files),
+                menu
+            ]
+            .into()
+        } else {
+            layered
         };
 
         let layered: Element<'_, Msg> = match self
@@ -1583,6 +1667,8 @@ mod tests {
             file_create_generation: 0,
             git: git_state::GitState::default(),
             right_tab: RightTab::default(),
+            agent_filter: None,
+            agent_menu_open: false,
             search: SearchState::default(),
             gallery_error: None,
             rail_open: true,

@@ -554,6 +554,55 @@ pub const GALLERY_DESCRIPTION_SIZE: f32 = 11.0;
 pub const GALLERY_DESCRIPTION_GAP: f32 = 3.0;
 pub const RAIL_WIDTH: f32 = 252.0;
 pub const FILES_PANEL_WIDTH: f32 = 260.0;
+
+// Filtro por agente do painel Arquivos (`agent_file_marks.dart` e `showAppMenu`/shadcn `MenuPopup`).
+pub const AGENT_DOT_SIZE: f32 = 6.0;
+pub const AGENT_MAX_DOTS: usize = 3;
+pub const AGENT_FILTER_ICON_SIZE: f32 = 14.0;
+pub const AGENT_FILTER_PADDING: f32 = 3.0;
+pub const AGENT_FILTER_RADIUS: f32 = 7.0;
+pub const AGENT_FILTER_DOT_GAP: f32 = 3.0;
+pub const AGENT_MARK_DOT_GAP: f32 = 2.0;
+pub const AGENT_MARK_MORE_GAP: f32 = 3.0;
+pub const AGENT_MARK_MORE_SIZE: f32 = 10.0;
+pub const AGENT_MARK_WARN_SIZE: f32 = 12.0;
+pub const AGENT_MARK_WARN_GAP: f32 = 3.0;
+pub const AGENT_MENU_MIN_WIDTH: f32 = 240.0;
+pub const AGENT_MENU_MAX_WIDTH: f32 = 320.0;
+pub const AGENT_MENU_PADDING: f32 = 4.0;
+pub const AGENT_MENU_RADIUS: f32 = 6.0;
+pub const AGENT_MENU_GAP: f32 = 8.0;
+pub const AGENT_MENU_ITEM_LEFT: f32 = 8.0;
+pub const AGENT_MENU_ITEM_VERTICAL: f32 = 6.0;
+pub const AGENT_MENU_ITEM_RIGHT: f32 = 6.0;
+pub const AGENT_MENU_ICON_SIZE: f32 = 15.0;
+pub const AGENT_MENU_TAB_ICON_SIZE: f32 = 13.0;
+pub const AGENT_MENU_DOT_GAP: f32 = 6.0;
+pub const AGENT_MENU_LEADING_WIDTH: f32 = 24.0;
+pub const AGENT_MENU_LABEL_MAX: f32 = 160.0;
+pub const AGENT_MENU_TEXT_SIZE: f32 = 13.0;
+pub const AGENT_MENU_CHECK_SIZE: f32 = 14.0;
+pub const AGENT_MENU_DIVIDER_VERTICAL: f32 = 4.0;
+pub const AGENT_MENU_OFFSET: f32 = 4.0;
+/// Margem do popover do shadcn até a borda da janela, quando ele precisa deslizar para caber.
+pub const AGENT_MENU_EDGE_MARGIN: f32 = 8.0;
+/// Altura do botão robô no cabeçalho (ícone 14px com linha de 1.3 + 2x3 de padding).
+pub const AGENT_FILTER_BUTTON_HEIGHT: f32 = 24.0;
+pub const AGENT_LIST_PADDING_VERTICAL: f32 = 8.0;
+pub const AGENT_LIST_PADDING_HORIZONTAL: f32 = 6.0;
+pub const AGENT_LIST_ROW_HEIGHT: f32 = 26.0;
+pub const AGENT_LIST_ROW_PADDING: f32 = 6.0;
+pub const AGENT_LIST_ROW_RADIUS: f32 = 5.0;
+pub const AGENT_LIST_ICON_SIZE: f32 = 16.0;
+pub const AGENT_LIST_ICON_GAP: f32 = 7.0;
+pub const AGENT_LIST_NAME_SIZE: f32 = 13.0;
+pub const AGENT_LIST_TIME_SIZE: f32 = 11.0;
+
+/// Cor do agente da aba `tab_id` (hash + paleta do núcleo), igual em qualquer tema.
+pub fn agent_color(tab_id: &str) -> Color {
+    let c = gsh_core::agent_color::agent_color(tab_id);
+    Color::from_rgb8(c.r, c.g, c.b)
+}
 pub const FOOTER_HEIGHT: f32 = 34.0;
 pub const RADIUS_CARD: f32 = 7.0;
 pub const RADIUS_BUTTON: f32 = 5.0;

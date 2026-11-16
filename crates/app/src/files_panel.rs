@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Padding, Theme};
 
+use crate::agent_file_marks::{self, AgentFiles};
 use crate::file_ops::{CreateForm, CreateKind, FileOpError};
 use crate::file_tree::{FileEntry, FileTree, TreeRow};
 use crate::labels;
@@ -31,6 +32,11 @@ pub enum FilesMsg {
     SubmitCreate,
     CancelCreate,
     CreateFinished(u64, PathBuf, Result<(), FileOpError>),
+    /// Botão robô do cabeçalho: abre ou fecha o menu do filtro por agente.
+    ToggleAgentMenu,
+    CloseAgentMenu,
+    /// Escolha do menu: `None` é "Todos os agentes".
+    SetAgentFilter(Option<String>),
 }
 
 /// Corpo da aba Arquivos: cabeçalho (só com pasta), árvore e rodapé de status LSP.
@@ -40,23 +46,34 @@ pub fn view<'a>(
     repo_root: Option<&'a std::path::Path>,
     busy: bool,
     form: Option<&'a CreateForm>,
+    agents: AgentFiles<'_>,
 ) -> Element<'a, FilesMsg> {
     let has_root = tree.root().is_some();
     let mut body = column![];
     if has_root {
-        body = body.push(view_section_header(busy, form.is_some()));
+        body = body.push(view_section_header(busy, form.is_some(), agents));
     }
+    // Com filtro por agente a árvore vira a lista plana do que ele tocou.
+    let content = match agents.filter {
+        Some(tab_id) if has_root => agent_file_marks::touched_list(agents, tab_id, tree.root()),
+        _ => view_tree_body(tree, status, repo_root, agents),
+    };
     body.push(create_input(form))
-        .push(view_tree_body(tree, status, repo_root))
+        .push(content)
         .push(crate::panel_widgets::hairline_h())
         .push(view_footer())
         .into()
 }
 
-fn view_section_header<'a>(busy: bool, creating: bool) -> Element<'a, FilesMsg> {
+fn view_section_header<'a>(
+    busy: bool,
+    creating: bool,
+    agents: AgentFiles<'_>,
+) -> Element<'a, FilesMsg> {
     crate::panel_widgets::section_header(
         labels::FILES_SECTION_UPPER,
         vec![
+            agent_file_marks::filter_button(agents),
             header_action(
                 labels::ICON_NEW_FILE,
                 (!creating).then_some(FilesMsg::StartCreate(CreateKind::File)),
@@ -125,6 +142,7 @@ fn view_tree_body<'a>(
     tree: &'a FileTree,
     status: Option<&'a gsh_git::GitRepoStatus>,
     repo_root: Option<&'a std::path::Path>,
+    agents: AgentFiles<'_>,
 ) -> Element<'a, FilesMsg> {
     if tree.root().is_none() {
         return crate::panel_widgets::empty_label(labels::FILES_NO_FOLDER);
@@ -145,7 +163,15 @@ fn view_tree_body<'a>(
             } => {
                 let git_status = repo_root
                     .and_then(|root| status.and_then(|s| s.status_for_abs_path(root, &entry.path)));
-                list = list.push(view_entry_row(entry, depth, expanded, selected, git_status));
+                // Só arquivo ganha as marcas de agente (o Flutter liga `agentMarks` na linha de arquivo).
+                let marks = if entry.is_dir {
+                    None
+                } else {
+                    agent_file_marks::marks(agents, &entry.path)
+                };
+                list = list.push(view_entry_row(
+                    entry, depth, expanded, selected, git_status, marks,
+                ));
             }
             TreeRow::Error { depth, error } => {
                 let indent = (depth as f32) * 12.0 + 8.0;
@@ -176,6 +202,7 @@ fn view_entry_row<'a>(
     expanded: bool,
     selected: bool,
     git_status: Option<gsh_git::GitFileStatus>,
+    marks: Option<Element<'a, FilesMsg>>,
 ) -> Element<'a, FilesMsg> {
     let indent = (depth as f32) * theme::FILE_TREE_ROW_INDENT;
     let chevron = if entry.is_dir {
@@ -201,7 +228,7 @@ fn view_entry_row<'a>(
         FilesMsg::SelectFile(entry.path)
     };
 
-    let row_content = row![
+    let mut row_content = row![
         Space::new().width(indent),
         container(
             text(chevron)
@@ -224,6 +251,9 @@ fn view_entry_row<'a>(
         .clip(true),
     ]
     .align_y(Alignment::Center);
+    if let Some(marks) = marks {
+        row_content = row_content.push(marks);
+    }
 
     button(row_content)
         .width(Fill)

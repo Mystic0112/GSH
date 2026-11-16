@@ -663,3 +663,17 @@ pub fn harness_rule(rule: &str) -> &str {
         other => other,
     }
 }
+
+// Filtro por agente do painel Arquivos (`pt_BR.i18n.json` -> `gsh.fileTreePanel`)
+pub const AGENT_FILTER_TOOLTIP: &str = "Filtrar por agente";
+pub const ALL_AGENTS: &str = "Todos os agentes";
+pub const TRACKING_UNAVAILABLE: &str = "rastreio indisponível";
+pub const INFERRED_SUFFIX: &str = "(inferido)";
+pub const NO_TOUCHED_FILES: &str = "Nenhum arquivo tocado por este agente ainda";
+pub const CONCURRENT_AGENT_EDITS: &str = "Editado por 2+ agentes nos últimos 10 minutos";
+pub const ICON_GROUPS: &str = "\u{f233}";
+pub const ICON_CHECK: &str = "\u{e668}";
+
+pub fn format_edited_by(label: &str, time: &str) -> String {
+    format!("Editado por {label} · {time}")
+}

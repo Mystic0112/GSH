@@ -18,6 +18,8 @@
     )
 )]
 
+pub mod agent_color;
+pub mod file_activity;
 pub mod hook;
 pub mod status;
 pub mod tabs;
