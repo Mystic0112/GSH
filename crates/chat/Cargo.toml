@@ -9,3 +9,5 @@ repository.workspace = true
 [dependencies]
 serde_json.workspace = true
 thiserror.workspace = true
+# Imagem e PDF vão em base64 no `content` da mensagem (já no Cargo.lock, via iced).
+base64 = "0.22"

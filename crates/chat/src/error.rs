@@ -36,4 +36,16 @@ pub enum ChatError {
     /// Tentativa de envio após a sessão já ter sido encerrada ou cancelada.
     #[error("sessão de chat já encerrada")]
     SessionClosed,
+
+    /// Anexo acima do teto da API (imagem 5 MB, PDF 32 MB). `name` é o nome do arquivo.
+    #[error("anexo grande demais: {name}")]
+    AttachmentTooLarge { name: String },
+
+    /// Não deu para ler o arquivo de um anexo.
+    #[error("não consegui ler o anexo '{path}': {cause}")]
+    AttachmentRead { path: String, cause: String },
+
+    /// Não deu para gravar no transcript da sessão.
+    #[error("não consegui gravar o transcript '{path}': {cause}")]
+    WriteTranscript { path: String, cause: String },
 }

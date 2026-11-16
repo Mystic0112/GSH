@@ -238,6 +238,18 @@ impl TerminalPane {
         &self.spawn_env
     }
 
+    /// Envia texto ao shell ativo, usado pelo handoff da sessão de chat.
+    pub fn send_text(&mut self, value: &str) -> bool {
+        let Some(session) = &self.session else {
+            return false;
+        };
+        if session.send(value.as_bytes()).is_err() {
+            return false;
+        }
+        self.sync_snapshot();
+        true
+    }
+
     /// Diretório de trabalho configurado para esta aba de terminal.
     pub fn cwd(&self) -> Option<&Path> {
         self.cwd.as_deref()

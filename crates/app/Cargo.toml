@@ -21,7 +21,11 @@ gsh-harness = { path = "../harness" }
 gsh-search = { path = "../search" }
 gsh-ipc = { path = "../ipc" }
 gsh-term = { path = "../term" }
-iced = { version = "0.14", features = ["advanced", "canvas", "tokio", "svg", "image"] }
+iced = { version = "0.14", features = ["advanced", "canvas", "tokio", "svg", "image", "markdown"] }
+arboard = { version = "3.7", features = ["wayland-data-control"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+pulldown-cmark = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rfd.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
