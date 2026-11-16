@@ -2,6 +2,7 @@ mod agents;
 mod backdrop;
 mod camera;
 mod characters;
+mod clawd;
 pub mod crops;
 mod dart_sort;
 pub mod icons;
@@ -9,6 +10,7 @@ mod layout;
 pub mod office;
 mod office_paint;
 mod paint;
+mod pix;
 mod raster;
 mod world;
 mod world_paint;
@@ -91,10 +93,8 @@ impl FarmPane {
             Message::Zoom(at, view, step) => self.camera.zoom_at(at, view, step),
             Message::Resized(size) => {
                 self.view_size = Some(size);
-                if self.mode == Mode::Farm {
-                    self.refit_backdrop();
-                    self.camera = self.fit_camera();
-                }
+                self.refit_backdrop();
+                self.camera = self.fit_camera();
             }
         }
         self.cache.clear();

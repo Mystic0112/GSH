@@ -16,6 +16,21 @@ pub fn mulberry32(seed: u32) -> impl FnMut() -> f64 {
     }
 }
 
+/// Clareia (amt > 0) ou escurece uma cor, como `shade` do pix.dart. Sempre opaca.
+pub fn shade(c: u32, amt: f64) -> u32 {
+    let f = |v: u32| (f64::from(v) + amt * 255.0).round().clamp(0.0, 255.0) as u32;
+    0xff00_0000 | (f((c >> 16) & 0xff) << 16) | (f((c >> 8) & 0xff) << 8) | f(c & 0xff)
+}
+
+/// Mistura `a` e `b` (`t` = 0 é `a`, 1 é `b`), como `mix` do pix.dart. Sempre opaca.
+pub fn mix(a: u32, b: u32, t: f64) -> u32 {
+    let m = |s: u32| {
+        let (x, y) = (f64::from((a >> s) & 0xff), f64::from((b >> s) & 0xff));
+        (x + (y - x) * t).round() as u32
+    };
+    0xff00_0000 | (m(16) << 16) | (m(8) << 8) | m(0)
+}
+
 /// Mistura `src` com alpha `a` sobre `dst` (ARGB), como `_blend` do pix.dart.
 fn blend(dst: u32, src: u32, a: u32) -> u32 {
     let m = |shift: u32| (((dst >> shift) & 0xff) * (255 - a) + ((src >> shift) & 0xff) * a) / 255;

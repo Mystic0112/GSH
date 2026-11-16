@@ -888,6 +888,24 @@ pub mod scene {
             0xffe0533f, 0xfff2b43a, 0xff6fbf5a, 0xff4f86d9, 0xffe57fb0, 0xff3fa7a0,
         ];
     }
+
+    // Clawd (farm_sprites.dart): paleta do corpo de argila e os traços do rosto.
+    pub mod clawd {
+        pub const CLAY_O: u32 = 0xff4a1f12;
+        pub const CLAY_L: u32 = 0xfff7c3a3;
+        pub const CLAY_H: u32 = 0xffec9670;
+        pub const CLAY: u32 = 0xffd97757;
+        pub const CLAY_S: u32 = 0xffb95d3f;
+        pub const CLAY_D: u32 = 0xff8a3a21;
+        pub const CLAY_K: u32 = 0xfff3ab98;
+        // base da paleta de corpos que não são argila (BodyPal.of)
+        pub const INK_BASE: u32 = 0xff1a1216;
+        pub const BLUSH_BASE: u32 = 0xffff9f9f;
+        pub const EYE: u32 = 0xff23_1815;
+        pub const SHINE: u32 = 0xffff_ffff;
+        pub const EYE_SHADOW: u32 = 0xff4a_3a36;
+        pub const MOUTH_HAPPY: u32 = 0xffc8_505a;
+    }
 }
 
 /// Cores fixas dos agentes na cena.

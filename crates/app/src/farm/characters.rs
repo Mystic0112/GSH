@@ -1,9 +1,11 @@
 use super::{
     agents::{Agent, Pose},
     camera::Camera,
+    clawd::{self, Pose as ClawdPose},
     world::Prop,
 };
 use crate::{labels, theme};
+use iced::advanced::image::{FilterMethod, Image};
 use iced::{
     widget::canvas::{self, Text},
     Point, Rectangle, Size,
@@ -39,7 +41,34 @@ pub fn hit<'a>(
         .contains(world)
     })
 }
-// Sprite simplificado; o clawdHD completo de farm_sprites.dart fica para a fase de fidelidade.
+/// Pose do Clawd para o estado do agente (`Pose` de agents.rs): dormindo, digitando,
+/// alerta ou comemorando. Digitando fica com os braços numa posição só (a animação
+/// de digitação vem com o relógio da cena).
+fn clawd_pose(pose: Pose) -> ClawdPose {
+    let base = ClawdPose {
+        look: 0,
+        legs: 0,
+        blink: false,
+        sleep: false,
+        arms: 0,
+        happy: false,
+    };
+    match pose {
+        Pose::Sleeping => ClawdPose {
+            sleep: true,
+            ..base
+        },
+        Pose::Typing => ClawdPose { arms: 2, ..base },
+        Pose::Alert => ClawdPose { arms: 1, ..base },
+        Pose::Happy => ClawdPose {
+            arms: 1,
+            happy: true,
+            ..base
+        },
+    }
+}
+
+/// O Clawd de cada agente: 16 x 18 de mundo, com os pés em `position`.
 pub fn draw(
     frame: &mut canvas::Frame,
     agents: &[Agent],
@@ -50,39 +79,26 @@ pub fn draw(
     for agent in agents {
         let p = camera.to_screen(position(agent, posts), size);
         let z = camera.zoom;
-        let color = theme::FARM_AGENTS
-            .get(agent.slot % theme::FARM_AGENTS.len())
-            .copied()
-            .unwrap_or(theme::palette().online);
-        let mut pixel = |x: f32, y: f32, w: f32, h: f32, color| {
-            frame.fill_rectangle(
-                Point::new(p.x + x * z, p.y + y * z),
-                Size::new(w * z, h * z),
-                color,
-            )
-        };
-        pixel(1.0, 2.0, 8.0, 8.0, color);
-        pixel(2.0, 10.0, 2.0, 2.0, theme::scene::MONITOR);
-        pixel(6.0, 10.0, 2.0, 2.0, theme::scene::MONITOR);
         let pose = agent.input.state.pose();
-        if pose == Pose::Sleeping {
-            pixel(2.0, 5.0, 2.0, 1.0, theme::scene::MONITOR);
-            pixel(6.0, 5.0, 2.0, 1.0, theme::scene::MONITOR);
-        } else {
-            pixel(3.0, 4.0, 1.0, 2.0, theme::scene::MONITOR);
-            pixel(6.0, 4.0, 1.0, 2.0, theme::scene::MONITOR);
-        }
-        if pose == Pose::Typing {
-            pixel(8.0, 7.0, 2.0, 3.0, color);
-        }
-        if pose == Pose::Happy {
-            pixel(3.0, 7.0, 4.0, 1.0, theme::scene::MONITOR);
-        }
+        frame.draw_image(
+            Rectangle {
+                x: p.x - 8.0 * z,
+                y: p.y - 17.0 * z,
+                width: 16.0 * z,
+                height: 18.0 * z,
+            },
+            Image::new(clawd::frame(clawd_pose(pose))).filter_method(FilterMethod::Nearest),
+        );
         if pose == Pose::Alert {
-            pixel(7.0, -5.0, 4.0, 6.0, theme::palette().warn);
+            // o balão de alerta fica ao lado do Clawd, para não sumir atrás dele
+            frame.fill_rectangle(
+                Point::new(p.x + 8.0 * z, p.y - 17.0 * z),
+                Size::new(4.0 * z, 6.0 * z),
+                theme::palette().warn,
+            );
             frame.fill_text(Text {
                 content: labels::FARM_ALERT.into(),
-                position: Point::new(p.x + 8.0 * z, p.y - 5.0 * z),
+                position: Point::new(p.x + 8.0 * z, p.y - 22.0 * z),
                 color: theme::scene::MONITOR,
                 size: iced::Pixels(5.0 * z),
                 ..Text::default()
