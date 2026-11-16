@@ -14,6 +14,7 @@ pub(crate) fn view_tab_strip<'a, M, FSelect, FClose, FHover>(
     dirty: &dyn Fn(&std::path::Path) -> bool,
     hovered: Option<usize>,
     on_hover: FHover,
+    tools: Element<'a, M>,
 ) -> Element<'a, M>
 where
     M: Clone + 'a,
@@ -38,7 +39,8 @@ where
 
     let add_tab = view_add_tab_button(callbacks.on_new_terminal);
     let bar = container(
-        row![tabs_row, Space::new().width(Fill), add_tab]
+        // "+" logo depois da última aba; o vazio fica antes das ferramentas (pane_view.dart)
+        row![tabs_row, add_tab, Space::new().width(Fill), tools]
             .width(Fill)
             .height(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
             .align_y(Alignment::Center),

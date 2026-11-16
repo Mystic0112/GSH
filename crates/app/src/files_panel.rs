@@ -72,7 +72,7 @@ fn view_mode_bar<'a>() -> Element<'a, FilesMsg> {
         .padding([0, 14]),
     )
     .width(Fill)
-    .height(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
+    .center_y(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
     .into()
 }
 

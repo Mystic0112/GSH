@@ -43,12 +43,8 @@ where
 {
     let split_controls =
         split_controls(callbacks.on_split.clone(), callbacks.on_close_split.clone());
-    let tab_strip = row![
-        container(view_tab_strip(model, callbacks, dirty, hovered, on_hover)).width(Fill),
-        split_controls
-    ]
-    .align_y(iced::Alignment::Center)
-    .width(Fill);
+    // as ferramentas ficam dentro da barra (mesmo fundo e borda de baixo), como em pane_view.dart
+    let tab_strip = view_tab_strip(model, callbacks, dirty, hovered, on_hover, split_controls);
 
     let body = container(active_content)
         .width(Fill)

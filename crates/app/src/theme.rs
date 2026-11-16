@@ -418,6 +418,8 @@ pub const TERM_PADDING_Y: f32 = 8.0;
 
 // Métricas do chrome (`gsh_topbar.dart`, `projects_rail.dart`, `pane_view.dart`, `file_tree_panel.dart`)
 pub const TOPBAR_HEIGHT: f32 = 46.0;
+/// Largura dos 3 botões de janela (28px cada + 2 vãos de 2px), para a divisória inferior da barra seguir até a borda.
+pub const WINDOW_CONTROLS_WIDTH: f32 = 88.0;
 /// Largura livre mínima do centro da barra (`LayoutBuilder` no Flutter).
 pub const TOPBAR_CENTER_MIN_WIDTH: f32 = 160.0;
 /// Ícone e espaço da pílula `_GitBadge` do Flutter.

@@ -1030,6 +1030,16 @@ impl Shell {
             window_button(labels::ICON_CLOSE, Msg::WindowCloseButton),
         ]
         .spacing(2);
+        // Mesma divisória inferior da topbar, para a linha seguir até a borda da janela.
+        let window_controls = column![
+            container(window_controls).center_y(theme::TOPBAR_HEIGHT - 1.0),
+            container(Space::new().width(Fill).height(1.0))
+                .width(theme::WINDOW_CONTROLS_WIDTH)
+                .style(|_: &Theme| container::Style {
+                    background: Some(Background::Color(theme::palette().border)),
+                    ..Default::default()
+                }),
+        ];
         let top = row![
             mouse_area(container(top).width(Fill)).on_press(Msg::WindowDrag),
             window_controls,

@@ -37,7 +37,7 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
         .align_y(iced::Alignment::Center)
         .padding([0, 14]),
     )
-    .height(theme::TAB_STRIP_HEIGHT - 1.0);
+    .center_y(theme::TAB_STRIP_HEIGHT - 1.0);
     let title = row![
         text(labels::SOURCE_CONTROL_SECTION_UPPER)
             .font(theme::FONT_TITLE)
