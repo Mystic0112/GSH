@@ -9,13 +9,26 @@ repository.workspace = true
 [dependencies]
 aes-gcm = "0.10"
 base64 = "0.22"
+bson = { version = "3.1", features = ["serde_json-1"] }
+futures-util = "0.3"
+mongodb = { version = "3.10", default-features = false, features = ["compat-3-3-0", "bson-3", "rustls-tls", "socks5-proxy", "dns-resolver"] }
+mysql_async = { version = "0.37", default-features = false, features = ["default-rustls-ring"] }
+redis = { version = "1.0", features = ["tokio-rustls-comp", "tls-rustls-webpki-roots"] }
 rusqlite = { version = "0.43.0", features = ["bundled"] }
+russh = { version = "0.65", default-features = false, features = ["flate2", "ring", "rsa"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json.workspace = true
 sha2 = "0.10"
 thiserror.workspace = true
-tokio = { version = "1", features = ["rt", "time"] }
+tiberius = { version = "0.13", default-features = false, features = ["tds73", "tds80", "rustls", "rustls-webpki-roots"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "io-util", "sync"] }
 tokio-postgres = "0.7"
+tokio-postgres-rustls = { version = "0.14", features = ["ring", "native-certs", "webpki-roots"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+webpki-roots = "1.0"
+zeroize = { version = "1.9", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

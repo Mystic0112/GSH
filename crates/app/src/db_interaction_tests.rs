@@ -94,7 +94,13 @@ fn dragging_the_divider_publishes_the_cursor_travel() {
         false,
         Duration::ZERO,
     );
-    let _ = query.update(QueryMsg::Done(Ok(result)), &Ctx { secrets: &secrets });
+    let _ = query.update(
+        QueryMsg::Done(Ok(result)),
+        &Ctx {
+            secrets: &secrets,
+            ssh_passphrases: &std::collections::BTreeMap::new(),
+        },
+    );
 
     let mut ui = simulator(
         Size::new(900.0, 560.0),
@@ -123,4 +129,42 @@ fn dragging_the_divider_publishes_the_cursor_travel() {
         })
         .sum();
     assert!((travelled - 30.0).abs() < 0.01, "{travelled}");
+}
+
+#[test]
+fn clicking_a_redis_connection_opens_its_key_browser() {
+    let mut db = DbState::new(SecretStore::new(PathBuf::from("/nonexistent/secrets.json")));
+    let _ = db.set_workspace(Some(PathBuf::from("/nonexistent")));
+    db.connections = vec![Connection::from_json(
+        &serde_json::json!({"name": "cache", "url": "redis://127.0.0.1:6379/0"}),
+        Origin::Registered,
+    )
+    .unwrap()];
+    let mut ui = simulator(Size::new(260.0, 200.0), crate::db_panel::view(&db));
+    ui.point_at(Point::new(80.0, 52.0));
+    let _ = ui.simulate(click());
+    let messages: Vec<DbMsg> = ui.into_messages().collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| matches!(m, DbMsg::BrowseRedis(name) if name == "cache")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn the_add_menu_lists_all_six_engines_including_mongodb() {
+    let mut db = panel();
+    db.menu = Some(MenuState::Add);
+    let mut ui = simulator(Size::new(260.0, 400.0), crate::db_panel::view(&db));
+    // "MongoDB" é o 6º item do menu (após SQLite, Postgres, MySQL, SQL Server, Redis)
+    ui.point_at(Point::new(120.0, 210.0));
+    let _ = ui.simulate(click());
+    let messages: Vec<DbMsg> = ui.into_messages().collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| matches!(m, DbMsg::AddEngine(Engine::Mongo))),
+        "{messages:?}"
+    );
 }

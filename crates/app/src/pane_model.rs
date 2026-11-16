@@ -19,6 +19,9 @@ pub type ChatId = u64;
 /// Identificador numérico estável de uma aba de query (`.dbq`).
 pub type QueryId = u64;
 
+/// Identificador numérico estável de um navegador Redis ou MongoDB.
+pub type BrowserId = u64;
+
 /// Aba aberta no pane central.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaneTab {
@@ -34,6 +37,14 @@ pub enum PaneTab {
     Settings,
     /// Aba de query SQL (`.dbq`, arquivo ou untitled). O título muda quando o untitled vira arquivo.
     Query { id: QueryId, title: String },
+    /// Navegador de chaves Redis.
+    Redis { id: BrowserId, conn: String },
+    /// Navegador de coleção MongoDB.
+    Mongo {
+        id: BrowserId,
+        conn: String,
+        collection: String,
+    },
     /// Harness do workspace de `PathBuf`: o que o Claude Code carrega ali. Uma por workspace.
     Harness(PathBuf),
 }
@@ -63,6 +74,10 @@ impl PaneTab {
             Self::Farm => labels::FARM_TAB_TITLE.to_string(),
             Self::Settings => labels::SETTINGS_TITLE.to_string(),
             Self::Query { title, .. } => title.clone(),
+            Self::Redis { conn, .. } => conn.clone(),
+            Self::Mongo {
+                conn, collection, ..
+            } => format!("{collection} ({conn})"),
             Self::Harness(_) => labels::HARNESS_TAB_TITLE.to_string(),
         }
     }
@@ -75,6 +90,8 @@ impl PaneTab {
             Self::Farm => labels::ICON_FARM,
             Self::Settings => labels::ICON_SETTINGS,
             Self::Query { .. } => labels::ICON_DATABASE,
+            Self::Redis { .. } => labels::ICON_GRID_ON,
+            Self::Mongo { .. } => labels::ICON_DATA_OBJECT,
             Self::Harness(_) => labels::ICON_TUNE,
             Self::File(path) => {
                 let name = file_display_name(path);
@@ -176,6 +193,22 @@ impl PaneModel {
     /// Abre uma aba de query ao final da lista e a torna ativa.
     pub fn open_query(&mut self, id: QueryId, title: String) {
         self.tabs.push(PaneTab::Query { id, title });
+        self.active = Some(self.tabs.len().saturating_sub(1));
+    }
+
+    /// Abre uma aba de navegador Redis ao final da lista e a torna ativa.
+    pub fn open_redis(&mut self, id: BrowserId, conn: String) {
+        self.tabs.push(PaneTab::Redis { id, conn });
+        self.active = Some(self.tabs.len().saturating_sub(1));
+    }
+
+    /// Abre uma aba de coleção MongoDB ao final da lista e a torna ativa.
+    pub fn open_mongo(&mut self, id: BrowserId, conn: String, collection: String) {
+        self.tabs.push(PaneTab::Mongo {
+            id,
+            conn,
+            collection,
+        });
         self.active = Some(self.tabs.len().saturating_sub(1));
     }
 

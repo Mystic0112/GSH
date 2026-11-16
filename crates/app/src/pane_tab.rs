@@ -1,4 +1,5 @@
-use crate::{labels, pane_model::PaneTab, pane_strip::hairline_v, theme};
+use crate::{db_engine_icon, labels, pane_model::PaneTab, pane_strip::hairline_v, theme};
+use gsh_db::Engine;
 use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
 
@@ -22,8 +23,10 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         theme::palette().text3
     };
 
-    let tab_label = row![
-        text(tab.icon())
+    let leading_icon: Element<'a, M> = match tab {
+        PaneTab::Redis { .. } => db_engine_icon::view(Engine::Redis, theme::PANE_TAB_ICON_SIZE),
+        PaneTab::Mongo { .. } => db_engine_icon::view(Engine::Mongo, theme::PANE_TAB_ICON_SIZE),
+        _ => text(tab.icon())
             .font(if tab.is_file() {
                 theme::FONT_MONO_BOLD
             } else {
@@ -34,7 +37,12 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
             } else {
                 theme::PANE_TAB_ICON_SIZE
             })
-            .color(icon_color),
+            .color(icon_color)
+            .into(),
+    };
+
+    let tab_label = row![
+        leading_icon,
         Space::new().width(theme::PANE_TAB_ICON_GAP),
         container(
             text(tab.title())

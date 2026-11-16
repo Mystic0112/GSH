@@ -4,9 +4,11 @@
 //! `save_password`.
 
 use std::cmp::Ordering;
+use std::fmt;
 
 use serde::Serialize;
 use serde_json::Value;
+use zeroize::Zeroize;
 
 use crate::url;
 
@@ -32,7 +34,7 @@ impl Engine {
     ];
 
     /// Motores que este build sabe executar.
-    pub const SUPPORTED: [Self; 2] = [Self::Sqlite, Self::Postgres];
+    pub const SUPPORTED: [Self; 6] = Self::ALL;
 
     /// Nome estável (asset do ícone e `Enum.name` do Flutter).
     pub const fn id(self) -> &'static str {
@@ -80,7 +82,12 @@ impl Engine {
 
     /// Este build tem driver para o motor.
     pub const fn is_supported(self) -> bool {
-        matches!(self, Self::Sqlite | Self::Postgres)
+        true
+    }
+
+    /// Motores que aceitam túnel SSH (todos exceto SQLite).
+    pub const fn supports_ssh_tunnel(self) -> bool {
+        !matches!(self, Self::Sqlite)
     }
 
     /// Esquema da URL (`mongodb` no Mongo).
@@ -140,7 +147,7 @@ pub enum Origin {
     Detected,
 }
 
-/// Túnel SSH de uma conexão. Sem túnel por aqui ainda: o bloco só atravessa o arquivo.
+/// Túnel SSH de uma conexão (`SshTunnelConfig`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SshTunnel {
     pub host: String,
@@ -155,6 +162,20 @@ pub struct SshTunnel {
 pub const SSH_DEFAULT_PORT: i64 = 22;
 
 impl SshTunnel {
+    /// Identidade do endpoint SSH (`user@host:port`): chave do cache de túneis e de host keys.
+    pub fn endpoint(&self) -> String {
+        format!("{}@{}:{}", self.user, self.host, self.port)
+    }
+
+    /// Rótulo curto para exibição.
+    pub fn label(&self) -> String {
+        if self.port == SSH_DEFAULT_PORT {
+            format!("{}@{}", self.user, self.host)
+        } else {
+            self.endpoint()
+        }
+    }
+
     /// Bloco `ssh` do JSON; malformado (sem host, usuário ou chave) vira `None`.
     pub fn from_json(raw: Option<&Value>) -> Option<Self> {
         let map = raw?.as_object()?;
@@ -194,7 +215,7 @@ impl SshTunnel {
 pub struct UnsupportedUrl(pub String);
 
 /// Uma conexão do workspace.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Connection {
     pub name: String,
     pub engine: Engine,
@@ -205,6 +226,38 @@ pub struct Connection {
     /// `false`: invisível na CLI dos agentes; a GUI vê normalmente.
     pub agents: bool,
     pub ssh: Option<SshTunnel>,
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.url.zeroize();
+    }
+}
+
+impl fmt::Debug for Connection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Connection")
+            .field("name", &self.name)
+            .field("engine", &self.engine)
+            .field("url", &redact_url(&self.url))
+            .field("save_password", &self.save_password)
+            .field("origin", &self.origin)
+            .field("access", &self.access)
+            .field("agents", &self.agents)
+            .field("ssh", &self.ssh)
+            .finish()
+    }
+}
+
+/// Mascara a senha embutida em uma URL (`scheme://user:secret@host` -> `scheme://user:***@host`).
+pub fn redact_url(raw: &str) -> String {
+    let Ok(parsed) = url::parse(raw) else {
+        return "[REDACTED]".to_string();
+    };
+    let Some((user, _pass)) = parsed.user_info.split_once(':') else {
+        return raw.to_string();
+    };
+    raw.replacen(&parsed.user_info, &format!("{user}:***"), 1)
 }
 
 impl Connection {
@@ -318,6 +371,105 @@ impl Connection {
             format!("{}:{}", self.host(), self.port())
         }
     }
+
+    /// TLS configurado na conexão (mesma regra do `DbConnection.useTls` no Flutter).
+    pub fn use_tls(&self) -> bool {
+        match self.engine {
+            Engine::Sqlite => false,
+            Engine::Redis => self.url.starts_with("rediss://"),
+            Engine::Mongo => {
+                self.is_srv()
+                    || self.query_param("tls").as_deref() == Some("true")
+                    || self.query_param("ssl").as_deref() == Some("true")
+            }
+            Engine::Postgres => matches!(
+                self.query_param("sslmode").as_deref(),
+                Some("require" | "verify-ca" | "verify-full")
+            ),
+            Engine::Mysql => matches!(
+                self.query_param("ssl-mode")
+                    .map(|v| v.to_ascii_uppercase())
+                    .as_deref(),
+                Some("REQUIRED" | "VERIFY_CA" | "VERIFY_IDENTITY")
+            ),
+            Engine::Mssql => self.query_param("encrypt").as_deref() == Some("true"),
+        }
+    }
+
+    /// Cópia apontando para outro endpoint TCP (`withEndpoint` do Flutter), sem túnel SSH.
+    pub fn with_endpoint(&self, host: &str, port: u16) -> Self {
+        let mut rebuilt = self.url.clone();
+        if let Some(sep) = self.url.find("://") {
+            let start = sep + 3;
+            let tail = self.url.get(start..).unwrap_or_default();
+            let rest_at = tail.find(['/', '?', '#']).unwrap_or(tail.len());
+            let authority = tail.get(..rest_at).unwrap_or_default();
+            let user_prefix = authority
+                .rfind('@')
+                .and_then(|at| authority.get(..=at))
+                .unwrap_or_default();
+            let rest = tail.get(rest_at..).unwrap_or_default();
+            let host_fmt = if host.contains(':') && !host.starts_with('[') {
+                format!("[{host}]")
+            } else {
+                host.to_string()
+            };
+            rebuilt = format!(
+                "{}{user_prefix}{host_fmt}:{port}{rest}",
+                self.url.get(..start).unwrap_or_default()
+            );
+        }
+        Self {
+            name: self.name.clone(),
+            engine: self.engine,
+            url: rebuilt,
+            save_password: self.save_password,
+            origin: self.origin,
+            access: self.access,
+            agents: self.agents,
+            ssh: None,
+        }
+    }
+
+    /// Cópia que roteia o Mongo pelo proxy SOCKS5 local (`withSocksProxy` do Flutter).
+    pub fn with_socks_proxy(&self, proxy_host: &str, proxy_port: u16) -> Self {
+        let (base, fragment) = match self.url.split_once('#') {
+            Some((b, f)) => (b, Some(f)),
+            None => (self.url.as_str(), None),
+        };
+        let (before_q, query) = base.split_once('?').unwrap_or((base, ""));
+        let mut params: Vec<(String, String)> = url::query_params(query)
+            .into_iter()
+            .filter(|(k, _)| k != "proxyHost" && k != "proxyPort")
+            .collect();
+        params.push(("proxyHost".to_string(), proxy_host.to_string()));
+        params.push(("proxyPort".to_string(), proxy_port.to_string()));
+        let encoded: Vec<String> = params
+            .into_iter()
+            .map(|(k, v)| {
+                format!(
+                    "{}={}",
+                    url::encode_component(&k),
+                    url::encode_component(&v)
+                )
+            })
+            .collect();
+        let mut rebuilt = format!("{before_q}?{}", encoded.join("&"));
+        if let Some(frag) = fragment {
+            rebuilt.push('#');
+            rebuilt.push_str(frag);
+        }
+        Self {
+            name: self.name.clone(),
+            engine: self.engine,
+            url: rebuilt,
+            save_password: self.save_password,
+            origin: self.origin,
+            access: self.access,
+            agents: self.agents,
+            ssh: None,
+        }
+    }
 }
 
 fn engine_from_url(url: &str) -> Option<Engine> {
@@ -429,5 +581,44 @@ mod tests {
         assert!(SshTunnel::from_json(None).is_none());
         let defaults = json!({"host":"h","user":"u","keyPath":"k","port":-1});
         assert_eq!(SshTunnel::from_json(Some(&defaults)).unwrap().port, 22);
+    }
+
+    #[test]
+    fn debug_redacts_password_embedded_in_url() {
+        let c = postgres("postgres://ana:super-secret@db.local:5432/app");
+        let dbg = format!("{c:?}");
+        assert!(!dbg.contains("super-secret"), "{dbg}");
+        assert!(dbg.contains("ana:***"), "{dbg}");
+    }
+
+    #[test]
+    fn with_endpoint_and_with_socks_proxy_preserve_parts_and_drop_ssh() {
+        let mut c = Connection::from_json(
+            &json!({
+                "name": "m",
+                "url": "mongodb://u:p@db.internal:27017/app?authSource=admin",
+                "ssh": {"host": "bastion", "user": "ops", "keyPath": "~/.ssh/id_ed25519"}
+            }),
+            Origin::Registered,
+        )
+        .unwrap();
+        let tunneled = c.with_endpoint("127.0.0.1", 55123);
+        assert_eq!(
+            tunneled.url,
+            "mongodb://u:p@127.0.0.1:55123/app?authSource=admin"
+        );
+        assert!(tunneled.ssh.is_none());
+
+        let proxied = c.with_socks_proxy("127.0.0.1", 55444);
+        assert_eq!(
+            proxied.query_param("proxyHost").as_deref(),
+            Some("127.0.0.1")
+        );
+        assert_eq!(proxied.query_param("proxyPort").as_deref(), Some("55444"));
+        assert_eq!(proxied.query_param("authSource").as_deref(), Some("admin"));
+        assert!(proxied.ssh.is_none());
+
+        c.ssh = None;
+        assert!(!c.use_tls());
     }
 }

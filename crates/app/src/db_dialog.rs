@@ -1,12 +1,11 @@
 //! Diálogo único de conexão (`db_connection_dialog.dart`): criar (o motor vem do menu do "+") e
 //! editar (clicar na conexão; motor fixo). Testar valida antes de salvar; Excluir (só ao editar)
 //! fica na extrema esquerda.
-//!
-//! Túnel SSH fica fora desta fase: o bloco `ssh` de uma conexão editada atravessa o diálogo
-//! intacto, mas não há campos para ele.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
+use gsh_db::ssh_keys::{default_key_path, needs_passphrase, shorten_home};
 use gsh_db::url::{self, ParsedUrl};
 use gsh_db::{Access, Connection, DbError, Endpoint, Engine, Origin, SecretStore};
 use iced::widget::{
@@ -16,6 +15,7 @@ use iced::{
     alignment::Vertical, mouse, Alignment, Background, Border, Element, Fill, Length, Padding,
     Rectangle, Renderer, Task, Theme,
 };
+use zeroize::Zeroize;
 
 use crate::drag_handle::{Axis, DragHandle};
 use crate::pane_close_dialog::{self, ButtonKind};
@@ -31,10 +31,18 @@ pub enum DialogMsg {
     UriResizeReset,
     SavePassword(bool),
     Password(String),
+    SshToggle(bool),
+    SshHost(String),
+    SshPort(String),
+    SshUser(String),
+    PickSshKey,
+    SshKeyPicked(Option<PathBuf>),
+    SshPassphrase(String),
+    SaveSshPassphrase(bool),
     AllowWrites(bool),
     VisibleToAgents(bool),
     Test,
-    Tested(Option<String>),
+    Tested(Result<(), DbError>),
     Submit,
     Delete,
     Cancel,
@@ -42,39 +50,123 @@ pub enum DialogMsg {
 }
 
 /// O que o diálogo decidiu; quem o abriu persiste.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Outcome {
     Saved {
         connection: Connection,
         /// Senha digitada ou extraída da URL; `None` = não mexer na guardada.
         password: Option<String>,
+        /// Passphrase SSH digitada; `None` = não mexer na guardada.
+        ssh_passphrase: Option<String>,
         previous_name: Option<String>,
     },
     Deleted(Connection),
     Cancelled,
 }
 
-#[derive(Debug)]
+impl fmt::Debug for Outcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Saved {
+                connection,
+                password,
+                ssh_passphrase,
+                previous_name,
+            } => f
+                .debug_struct("Saved")
+                .field("connection", connection)
+                .field("password", &password.as_ref().map(|_| "[REDACTED]"))
+                .field(
+                    "ssh_passphrase",
+                    &ssh_passphrase.as_ref().map(|_| "[REDACTED]"),
+                )
+                .field("previous_name", previous_name)
+                .finish(),
+            Self::Deleted(connection) => f.debug_tuple("Deleted").field(connection).finish(),
+            Self::Cancelled => f.write_str("Cancelled"),
+        }
+    }
+}
+
 pub struct ConnectionDialog {
     engine: Engine,
     initial: Option<Connection>,
+    is_remote_workspace: bool,
     name: String,
     file: String,
     uri: text_editor::Content,
     uri_height: f32,
     save_password: bool,
     password: String,
+    ssh_open: bool,
+    ssh_host: String,
+    ssh_port: String,
+    ssh_user: String,
+    ssh_key: String,
+    ssh_passphrase: String,
+    save_ssh_passphrase: bool,
+    ssh_key_encrypted: bool,
     allow_writes: bool,
     visible_to_agents: bool,
     testing: bool,
-    /// `Some(Ok)` / `Some(Err(mensagem))` depois de testar.
-    test: Option<Result<(), String>>,
+    /// `Some(Ok)` / `Some(Err(DbError))` depois de testar.
+    test: Option<Result<(), DbError>>,
+}
+
+impl Drop for ConnectionDialog {
+    fn drop(&mut self) {
+        self.password.zeroize();
+        self.ssh_passphrase.zeroize();
+    }
+}
+
+impl fmt::Debug for ConnectionDialog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConnectionDialog")
+            .field("engine", &self.engine)
+            .field("initial", &self.initial)
+            .field("is_remote_workspace", &self.is_remote_workspace)
+            .field("name", &self.name)
+            .field("file", &self.file)
+            .field("uri", &"[REDACTED]")
+            .field("uri_height", &self.uri_height)
+            .field("save_password", &self.save_password)
+            .field(
+                "password",
+                &if self.password.is_empty() {
+                    "empty"
+                } else {
+                    "[REDACTED]"
+                },
+            )
+            .field("ssh_open", &self.ssh_open)
+            .field("ssh_host", &self.ssh_host)
+            .field("ssh_port", &self.ssh_port)
+            .field("ssh_user", &self.ssh_user)
+            .field("ssh_key", &self.ssh_key)
+            .field(
+                "ssh_passphrase",
+                &if self.ssh_passphrase.is_empty() {
+                    "empty"
+                } else {
+                    "[REDACTED]"
+                },
+            )
+            .field("save_ssh_passphrase", &self.save_ssh_passphrase)
+            .field("ssh_key_encrypted", &self.ssh_key_encrypted)
+            .field("allow_writes", &self.allow_writes)
+            .field("visible_to_agents", &self.visible_to_agents)
+            .field("testing", &self.testing)
+            .field("test", &self.test)
+            .finish()
+    }
 }
 
 /// Conexão montada a partir dos campos.
 struct Built {
     connection: Connection,
     password: Option<String>,
+    ssh_passphrase: Option<String>,
 }
 
 impl ConnectionDialog {
@@ -82,12 +174,24 @@ impl ConnectionDialog {
     pub fn new(engine: Engine, initial: Option<Connection>) -> Self {
         let mut dialog = Self {
             engine,
+            is_remote_workspace: false,
             name: String::new(),
             file: String::new(),
             uri: text_editor::Content::new(),
             uri_height: theme::DB_DIALOG_URI_HEIGHT,
             save_password: initial.as_ref().is_some_and(|c| c.save_password),
             password: String::new(),
+            ssh_open: false,
+            ssh_host: String::new(),
+            ssh_port: String::new(),
+            ssh_user: String::new(),
+            ssh_key: String::new(),
+            ssh_passphrase: String::new(),
+            save_ssh_passphrase: initial
+                .as_ref()
+                .and_then(|c| c.ssh.as_ref())
+                .is_some_and(|s| s.save_passphrase),
+            ssh_key_encrypted: false,
             allow_writes: initial
                 .as_ref()
                 .is_some_and(|c| c.access == Access::ReadWrite),
@@ -103,9 +207,87 @@ impl ConnectionDialog {
             } else {
                 dialog.uri = text_editor::Content::with_text(&connection.url);
             }
+            if let Some(ssh) = &connection.ssh {
+                dialog.ssh_open = true;
+                dialog.ssh_host.clone_from(&ssh.host);
+                dialog.ssh_port = ssh.port.to_string();
+                dialog.ssh_user.clone_from(&ssh.user);
+                dialog.ssh_key.clone_from(&ssh.key_path);
+                dialog.ssh_key_encrypted = needs_passphrase(&dialog.ssh_key);
+            }
         }
         dialog.initial = initial;
         dialog
+    }
+
+    pub fn with_remote_workspace(mut self, is_remote: bool) -> Self {
+        self.is_remote_workspace = is_remote;
+        self
+    }
+
+    pub fn built_ssh_info(&self) -> Option<(String, String, String)> {
+        let built = self.try_build()?;
+        let ssh = built.connection.ssh.as_ref()?;
+        Some((
+            built.connection.name.clone(),
+            ssh.endpoint(),
+            ssh.key_path.clone(),
+        ))
+    }
+
+    pub fn trigger_test(
+        &mut self,
+        root: &Path,
+        secrets: &SecretStore,
+        cached_ssh_passphrase: Option<String>,
+    ) -> Task<DialogMsg> {
+        if self.testing {
+            return Task::none();
+        }
+        let Some(built) = self.try_build() else {
+            self.test = Some(Err(DbError::ConnectionFailed(
+                labels::DB_DIALOG_INVALID_URL.to_string(),
+            )));
+            return Task::none();
+        };
+        self.testing = true;
+        self.test = None;
+        // edição com senha no cofre: o teste usa a guardada quando nada foi digitado
+        // (a chave é o nome ORIGINAL; renomear só migra a senha ao salvar)
+        let stored = self
+            .initial
+            .as_ref()
+            .filter(|c| c.save_password)
+            .map(|c| c.name.clone());
+        let stored_ssh_name = self
+            .initial
+            .as_ref()
+            .filter(|c| c.ssh.as_ref().is_some_and(|s| s.save_passphrase))
+            .map(|c| c.name.clone());
+        let passphrase = built.ssh_passphrase.or(cached_ssh_passphrase);
+        let (root, secrets) = (root.to_path_buf(), secrets.clone());
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    test_connection(
+                        &built.connection,
+                        &root,
+                        built.password,
+                        stored,
+                        passphrase,
+                        stored_ssh_name,
+                        &secrets,
+                    )
+                })
+                .await
+                .unwrap_or_else(|_| {
+                    Err(DbError::ConnectionFailed(
+                        labels::DB_DIALOG_CONNECTION_FAILED.to_string(),
+                    ))
+                })
+            },
+            DialogMsg::Tested,
+        )
     }
 
     fn editing(&self) -> bool {
@@ -129,6 +311,26 @@ impl ConnectionDialog {
         }
     }
 
+    fn build_ssh_json(&self) -> Option<serde_json::Value> {
+        if !self.ssh_open || !self.engine.supports_ssh_tunnel() {
+            return None;
+        }
+        let host = self.ssh_host.trim();
+        let user = self.ssh_user.trim();
+        let key = self.ssh_key.trim();
+        if host.is_empty() || user.is_empty() || key.is_empty() {
+            return None;
+        }
+        let port = self.ssh_port.trim().parse::<u16>().unwrap_or(22);
+        Some(serde_json::json!({
+            "host": host,
+            "port": port,
+            "user": user,
+            "keyPath": key,
+            "savePassphrase": self.ssh_key_encrypted && self.save_ssh_passphrase,
+        }))
+    }
+
     /// Conexão do modo ativo, ou `None` se a connection string não vale (Salvar e Testar ficam
     /// desabilitados).
     fn try_build(&self) -> Option<Built> {
@@ -142,6 +344,7 @@ impl ConnectionDialog {
                     self.visible_to_agents,
                 ),
                 password: None,
+                ssh_passphrase: None,
             });
         }
         let raw = self.uri.text();
@@ -167,22 +370,16 @@ impl ConnectionDialog {
             "access": self.access().name(),
             "agents": self.visible_to_agents,
         });
-        if let (Some(ssh), Some(map)) = (
-            self.initial.as_ref().and_then(|c| c.ssh.as_ref()),
-            json.as_object_mut(),
-        ) {
-            map.insert(
-                "ssh".into(),
-                serde_json::json!({
-                    "host": ssh.host, "port": ssh.port, "user": ssh.user,
-                    "keyPath": ssh.key_path, "savePassphrase": ssh.save_passphrase,
-                }),
-            );
+        if let (Some(ssh), Some(map)) = (self.build_ssh_json(), json.as_object_mut()) {
+            map.insert("ssh".into(), ssh);
         }
         let connection = Connection::from_json(&json, Origin::Registered).ok()?;
+        let ssh_passphrase =
+            (self.ssh_open && !self.ssh_passphrase.is_empty()).then(|| self.ssh_passphrase.clone());
         Some(Built {
             connection,
             password,
+            ssh_passphrase,
         })
     }
 
@@ -249,51 +446,88 @@ impl ConnectionDialog {
             DialogMsg::UriResizeReset => self.uri_height = theme::DB_DIALOG_URI_HEIGHT,
             DialogMsg::SavePassword(value) => self.save_password = value,
             DialogMsg::Password(value) => self.password = value,
-            DialogMsg::AllowWrites(value) => self.allow_writes = value,
-            DialogMsg::VisibleToAgents(value) => self.visible_to_agents = value,
-            DialogMsg::Test => {
-                if self.testing {
-                    return (Task::none(), None);
+            DialogMsg::SshToggle(open) => {
+                if open {
+                    self.ssh_open = true;
+                    if self.ssh_user.is_empty() {
+                        if let Some(me) = std::env::var("USER")
+                            .ok()
+                            .filter(|v| !v.is_empty())
+                            .or_else(|| std::env::var("USERNAME").ok().filter(|v| !v.is_empty()))
+                        {
+                            self.ssh_user = me;
+                        }
+                    }
+                    if self.ssh_key.is_empty() {
+                        if let Some(suggested) = default_key_path() {
+                            self.ssh_key = suggested.to_string();
+                            self.ssh_key_encrypted = needs_passphrase(&self.ssh_key);
+                        }
+                    }
+                } else {
+                    self.ssh_open = false;
+                    self.ssh_host.clear();
+                    self.ssh_port.clear();
+                    self.ssh_user.clear();
+                    self.ssh_key.clear();
+                    self.ssh_passphrase.zeroize();
+                    self.ssh_key_encrypted = false;
+                    self.clear_test();
                 }
-                let Some(built) = self.try_build() else {
-                    self.test = Some(Err(labels::DB_DIALOG_INVALID_URL.to_string()));
-                    return (Task::none(), None);
-                };
-                self.testing = true;
-                self.test = None;
-                // edição com senha no cofre: o teste usa a guardada quando nada foi digitado
-                // (a chave é o nome ORIGINAL; renomear só migra a senha ao salvar)
-                let stored = self
-                    .initial
-                    .as_ref()
-                    .filter(|c| c.save_password)
-                    .map(|c| c.name.clone());
-                let (root, secrets) = (root.to_path_buf(), secrets.clone());
+            }
+            DialogMsg::SshHost(value) => {
+                self.ssh_host = value;
+                self.clear_test();
+            }
+            DialogMsg::SshPort(value) => {
+                self.ssh_port = value;
+                self.clear_test();
+            }
+            DialogMsg::SshUser(value) => {
+                self.ssh_user = value;
+                self.clear_test();
+            }
+            DialogMsg::PickSshKey => {
+                let ssh_dir = gsh_db::ssh_keys::home_dir()
+                    .map(|h| h.join(".ssh"))
+                    .filter(|d| d.is_dir());
                 return (
                     Task::perform(
                         async move {
-                            tokio::task::spawn_blocking(move || {
-                                test_connection(
-                                    &built.connection,
-                                    &root,
-                                    built.password,
-                                    stored,
-                                    &secrets,
-                                )
-                            })
-                            .await
-                            .unwrap_or_else(|_| {
-                                Some(labels::DB_DIALOG_CONNECTION_FAILED.to_string())
-                            })
+                            let mut dlg = rfd::AsyncFileDialog::new()
+                                .set_title(labels::DB_DIALOG_SSH_KEY_DIALOG_TITLE);
+                            if let Some(dir) = ssh_dir {
+                                dlg = dlg.set_directory(dir);
+                            }
+                            dlg.pick_file()
+                                .await
+                                .map(|handle| handle.path().to_path_buf())
                         },
-                        DialogMsg::Tested,
+                        DialogMsg::SshKeyPicked,
                     ),
                     None,
                 );
             }
-            DialogMsg::Tested(error) => {
+            DialogMsg::SshKeyPicked(Some(path)) => {
+                self.ssh_key = shorten_home(&path);
+                self.ssh_passphrase.zeroize();
+                self.ssh_key_encrypted = needs_passphrase(&self.ssh_key);
+                self.clear_test();
+            }
+            DialogMsg::SshKeyPicked(None) => {}
+            DialogMsg::SshPassphrase(value) => {
+                self.ssh_passphrase = value;
+                self.clear_test();
+            }
+            DialogMsg::SaveSshPassphrase(value) => self.save_ssh_passphrase = value,
+            DialogMsg::AllowWrites(value) => self.allow_writes = value,
+            DialogMsg::VisibleToAgents(value) => self.visible_to_agents = value,
+            DialogMsg::Test => {
+                return (self.trigger_test(root, secrets, None), None);
+            }
+            DialogMsg::Tested(result) => {
                 self.testing = false;
-                self.test = Some(error.map_or(Ok(()), Err));
+                self.test = Some(result);
             }
             DialogMsg::Submit => {
                 if let Some(built) = self.try_build() {
@@ -302,6 +536,7 @@ impl ConnectionDialog {
                         Some(Outcome::Saved {
                             connection: built.connection,
                             password: built.password,
+                            ssh_passphrase: built.ssh_passphrase,
                             previous_name: self.initial.as_ref().map(|c| c.name.clone()),
                         }),
                     );
@@ -369,6 +604,23 @@ impl ConnectionDialog {
                         .style(input_style(false))
                         .into(),
                 ));
+                if self.is_remote_workspace {
+                    body = body.push(
+                        container(
+                            text(labels::DB_DIALOG_PASSWORD_ON_HOST)
+                                .font(theme::FONT_BODY)
+                                .size(theme::DB_DIALOG_HINT_SIZE)
+                                .color(palette.text4),
+                        )
+                        .padding(Padding {
+                            bottom: theme::DB_DIALOG_SWITCH_ROW_BOTTOM,
+                            ..Padding::ZERO
+                        }),
+                    );
+                }
+            }
+            if self.engine.supports_ssh_tunnel() {
+                body = body.push(self.ssh_section());
             }
         }
         body = body
@@ -545,6 +797,218 @@ impl ConnectionDialog {
         field(labels::DB_DIALOG_CONNECTION_STRING, content.into())
     }
 
+    /// Seção "Túnel SSH" (`db_connection_dialog.dart::_sshSection`).
+    fn ssh_section(&self) -> Element<'_, DialogMsg> {
+        let palette = theme::palette();
+        if !self.ssh_open {
+            return container(
+                button(
+                    row![
+                        text(labels::ICON_LOCK_OUTLINE)
+                            .font(theme::FONT_ICON)
+                            .size(13)
+                            .color(palette.text3),
+                        Space::new().width(8),
+                        text(labels::DB_DIALOG_SSH_TUNNEL)
+                            .font(theme::FONT_BODY)
+                            .size(theme::DB_DIALOG_SWITCH_LABEL_SIZE)
+                            .color(palette.text2),
+                        Space::new().width(Fill),
+                        text(labels::ICON_EXPAND_MORE)
+                            .font(theme::FONT_ICON)
+                            .size(14)
+                            .color(palette.text3),
+                    ]
+                    .align_y(Alignment::Center),
+                )
+                .width(Fill)
+                .padding([7, 10])
+                .on_press(DialogMsg::SshToggle(true))
+                .style(|_: &Theme, status| button::Style {
+                    background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                        .then(|| Background::Color(theme::palette().panel3)),
+                    text_color: theme::palette().text2,
+                    border: Border {
+                        color: theme::palette().border,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..Default::default()
+                }),
+            )
+            .padding(Padding {
+                bottom: theme::DB_DIALOG_SWITCH_ROW_BOTTOM,
+                ..Padding::ZERO
+            })
+            .into();
+        }
+
+        let header = row![
+            text(labels::ICON_LOCK_OUTLINE)
+                .font(theme::FONT_ICON)
+                .size(13)
+                .color(palette.text3),
+            Space::new().width(8),
+            text(labels::DB_DIALOG_SSH_TUNNEL)
+                .font(theme::FONT_BODY)
+                .size(theme::DB_DIALOG_SWITCH_LABEL_SIZE)
+                .color(palette.text2)
+                .width(Fill),
+            button(
+                text(labels::ICON_CLOSE)
+                    .font(theme::FONT_ICON)
+                    .size(13)
+                    .color(palette.text3),
+            )
+            .padding(2)
+            .on_press(DialogMsg::SshToggle(false))
+            .style(|_: &Theme, status| button::Style {
+                background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                    .then(|| Background::Color(theme::palette().panel3)),
+                ..Default::default()
+            }),
+        ]
+        .align_y(Alignment::Center);
+
+        let host_field = field(
+            labels::DB_DIALOG_SSH_HOST,
+            text_input(labels::DB_DIALOG_SSH_HOST_HINT, &self.ssh_host)
+                .on_input(DialogMsg::SshHost)
+                .font(theme::FONT_MONO)
+                .size(theme::DB_DIALOG_INPUT_SIZE)
+                .padding(theme::DB_DIALOG_INPUT_PADDING)
+                .style(input_style(false))
+                .into(),
+        );
+        let port_and_user = row![
+            container(field(
+                labels::DB_DIALOG_SSH_PORT,
+                text_input(labels::DB_DIALOG_SSH_PORT_HINT, &self.ssh_port)
+                    .on_input(DialogMsg::SshPort)
+                    .font(theme::FONT_MONO)
+                    .size(theme::DB_DIALOG_INPUT_SIZE)
+                    .padding(theme::DB_DIALOG_INPUT_PADDING)
+                    .style(input_style(false))
+                    .into(),
+            ))
+            .width(Fill),
+            Space::new().width(10),
+            container(field(
+                labels::DB_DIALOG_SSH_USER,
+                text_input(labels::DB_DIALOG_SSH_USER_HINT, &self.ssh_user)
+                    .on_input(DialogMsg::SshUser)
+                    .font(theme::FONT_MONO)
+                    .size(theme::DB_DIALOG_INPUT_SIZE)
+                    .padding(theme::DB_DIALOG_INPUT_PADDING)
+                    .style(input_style(false))
+                    .into(),
+            ))
+            .width(Fill),
+        ];
+        let mut inner = column![
+            header,
+            Space::new().height(8),
+            host_field,
+            port_and_user,
+            self.ssh_key_field(),
+        ];
+        if self.ssh_key_encrypted {
+            let hint = if self
+                .initial
+                .as_ref()
+                .and_then(|c| c.ssh.as_ref())
+                .is_some_and(|s| s.save_passphrase)
+            {
+                "*******"
+            } else {
+                ""
+            };
+            inner = inner
+                .push(field(
+                    labels::DB_DIALOG_SSH_PASSPHRASE,
+                    text_input(hint, &self.ssh_passphrase)
+                        .on_input(DialogMsg::SshPassphrase)
+                        .secure(true)
+                        .font(theme::FONT_MONO)
+                        .size(theme::DB_DIALOG_INPUT_SIZE)
+                        .padding(theme::DB_DIALOG_INPUT_PADDING)
+                        .style(input_style(false))
+                        .into(),
+                ))
+                .push(switch_row(
+                    labels::DB_DIALOG_SSH_SAVE_PASSPHRASE,
+                    self.save_ssh_passphrase,
+                    DialogMsg::SaveSshPassphrase,
+                    None,
+                ));
+        }
+        container(
+            container(inner)
+                .padding(Padding {
+                    top: 8.0,
+                    right: 10.0,
+                    bottom: 2.0,
+                    left: 10.0,
+                })
+                .style(|_: &Theme| container::Style {
+                    border: Border {
+                        color: theme::palette().border,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..Default::default()
+                }),
+        )
+        .padding(Padding {
+            bottom: theme::DB_DIALOG_FIELD_GAP,
+            ..Padding::ZERO
+        })
+        .into()
+    }
+
+    fn ssh_key_field(&self) -> Element<'_, DialogMsg> {
+        let palette = theme::palette();
+        let has_key = !self.ssh_key.is_empty();
+        let picker = button(
+            row![
+                container(
+                    text(if has_key {
+                        self.ssh_key.as_str()
+                    } else {
+                        labels::DB_DIALOG_SSH_KEY_PLACEHOLDER
+                    })
+                    .font(theme::FONT_MONO)
+                    .size(theme::DB_DIALOG_INPUT_SIZE)
+                    .color(if has_key { palette.text } else { palette.text4 })
+                    .wrapping(text::Wrapping::None)
+                )
+                .width(Fill)
+                .clip(true),
+                Space::new().width(theme::DB_DIALOG_SWITCH_GAP),
+                text(labels::ICON_FOLDER_OPEN)
+                    .font(theme::FONT_ICON)
+                    .size(theme::DB_DIALOG_FILE_ICON)
+                    .color(palette.text3),
+            ]
+            .align_y(Alignment::Center),
+        )
+        .width(Fill)
+        .padding(theme::DB_DIALOG_INPUT_PADDING)
+        .on_press(DialogMsg::PickSshKey)
+        .style(|_: &Theme, status| button::Style {
+            background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                .then(|| Background::Color(theme::palette().panel3)),
+            text_color: theme::palette().text,
+            border: Border {
+                color: theme::palette().border,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..Default::default()
+        });
+        field(labels::DB_DIALOG_SSH_KEY, picker.into())
+    }
+
     /// Linha do resultado do teste: "Testando conexão…", "Conexão OK" ou o erro.
     fn test_row(&self) -> Option<Element<'_, DialogMsg>> {
         let palette = theme::palette();
@@ -552,7 +1016,7 @@ impl ConnectionDialog {
             (
                 labels::ICON_MORE_HORIZ,
                 palette.text3,
-                labels::DB_DIALOG_TESTING,
+                labels::DB_DIALOG_TESTING.to_string(),
             )
         } else {
             match &self.test {
@@ -560,17 +1024,20 @@ impl ConnectionDialog {
                 Some(Ok(())) => (
                     labels::ICON_CHECK_CIRCLE,
                     palette.online,
-                    labels::DB_DIALOG_CONNECTION_OK,
+                    labels::DB_DIALOG_CONNECTION_OK.to_string(),
                 ),
-                Some(Err(message)) => (
-                    labels::ICON_ERROR_OUTLINE,
-                    palette.error,
-                    if message.is_empty() {
-                        labels::DB_DIALOG_CONNECTION_FAILED
-                    } else {
-                        message.as_str()
-                    },
-                ),
+                Some(Err(err)) => {
+                    let msg = labels::db_error_message(err);
+                    (
+                        labels::ICON_ERROR_OUTLINE,
+                        palette.error,
+                        if msg.is_empty() {
+                            labels::DB_DIALOG_CONNECTION_FAILED.to_string()
+                        } else {
+                            msg
+                        },
+                    )
+                }
             }
         };
         Some(
@@ -611,23 +1078,33 @@ fn split_password(raw: &str) -> (String, Option<String>) {
 }
 
 /// Testa a conexão como a execução real: senha digitada, depois a do cofre (pelo nome original),
-/// depois a embutida na URL. `None` = OK.
+/// depois a embutida na URL, passando por túnel SSH se houver.
 fn test_connection(
     connection: &Connection,
     root: &Path,
     typed: Option<String>,
     stored_name: Option<String>,
+    typed_passphrase: Option<String>,
+    stored_ssh_name: Option<String>,
     secrets: &SecretStore,
-) -> Option<String> {
+) -> Result<(), DbError> {
     let typed = typed.filter(|password| !password.is_empty());
     let password = typed
         .or_else(|| stored_name.and_then(|name| secrets.read(&root.to_string_lossy(), &name)))
         .or_else(|| connection.url_password());
-    let result =
-        Endpoint::resolve(connection, root, password).and_then(|e| gsh_db::driver::ping(&e));
-    result
-        .err()
-        .map(|error: DbError| labels::db_error_message(&error))
+    let passphrase = typed_passphrase.filter(|p| !p.is_empty()).or_else(|| {
+        stored_ssh_name.and_then(|name| {
+            secrets.read_raw(&SecretStore::ssh_key_for(&root.to_string_lossy(), &name))
+        })
+    });
+    let endpoint = Endpoint::resolve_with_tunnel(
+        connection,
+        root,
+        password,
+        passphrase.as_deref(),
+        gsh_db::ssh::SshTunnelManager::global(),
+    )?;
+    gsh_db::driver::ping(&endpoint)
 }
 
 /// Rótulo em cima e o controle embaixo, com 10 de respiro.
@@ -823,10 +1300,18 @@ mod tests {
 
     #[test]
     fn editing_keeps_the_ssh_block_and_reports_the_previous_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("id_enc");
+        std::fs::write(
+            &key_path,
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nENCRYPTED\n-----END OPENSSH PRIVATE KEY-----\n",
+        )
+        .unwrap();
+        let key_str = key_path.to_string_lossy().into_owned();
         let original = Connection::from_json(
             &serde_json::json!({
                 "name": "old", "url": "postgres://u@h/db", "savePassword": true,
-                "ssh": {"host":"b","user":"u","keyPath":"k","port":2200,"savePassphrase":true}
+                "ssh": {"host":"b","user":"u","keyPath":key_str,"port":2200,"savePassphrase":true}
             }),
             Origin::Registered,
         )
@@ -846,6 +1331,30 @@ mod tests {
         assert_eq!(previous_name.as_deref(), Some("old"));
         assert_eq!(connection.name, "new");
         assert_eq!(connection.ssh, original.ssh);
+    }
+
+    #[test]
+    fn debug_redacts_passwords_uri_and_passphrases() {
+        let mut dialog = ConnectionDialog::new(Engine::Postgres, None);
+        dialog.password = "db-secret-99".into();
+        dialog.ssh_passphrase = "ssh-secret-88".into();
+        typed(&mut dialog, "postgres://ana:uri-secret-77@h:5432/db");
+        let dbg = format!("{dialog:?}");
+        assert!(!dbg.contains("db-secret-99"), "{dbg}");
+        assert!(!dbg.contains("ssh-secret-88"), "{dbg}");
+        assert!(!dbg.contains("uri-secret-77"), "{dbg}");
+        assert!(dbg.contains("[REDACTED]"), "{dbg}");
+
+        let outcome = Outcome::Saved {
+            connection: Connection::sqlite("c", "c.db", Origin::Registered, Access::Read, true),
+            password: Some("pw-leak".into()),
+            ssh_passphrase: Some("pass-leak".into()),
+            previous_name: None,
+        };
+        let out_dbg = format!("{outcome:?}");
+        assert!(!out_dbg.contains("pw-leak"), "{out_dbg}");
+        assert!(!out_dbg.contains("pass-leak"), "{out_dbg}");
+        assert!(out_dbg.contains("[REDACTED]"), "{out_dbg}");
     }
 
     #[test]
@@ -889,16 +1398,23 @@ mod tests {
         let db = dir.path().join("t.db");
         rusqlite::Connection::open(&db).unwrap();
         let ok = Connection::sqlite("t", "t.db", Origin::Registered, Access::Read, true);
-        assert_eq!(test_connection(&ok, dir.path(), None, None, &store), None);
+        assert!(test_connection(&ok, dir.path(), None, None, None, None, &store).is_ok());
         let missing = Connection::sqlite("m", "none.db", Origin::Registered, Access::Read, true);
-        assert!(test_connection(&missing, dir.path(), None, None, &store).is_some());
+        assert!(test_connection(&missing, dir.path(), None, None, None, None, &store).is_err());
     }
 
     #[test]
     fn view_builds_in_every_mode() {
-        for (engine, initial) in [(Engine::Sqlite, None), (Engine::Postgres, None)] {
+        for (engine, initial) in [
+            (Engine::Sqlite, None),
+            (Engine::Postgres, None),
+            (Engine::Mysql, None),
+            (Engine::Mssql, None),
+            (Engine::Redis, None),
+            (Engine::Mongo, None),
+        ] {
             let mut dialog = ConnectionDialog::new(engine, initial);
-            dialog.test = Some(Err("boom".into()));
+            dialog.test = Some(Err(DbError::ConnectionFailed("boom".into())));
             let _ = dialog.view();
             dialog.testing = true;
             let _ = dialog.view();

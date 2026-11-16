@@ -484,18 +484,25 @@ pub const ICON_PLAY_ARROW: &str = "\u{e037}";
 pub const ICON_HOURGLASS_TOP: &str = "\u{ea5b}";
 pub const ICON_CHECK_CIRCLE: &str = "\u{f0be}";
 pub const ICON_FOLDER_OPEN: &str = "\u{e2c8}";
+pub const ICON_GRID_ON: &str = "\u{e3ec}";
+pub const ICON_DATA_OBJECT: &str = "\u{ead3}";
+pub const ICON_GPP_MAYBE: &str = "\u{f014}";
 
 pub const DB_SECTION: &str = "BANCO DE DADOS";
 pub const DB_EDIT: &str = "Editar…";
 pub const DB_COPY_NAME: &str = "Copiar nome";
 pub const DB_NEW_QUERY: &str = "Nova query";
+pub const DB_BROWSE_KEYS: &str = "Ver chaves";
 pub const DB_DELETE_CONNECTION_TITLE: &str = "Excluir conexão";
 pub const DB_NO_CONNECTIONS: &str = "Nenhuma conexão ainda.";
 pub const DB_FOOTER_ONE: &str = ".gsh/databases.json · 1 conexão";
 pub const DB_LOADING: &str = "Loading…";
 pub const DB_NO_TABLES: &str = "No tables.";
+pub const DB_NO_DATABASES: &str = "No databases.";
+pub const DB_NO_COLLECTIONS: &str = "No collections.";
 pub const DB_DEFAULT_SCHEMA: &str = "(default)";
 pub const DB_PRIMARY_KEY: &str = "PK";
+pub const DB_PASSWORD_REQUIRED_ON_HOST: &str = "Senha não encontrada no host. Abra esta conexão e digite-a de novo — ela fica salva na máquina que executa o banco, não nesta.";
 // Selos da linha: texto fixo em inglês no Flutter
 pub const DB_CHIP_DETECTED: &str = "detected";
 pub const DB_CHIP_LOCAL: &str = "local";
@@ -530,11 +537,101 @@ pub const DB_DIALOG_EDIT_TITLE: &str = "Editar conexão";
 pub const DB_DIALOG_NEW_TITLE: &str = "Nova conexão";
 pub const DB_DIALOG_CONNECTION_STRING: &str = "Connection string";
 pub const DB_DIALOG_INVALID_URL: &str = "URL de conexão inválida.";
+pub const DB_DIALOG_SSH_TUNNEL: &str = "Túnel SSH";
+pub const DB_DIALOG_SSH_HOST: &str = "Host SSH";
+pub const DB_DIALOG_SSH_HOST_HINT: &str = "bastion.example.com";
+pub const DB_DIALOG_SSH_PORT: &str = "Porta SSH";
+pub const DB_DIALOG_SSH_PORT_HINT: &str = "22";
+pub const DB_DIALOG_SSH_USER: &str = "Usuário SSH";
+pub const DB_DIALOG_SSH_USER_HINT: &str = "ubuntu";
+pub const DB_DIALOG_SSH_KEY: &str = "Chave privada";
+pub const DB_DIALOG_SSH_KEY_PLACEHOLDER: &str = "Escolha uma chave privada…";
+pub const DB_DIALOG_SSH_KEY_DIALOG_TITLE: &str = "Escolher chave privada SSH";
+pub const DB_DIALOG_SSH_PASSPHRASE: &str = "Senha da chave";
+pub const DB_DIALOG_SSH_SAVE_PASSPHRASE: &str = "Salvar senha da chave";
+pub const DB_DIALOG_PASSWORD_ON_HOST: &str = "A senha fica salva no host, não nesta máquina.";
 pub const DB_DIALOG_SAVE: &str = "Salvar";
 pub const DB_DIALOG_ADD: &str = "Adicionar";
 pub const DB_DIALOG_DELETE: &str = "Excluir";
 pub const DB_DIALOG_TEST: &str = "Testar";
 pub const DB_DEFAULT_CONNECTION_NAME: &str = "new-connection";
+
+// Prompts de SSH (`sshPrompts`)
+pub const SSH_UNKNOWN_HOST_TITLE: &str = "Host SSH desconhecido";
+pub const SSH_TRUST_HINT: &str =
+    "Confie apenas se esta fingerprint corresponder ao servidor. Você pode verificar no servidor com:";
+pub const SSH_COMMAND_PREVIEW: &str = "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub";
+pub const SSH_TRUST: &str = "Confiar";
+pub const SSH_KEY_PASSPHRASE_TITLE: &str = "Senha da chave SSH";
+pub const SSH_KEPT_IN_MEMORY_HINT: &str =
+    "Mantida em memória até o GSH Desktop fechar. Para permitir que agentes usem esta conexão, ative \"Salvar senha da chave\" na conexão.";
+pub const SSH_UNLOCK: &str = "Desbloquear";
+
+pub fn ssh_never_connected(endpoint: &str) -> String {
+    format!("O GSH Desktop nunca se conectou a {endpoint} antes.")
+}
+
+pub fn ssh_unlock_message(key_path: &str, connection_name: &str) -> String {
+    format!("Desbloqueie {key_path} para conectar \"{connection_name}\".")
+}
+
+// Navegador Redis (`dbRedisTable`)
+pub const REDIS_DELETE_KEY_TITLE: &str = "Excluir chave";
+pub const REDIS_REFRESH: &str = "Atualizar";
+pub const REDIS_NEW_KEY: &str = "Nova chave";
+pub const REDIS_COLUMN_KEY: &str = "CHAVE";
+pub const REDIS_COLUMN_VALUE: &str = "VALOR";
+pub const REDIS_COLUMN_TYPE: &str = "TIPO";
+pub const REDIS_COLUMN_TTL: &str = "TTL";
+pub const REDIS_NO_KEYS: &str = "Nenhuma chave neste banco de dados.";
+pub const REDIS_LOAD_MORE: &str = "Carregar mais";
+pub const REDIS_LOADING_FULL_VALUE: &str = "Carregando valor completo…";
+pub const REDIS_TTL_MUST_BE_NUMBER: &str = "TTL deve ser um número de segundos.";
+pub const REDIS_ADD_KEY: &str = "Adicionar chave";
+pub const REDIS_KEY_FIELD_HINT: &str = "chave";
+pub const REDIS_TTL_FIELD_HINT: &str = "ttl (s, opcional)";
+pub const REDIS_VALUE_FIELD_HINT: &str = "valor";
+pub const REDIS_SEARCH_HINT: &str = "Buscar — padrão, ex.: user:*";
+pub const REDIS_NEW_KEY_DRAFT_TITLE: &str = "Nova chave";
+
+pub fn redis_delete_key_message(key: &str) -> String {
+    format!("Excluir \"{key}\" deste banco Redis?")
+}
+
+pub fn redis_key_count(n: usize) -> String {
+    if n == 1 {
+        "1 chave".to_string()
+    } else {
+        format!("{n} chaves")
+    }
+}
+
+pub fn redis_no_keys_match(pattern: &str) -> String {
+    format!("Nenhuma chave corresponde a \"{pattern}\".")
+}
+
+// Navegador MongoDB (`dbMongoView`)
+pub const MONGO_DELETE_DOC_TITLE: &str = "Excluir documento";
+pub const MONGO_FILTER_HINT: &str = "Filtro — JSON, ex.: {\"status\": \"active\"}";
+pub const MONGO_REFRESH: &str = "Atualizar";
+pub const MONGO_INSERT_DOC: &str = "Inserir documento";
+pub const MONGO_NO_DOCUMENTS: &str = "Nenhum documento nesta coleção.";
+pub const MONGO_NO_DOCUMENTS_MATCH: &str = "Nenhum documento corresponde a este filtro.";
+pub const MONGO_LOAD_MORE: &str = "Carregar mais";
+pub const MONGO_EDIT: &str = "Editar";
+pub const MONGO_INSERT: &str = "Inserir";
+
+pub fn mongo_delete_doc_message(id: &str, collection: &str) -> String {
+    format!("Excluir o documento com _id {id} de \"{collection}\"?")
+}
+
+pub fn mongo_doc_count(n: usize) -> String {
+    if n == 1 {
+        "1 doc".to_string()
+    } else {
+        format!("{n} docs")
+    }
+}
 
 pub const UNSAVED_CHANGES_TITLE: &str = "Alterações não salvas";
 pub const UNSAVED_DONT_SAVE: &str = "Não salvar";
@@ -598,13 +695,15 @@ pub fn db_err_save_already_exists(name: &str) -> String {
 pub fn db_error_message(error: &gsh_db::DbError) -> String {
     use gsh_db::DbError;
     match error {
-        DbError::ConnectionFailed(detail) | DbError::QueryFailed(detail) => detail.clone(),
+        DbError::ConnectionFailed(detail)
+        | DbError::QueryFailed(detail)
+        | DbError::SshKeyMissing(detail)
+        | DbError::SshCredentialRequired(detail)
+        | DbError::SshAuthFailed(detail)
+        | DbError::SshConnectFailed(detail) => detail.clone(),
         DbError::Timeout(secs) => format!("Query exceeded {secs}s"),
         DbError::UnsupportedEngine(engine) => {
             format!("{} support is not available yet.", engine.label())
-        }
-        DbError::TlsUnavailable(mode) => {
-            format!("TLS connections (sslmode={mode}) are not available yet.")
         }
         DbError::UnknownConnection { name, available } => {
             let list = if available.is_empty() {
@@ -616,6 +715,8 @@ pub fn db_error_message(error: &gsh_db::DbError) -> String {
         }
         DbError::NothingToRun => "Nothing to run.".to_string(),
         DbError::InvalidIdentifier(name) => format!("Invalid table name: \"{name}\""),
+        DbError::SshHostKeyUnknown { message, .. } => message.clone(),
+        DbError::SshHostKeyChanged { .. } => error.to_string(),
     }
 }
 

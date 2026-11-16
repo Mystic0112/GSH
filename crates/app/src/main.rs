@@ -26,9 +26,13 @@ pub mod content_search_panel;
 pub mod content_search_state;
 pub mod db_dialog;
 pub mod db_engine_icon;
+pub mod db_mongo;
+pub mod db_mongo_view;
 pub mod db_panel;
 pub mod db_query;
 pub mod db_query_view;
+pub mod db_redis;
+pub mod db_redis_view;
 pub mod db_state;
 pub mod drag_handle;
 pub mod editor_gutter;
@@ -72,6 +76,7 @@ pub mod panel_widgets;
 pub mod rail;
 pub mod right_tabs;
 pub mod settings;
+pub mod ssh_prompts;
 pub mod terminal_canvas;
 pub mod terminal_grid;
 pub mod terminal_input;
@@ -95,8 +100,10 @@ use crate::agent_status::{
 use crate::chat_pane::{ChatMsg, ChatPane};
 use crate::content_search_panel::SearchMsg;
 use crate::content_search_state::SearchState;
+use crate::db_mongo::{MongoEffect, MongoMsg, MongoTab};
 use crate::db_query::{DbQuery, QueryMsg};
-use crate::db_state::{DbEffect, DbMsg, DbState};
+use crate::db_redis::{RedisEffect, RedisMsg, RedisTab};
+use crate::db_state::{needs_ssh_prompt, DbEffect, DbMsg, DbState};
 use crate::file_tree::{FileTree, ViewerHook};
 use crate::file_viewer::FileViewerState;
 use crate::files_panel::FilesMsg;
@@ -104,9 +111,10 @@ use crate::gallery_create::GalleryError;
 use crate::gallery_panel::GalleryMsg;
 use crate::island::{AgentIsland, IslandMsg, PermissionDecision};
 use crate::pane_chrome::ChromeCallbacks;
-use crate::pane_model::{ChatId, PaneModel, PaneTab, QueryId, TermId};
+use crate::pane_model::{BrowserId, ChatId, PaneModel, PaneTab, QueryId, TermId};
 use crate::pane_tree::PaneTree;
 use crate::right_tabs::RightTab;
+use crate::ssh_prompts::{HostKeyPrompt, PassphrasePrompt};
 use crate::terminal_input::{classify_key_press, KeyAction};
 use crate::terminal_pane::{TerminalMsg, TerminalPane};
 use crate::topbar::TopbarProps;
@@ -172,6 +180,15 @@ enum Msg {
     Db(DbMsg),
     /// Mensagem de uma aba de query específica.
     Query(QueryId, QueryMsg),
+    /// Mensagem de um navegador Redis.
+    Redis(BrowserId, RedisMsg),
+    /// Mensagem de um navegador MongoDB.
+    Mongo(BrowserId, MongoMsg),
+    /// Respostas dos modais de SSH (host key desconhecida ou passphrase).
+    SshTrustHostKey,
+    SshPassphraseInput(String),
+    SshUnlockPassphrase,
+    SshDismissPrompt,
     /// Ctrl/Cmd+S ou Ctrl/Cmd+Enter com o foco fora do editor da query ativa.
     QueryShortcut(QueryShortcut),
     /// Tique que confere se algum `.dbq` aberto mudou no disco.
@@ -207,6 +224,25 @@ enum CloseChoice {
     SaveAndClose,
 }
 
+enum PendingPromptUi {
+    HostKey(HostKeyPrompt),
+    Passphrase(PassphrasePrompt, String),
+}
+
+#[derive(Debug, Clone)]
+enum SshRetryTarget {
+    PanelTree,
+    DialogTest,
+    Query(QueryId),
+    Redis(BrowserId),
+    Mongo(BrowserId),
+}
+
+struct PendingSsh {
+    ui: PendingPromptUi,
+    retry: SshRetryTarget,
+}
+
 /// Intervalo da conferência de mudança externa nos `.dbq` abertos.
 const QUERY_DISK_CHECK_MS: u64 = 1000;
 
@@ -216,6 +252,9 @@ struct Shell {
     farm: farm::FarmPane,
     db: DbState,
     queries: BTreeMap<QueryId, DbQuery>,
+    redis_tabs: BTreeMap<BrowserId, RedisTab>,
+    mongo_tabs: BTreeMap<BrowserId, MongoTab>,
+    ssh_prompt: Option<PendingSsh>,
     /// Query com alterações não salvas que o usuário mandou fechar (aguarda a escolha).
     pending_close_query: Option<QueryId>,
     harness: harness_pane::HarnessState,
@@ -286,6 +325,9 @@ impl Default for Shell {
             farm: farm::FarmPane::default(),
             db: DbState::new(gsh_db::SecretStore::system()),
             queries: BTreeMap::new(),
+            redis_tabs: BTreeMap::new(),
+            mongo_tabs: BTreeMap::new(),
+            ssh_prompt: None,
             pending_close_query: None,
             harness: harness_pane::HarnessState::default(),
             settings,
@@ -509,6 +551,8 @@ impl Shell {
                 | PaneTab::Farm
                 | PaneTab::Settings
                 | PaneTab::Query { .. }
+                | PaneTab::Redis { .. }
+                | PaneTab::Mongo { .. }
                 | PaneTab::Harness(_) => None,
             })
             .collect()
@@ -640,6 +684,12 @@ impl Shell {
             PaneTab::Query { id, .. } => {
                 self.queries.remove(&id);
             }
+            PaneTab::Redis { id, .. } => {
+                self.redis_tabs.remove(&id);
+            }
+            PaneTab::Mongo { id, .. } => {
+                self.mongo_tabs.remove(&id);
+            }
             PaneTab::Farm | PaneTab::Settings | PaneTab::Harness(_) => {}
         }
     }
@@ -668,7 +718,163 @@ impl Shell {
     /// Aponta o banco para a pasta do workspace ativo e recarrega as conexões.
     fn reload_db(&mut self) -> Task<Msg> {
         let root = self.file_tree.root().map(Path::to_path_buf);
-        self.db.set_workspace(root).map(Msg::Db)
+        let task = self.db.set_workspace(root).map(Msg::Db);
+        self.sync_browser_contexts();
+        task
+    }
+
+    fn sync_browser_contexts(&mut self) {
+        let root = self.db.root().map(Path::to_path_buf);
+        let secrets = self.db.secrets().clone();
+        let mongo_store = self.db.mongo_store().clone();
+        let passphrases = self.db.ssh_passphrases.clone();
+        for tab in self.redis_tabs.values_mut() {
+            tab.sync_context(root.clone(), &secrets, passphrases.clone());
+        }
+        for tab in self.mongo_tabs.values_mut() {
+            tab.sync_context(root.clone(), &secrets, &mongo_store, passphrases.clone());
+        }
+    }
+
+    fn open_redis_browser(&mut self, conn: &str) -> Task<Msg> {
+        if let Some((pane, idx, _id)) = self.panes.find_redis(conn) {
+            self.panes.focus(pane);
+            self.panes.focused_model_mut().activate(idx);
+            return Task::none();
+        }
+        let id = self.panes.alloc_browser_id();
+        let root = self.file_tree.root().map(Path::to_path_buf);
+        let mut tab = RedisTab::new(
+            conn.to_string(),
+            root.clone(),
+            self.db.secrets().clone(),
+            self.db.ssh_passphrases.clone(),
+        );
+        self.panes
+            .focused_model_mut()
+            .open_redis(id, conn.to_string());
+        let scan_task = tab.start_initial_scan().map(move |m| Msg::Redis(id, m));
+        self.redis_tabs.insert(id, tab);
+        Task::batch([self.db.ensure_workspace(root).map(Msg::Db), scan_task])
+    }
+
+    fn open_mongo_browser(&mut self, conn: &str, collection: &str) -> Task<Msg> {
+        if let Some((pane, idx, _id)) = self.panes.find_mongo(conn, collection) {
+            self.panes.focus(pane);
+            self.panes.focused_model_mut().activate(idx);
+            return Task::none();
+        }
+        let id = self.panes.alloc_browser_id();
+        let root = self.file_tree.root().map(Path::to_path_buf);
+        let mut tab = MongoTab::new(
+            conn.to_string(),
+            collection.to_string(),
+            root.clone(),
+            self.db.secrets().clone(),
+            self.db.mongo_store().clone(),
+            self.db.ssh_passphrases.clone(),
+        );
+        self.panes
+            .focused_model_mut()
+            .open_mongo(id, conn.to_string(), collection.to_string());
+        let load_task = tab.start_initial_load().map(move |m| Msg::Mongo(id, m));
+        self.mongo_tabs.insert(id, tab);
+        Task::batch([self.db.ensure_workspace(root).map(Msg::Db), load_task])
+    }
+
+    fn open_ssh_prompt(&mut self, conn_name: &str, error: &gsh_db::DbError, retry: SshRetryTarget) {
+        match error {
+            gsh_db::DbError::SshHostKeyUnknown {
+                endpoint,
+                fingerprint,
+                ..
+            } => {
+                self.ssh_prompt = Some(PendingSsh {
+                    ui: PendingPromptUi::HostKey(HostKeyPrompt {
+                        endpoint: endpoint.clone(),
+                        fingerprint: fingerprint.clone(),
+                    }),
+                    retry,
+                });
+            }
+            gsh_db::DbError::SshCredentialRequired(_) => {
+                let ssh_info = if matches!(retry, SshRetryTarget::DialogTest) {
+                    self.db.dialog.as_ref().and_then(|d| d.built_ssh_info())
+                } else {
+                    self.db.connection(conn_name).and_then(|c| {
+                        c.ssh
+                            .as_ref()
+                            .map(|s| (c.name.clone(), s.endpoint(), s.key_path.clone()))
+                    })
+                };
+                if let Some((name, endpoint, key_path)) = ssh_info {
+                    self.ssh_prompt = Some(PendingSsh {
+                        ui: PendingPromptUi::Passphrase(
+                            PassphrasePrompt::new(name, key_path),
+                            endpoint,
+                        ),
+                        retry,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn retry_ssh_action(&mut self, retry: SshRetryTarget) -> Task<Msg> {
+        self.sync_browser_contexts();
+        match retry {
+            SshRetryTarget::PanelTree => self.db.retry_open_trees().map(Msg::Db),
+            SshRetryTarget::DialogTest => {
+                let root = self.db.root().map(Path::to_path_buf).unwrap_or_default();
+                let secrets = self.db.secrets().clone();
+                let cached = self
+                    .db
+                    .dialog
+                    .as_ref()
+                    .and_then(|d| d.built_ssh_info())
+                    .and_then(|(_, ep, kp)| self.db.ssh_passphrases.get(&(ep, kp)).cloned());
+                match self.db.dialog.as_mut() {
+                    Some(dialog) => dialog
+                        .trigger_test(&root, &secrets, cached)
+                        .map(|m| Msg::Db(DbMsg::Dialog(m))),
+                    None => Task::none(),
+                }
+            }
+            SshRetryTarget::Query(id) => self.update_query(id, QueryMsg::Run),
+            SshRetryTarget::Redis(id) => match self.redis_tabs.get_mut(&id) {
+                Some(tab) => tab.retry_refresh().map(move |m| Msg::Redis(id, m)),
+                None => Task::none(),
+            },
+            SshRetryTarget::Mongo(id) => match self.mongo_tabs.get_mut(&id) {
+                Some(tab) => tab.retry_refresh().map(move |m| Msg::Mongo(id, m)),
+                None => Task::none(),
+            },
+        }
+    }
+
+    fn update_redis(&mut self, id: BrowserId, message: RedisMsg) -> Task<Msg> {
+        let Some(tab) = self.redis_tabs.get_mut(&id) else {
+            return Task::none();
+        };
+        let conn = tab.conn_name.clone();
+        let (task, effect) = tab.update(message);
+        if let Some(RedisEffect::SshPromptNeeded(err)) = effect {
+            self.open_ssh_prompt(&conn, &err, SshRetryTarget::Redis(id));
+        }
+        task.map(move |m| Msg::Redis(id, m))
+    }
+
+    fn update_mongo(&mut self, id: BrowserId, message: MongoMsg) -> Task<Msg> {
+        let Some(tab) = self.mongo_tabs.get_mut(&id) else {
+            return Task::none();
+        };
+        let conn = tab.conn_name.clone();
+        let (task, effect) = tab.update(message);
+        if let Some(MongoEffect::SshPromptNeeded(err)) = effect {
+            self.open_ssh_prompt(&conn, &err, SshRetryTarget::Mongo(id));
+        }
+        task.map(move |m| Msg::Mongo(id, m))
     }
 
     /// `openScratchDbq`: aba untitled no pane focado, já na conexão (e com o SQL, se vier).
@@ -736,11 +942,25 @@ impl Shell {
     }
 
     fn update_query(&mut self, id: QueryId, message: QueryMsg) -> Task<Msg> {
+        if let QueryMsg::Done(Err(ref err)) = message {
+            if needs_ssh_prompt(err) {
+                if let Some(conn) = self.queries.get(&id).and_then(|q| q.conn.clone()) {
+                    self.open_ssh_prompt(&conn, err, SshRetryTarget::Query(id));
+                }
+            }
+        }
         let secrets = self.db.secrets().clone();
+        let ssh_passphrases = self.db.ssh_passphrases.clone();
         let Some(query) = self.queries.get_mut(&id) else {
             return Task::none();
         };
-        let task = query.update(message, &db_query::Ctx { secrets: &secrets });
+        let task = query.update(
+            message,
+            &db_query::Ctx {
+                secrets: &secrets,
+                ssh_passphrases: &ssh_passphrases,
+            },
+        );
         let (title, close) = (query.title(), query.take_close_request());
         self.panes.retitle_query(id, &title);
         if close {
@@ -789,13 +1009,16 @@ impl Shell {
                     self.pending_window_close = Some(id);
                     Task::none()
                 } else {
+                    gsh_db::ssh::SshTunnelManager::global().close_all();
                     iced::window::close(id)
                 }
             }
-            Msg::ConfirmWindowClose => self
-                .pending_window_close
-                .take()
-                .map_or_else(Task::none, iced::window::close),
+            Msg::ConfirmWindowClose => {
+                gsh_db::ssh::SshTunnelManager::global().close_all();
+                self.pending_window_close
+                    .take()
+                    .map_or_else(Task::none, iced::window::close)
+            }
             Msg::CancelWindowClose => {
                 self.pending_window_close = None;
                 Task::none()
@@ -1130,7 +1353,11 @@ impl Shell {
                             let root = self.queries.get(&id).map(|q| q.root().to_path_buf());
                             return self.db.ensure_workspace(root).map(Msg::Db);
                         }
-                        PaneTab::Farm | PaneTab::Settings | PaneTab::Harness(_) => {}
+                        PaneTab::Farm
+                        | PaneTab::Settings
+                        | PaneTab::Redis { .. }
+                        | PaneTab::Mongo { .. }
+                        | PaneTab::Harness(_) => {}
                     }
                 }
                 Task::none()
@@ -1212,15 +1439,79 @@ impl Shell {
             }
             Msg::Db(message) => {
                 let (task, effect) = self.db.update(message);
+                self.sync_browser_contexts();
                 let task = task.map(Msg::Db);
                 match effect {
                     Some(DbEffect::NewQuery { conn, sql }) => {
                         Task::batch([task, self.open_scratch_query(&conn, sql.as_deref())])
                     }
+                    Some(DbEffect::BrowseRedis { conn }) => {
+                        Task::batch([task, self.open_redis_browser(&conn)])
+                    }
+                    Some(DbEffect::BrowseMongo { conn, collection }) => {
+                        Task::batch([task, self.open_mongo_browser(&conn, &collection)])
+                    }
+                    Some(DbEffect::SshPromptNeeded {
+                        conn,
+                        error,
+                        from_dialog,
+                    }) => {
+                        let retry = if from_dialog {
+                            SshRetryTarget::DialogTest
+                        } else {
+                            SshRetryTarget::PanelTree
+                        };
+                        self.open_ssh_prompt(&conn, &error, retry);
+                        task
+                    }
                     None => task,
                 }
             }
             Msg::Query(id, message) => self.update_query(id, message),
+            Msg::Redis(id, message) => self.update_redis(id, message),
+            Msg::Mongo(id, message) => self.update_mongo(id, message),
+            Msg::SshTrustHostKey => {
+                let Some(PendingSsh {
+                    ui: PendingPromptUi::HostKey(hk),
+                    retry,
+                }) = self.ssh_prompt.take()
+                else {
+                    return Task::none();
+                };
+                if let Err(err) = self.db.host_keys().trust(&hk.endpoint, &hk.fingerprint) {
+                    eprintln!("[ssh] falha ao salvar host key: {err}");
+                }
+                self.retry_ssh_action(retry)
+            }
+            Msg::SshPassphraseInput(value) => {
+                if let Some(PendingSsh {
+                    ui: PendingPromptUi::Passphrase(prompt, _),
+                    ..
+                }) = self.ssh_prompt.as_mut()
+                {
+                    prompt.passphrase = value;
+                }
+                Task::none()
+            }
+            Msg::SshUnlockPassphrase => {
+                let Some(PendingSsh {
+                    ui: PendingPromptUi::Passphrase(mut prompt, endpoint),
+                    retry,
+                }) = self.ssh_prompt.take()
+                else {
+                    return Task::none();
+                };
+                let pass = std::mem::take(&mut prompt.passphrase);
+                if !pass.is_empty() {
+                    self.db
+                        .cache_ssh_passphrase(endpoint, prompt.key_path.clone(), pass);
+                }
+                self.retry_ssh_action(retry)
+            }
+            Msg::SshDismissPrompt => {
+                self.ssh_prompt = None;
+                Task::none()
+            }
             Msg::QueryShortcut(shortcut) => {
                 let Some(PaneTab::Query { id, .. }) =
                     self.panes.focused_model().active_tab().cloned()
@@ -1547,6 +1838,16 @@ impl Shell {
                         .map(move |message| Msg::Query(id, message))
                 })
                 .unwrap_or_else(pane_chrome::view_empty_body),
+            Some(&PaneTab::Redis { id, .. }) => self
+                .redis_tabs
+                .get(&id)
+                .map(|tab| db_redis_view::view(tab).map(move |m| Msg::Redis(id, m)))
+                .unwrap_or_else(pane_chrome::view_empty_body),
+            Some(&PaneTab::Mongo { id, .. }) => self
+                .mongo_tabs
+                .get(&id)
+                .map(|tab| db_mongo_view::view(tab).map(move |m| Msg::Mongo(id, m)))
+                .unwrap_or_else(pane_chrome::view_empty_body),
             Some(PaneTab::Harness(workspace)) => {
                 harness_pane::view(&self.harness, workspace).map(Msg::Harness)
             }
@@ -1852,6 +2153,60 @@ impl Shell {
             Some(dialog) => stack![layered, dialog.map(Msg::Harness)].into(),
             None => layered,
         };
+        let layered: Element<'_, Msg> = match self
+            .redis_tabs
+            .iter()
+            .find_map(|(&id, tab)| tab.confirm_delete.as_deref().map(|key| (id, key)))
+        {
+            Some((id, key)) => stack![
+                layered,
+                pane_close_dialog::confirm(
+                    labels::REDIS_DELETE_KEY_TITLE.to_owned(),
+                    labels::redis_delete_key_message(key),
+                    labels::DB_DIALOG_DELETE,
+                    Msg::Redis(id, RedisMsg::CancelDelete),
+                    Msg::Redis(id, RedisMsg::ConfirmDelete),
+                    Msg::Noop,
+                )
+            ]
+            .into(),
+            None => layered,
+        };
+        let layered: Element<'_, Msg> = match self.mongo_tabs.iter().find_map(|(&id, tab)| {
+            tab.confirm_delete_id()
+                .map(|doc_id| (id, doc_id, tab.collection.as_str()))
+        }) {
+            Some((id, doc_id, collection)) => stack![
+                layered,
+                pane_close_dialog::confirm(
+                    labels::MONGO_DELETE_DOC_TITLE.to_owned(),
+                    labels::mongo_delete_doc_message(&doc_id, collection),
+                    labels::DB_DIALOG_DELETE,
+                    Msg::Mongo(id, MongoMsg::CancelDelete),
+                    Msg::Mongo(id, MongoMsg::ConfirmDelete),
+                    Msg::Noop,
+                )
+            ]
+            .into(),
+            None => layered,
+        };
+        let layered: Element<'_, Msg> = match self.ssh_prompt.as_ref() {
+            Some(PendingSsh { ui, .. }) => {
+                let modal = match ui {
+                    PendingPromptUi::HostKey(hk) => {
+                        hk.view(Msg::SshDismissPrompt, Msg::SshTrustHostKey, Msg::Noop)
+                    }
+                    PendingPromptUi::Passphrase(pp, _) => pp.view(
+                        Msg::SshPassphraseInput,
+                        Msg::SshDismissPrompt,
+                        Msg::SshUnlockPassphrase,
+                        Msg::Noop,
+                    ),
+                };
+                stack![layered, modal].into()
+            }
+            None => layered,
+        };
         match &self.gallery_error {
             Some(error) => stack![
                 layered,
@@ -1977,6 +2332,9 @@ mod tests {
                 "/nonexistent/gsh-secrets.json",
             ))),
             queries: BTreeMap::new(),
+            redis_tabs: BTreeMap::new(),
+            mongo_tabs: BTreeMap::new(),
+            ssh_prompt: None,
             pending_close_query: None,
             harness: harness_pane::HarnessState::default(),
             settings: settings::Settings::default(),

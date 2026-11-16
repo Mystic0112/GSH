@@ -941,6 +941,7 @@ mod tests {
                 QueryMsg::ShowJson(true),
                 &crate::db_query::Ctx {
                     secrets: &gsh_db::SecretStore::new("/nonexistent/s".into()),
+                    ssh_passphrases: &std::collections::BTreeMap::new(),
                 },
             );
             let _ = view(&query, &connections);

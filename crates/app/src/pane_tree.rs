@@ -9,7 +9,7 @@
 
 use iced::widget::pane_grid::{self, Axis, Node, Pane, Split};
 
-use crate::pane_model::{ChatId, PaneModel, PaneTab, QueryId, TermId};
+use crate::pane_model::{BrowserId, ChatId, PaneModel, PaneTab, QueryId, TermId};
 
 /// Limites da proporção de uma divisão (`resizeSplitBy` do Flutter: `clamp(0.16, 0.84)`).
 pub const MIN_RATIO: f32 = 0.16;
@@ -32,6 +32,7 @@ pub struct PaneTree {
     next_term_id: TermId,
     next_chat_id: ChatId,
     next_query_id: QueryId,
+    next_browser_id: BrowserId,
 }
 
 impl Default for PaneTree {
@@ -47,6 +48,7 @@ impl Default for PaneTree {
             next_term_id: 2,
             next_chat_id: 1,
             next_query_id: 1,
+            next_browser_id: 1,
         }
     }
 }
@@ -143,6 +145,42 @@ impl PaneTree {
         let id = self.next_query_id;
         self.next_query_id = self.next_query_id.saturating_add(1);
         id
+    }
+
+    pub fn alloc_browser_id(&mut self) -> BrowserId {
+        let id = self.next_browser_id;
+        self.next_browser_id = self.next_browser_id.saturating_add(1);
+        id
+    }
+
+    pub fn find_redis(&self, conn: &str) -> Option<(Pane, usize, BrowserId)> {
+        self.grid.iter().find_map(|(&pane, model)| {
+            model
+                .tabs()
+                .iter()
+                .enumerate()
+                .find_map(|(ix, tab)| match tab {
+                    PaneTab::Redis { id, conn: c } if c == conn => Some((pane, ix, *id)),
+                    _ => None,
+                })
+        })
+    }
+
+    pub fn find_mongo(&self, conn: &str, collection: &str) -> Option<(Pane, usize, BrowserId)> {
+        self.grid.iter().find_map(|(&pane, model)| {
+            model
+                .tabs()
+                .iter()
+                .enumerate()
+                .find_map(|(ix, tab)| match tab {
+                    PaneTab::Mongo {
+                        id,
+                        conn: c,
+                        collection: col,
+                    } if c == conn && col == collection => Some((pane, ix, *id)),
+                    _ => None,
+                })
+        })
     }
 
     /// Divide `pane` em `axis` com um pane novo depois dele (direita/abaixo), já

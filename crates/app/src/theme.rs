@@ -756,6 +756,57 @@ pub const DB_COPY_ICON: f32 = 12.0;
 pub const DB_COPY_GAP: f32 = 5.0;
 pub const DB_COPY_SIZE: f32 = 10.5;
 pub const DB_COPIED_MILLIS: u64 = 1200;
+// Seção SSH do diálogo de conexão (`db_connection_dialog.dart`)
+pub const DB_DIALOG_SSH_RADIUS: f32 = 8.0;
+pub const DB_DIALOG_SSH_HEADER_PADDING: [f32; 2] = [8.0, 12.0];
+pub const DB_DIALOG_SSH_BODY_PADDING: Padding = Padding {
+    top: 4.0,
+    right: 12.0,
+    bottom: 12.0,
+    left: 12.0,
+};
+pub const DB_DIALOG_SSH_PORT_WIDTH: f32 = 100.0;
+pub const DB_DIALOG_SSH_BADGE_PADDING: [f32; 2] = [2.0, 6.0];
+pub const DB_DIALOG_SSH_BADGE_SIZE: f32 = 10.5;
+pub const DB_DIALOG_SSH_SUBTITLE_SIZE: f32 = 11.0;
+pub const DB_DIALOG_SSH_LABEL_SIZE: f32 = 12.5;
+// Modais de SSH (`ssh_prompts.dart`)
+pub const SSH_PROMPT_HOST_KEY_MAX_WIDTH: f32 = 460.0;
+pub const SSH_PROMPT_PASSPHRASE_MAX_WIDTH: f32 = 420.0;
+pub const SSH_PROMPT_BOX_PADDING: [f32; 2] = [10.0, 12.0];
+pub const SSH_PROMPT_BOX_RADIUS: f32 = 6.0;
+pub const SSH_PROMPT_MONO_SIZE: f32 = 11.5;
+pub const SSH_PROMPT_HINT_SIZE: f32 = 11.5;
+// Navegador Redis (`db_redis_table.dart`)
+pub const REDIS_KIND_STRING_COLOR: Color = Color::from_rgb8(0x3F, 0xB8, 0x68);
+pub const REDIS_KIND_HASH_COLOR: Color = Color::from_rgb8(0x60, 0xA5, 0xFA);
+pub const REDIS_KIND_LIST_COLOR: Color = Color::from_rgb8(0xA7, 0x8B, 0xFA);
+pub const REDIS_KIND_SET_COLOR: Color = Color::from_rgb8(0xFB, 0xBF, 0x24);
+pub const REDIS_KIND_ZSET_COLOR: Color = Color::from_rgb8(0x34, 0xD3, 0x99);
+pub const REDIS_KIND_STREAM_COLOR: Color = Color::from_rgb8(0xF4, 0x72, 0xB6);
+pub const REDIS_KEY_COL_WIDTH: f32 = 220.0;
+pub const REDIS_TYPE_COL_WIDTH: f32 = 76.0;
+pub const REDIS_TTL_COL_WIDTH: f32 = 78.0;
+pub const REDIS_ACTIONS_COL_WIDTH: f32 = 40.0;
+pub const REDIS_TOOLBAR_HEIGHT: f32 = 38.0;
+pub const REDIS_TOOLBAR_PADDING_X: f32 = 10.0;
+pub const REDIS_HEADER_HEIGHT: f32 = 28.0;
+pub const REDIS_ROW_HEIGHT: f32 = 32.0;
+pub const REDIS_EXPANDED_MAX_HEIGHT: f32 = 340.0;
+pub const REDIS_FLASH_MILLIS: u64 = 900;
+// Navegador MongoDB (`db_mongo_view.dart`)
+pub const MONGO_TOOLBAR_HEIGHT: f32 = 38.0;
+pub const MONGO_CARD_PADDING: Padding = Padding {
+    top: 8.0,
+    right: 12.0,
+    bottom: 10.0,
+    left: 12.0,
+};
+pub const MONGO_CARD_RADIUS: f32 = 6.0;
+pub const MONGO_CARD_GAP: f32 = 8.0;
+pub const MONGO_CARD_HEADER_FONT_SIZE: f32 = 11.5;
+pub const MONGO_EDITOR_MIN_HEIGHT: f32 = 120.0;
+pub const MONGO_EDITOR_MAX_HEIGHT: f32 = 360.0;
 
 /// Cor do agente da aba `tab_id` (hash + paleta do núcleo), igual em qualquer tema.
 pub fn agent_color(tab_id: &str) -> Color {

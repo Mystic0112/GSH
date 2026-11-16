@@ -4,6 +4,7 @@
 //! mostra só o SQL. "Untitled" nasce em memória e só vira arquivo no primeiro salvar. Mudança
 //! externa no arquivo (um agente salvou) re-executa a query sozinha; abrir um arquivo nunca roda SQL.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -13,7 +14,7 @@ use gsh_db::{Connection, DbError, DbqDocument, Engine, QueryResult, SecretStore,
 use iced::widget::text_editor::{self, Position};
 use iced::Task;
 
-use crate::db_state::run_on;
+use crate::db_state::{run_on, run_on_with_ssh};
 use crate::editor_pane::{EditorMsg, EditorPane};
 use crate::pane_model::QueryId;
 use crate::{labels, theme};
@@ -74,6 +75,7 @@ pub enum QueryMsg {
 /// Contexto que o shell empresta a cada atualização.
 pub struct Ctx<'a> {
     pub secrets: &'a SecretStore,
+    pub ssh_passphrases: &'a BTreeMap<(String, String), String>,
 }
 
 /// Estado de visualização (`DbTabViewState`).
@@ -409,12 +411,18 @@ impl DbQuery {
         self.view.error_content = None;
         let texts: Vec<String> = to_run.into_iter().map(|statement| statement.text).collect();
         let limit = self.limit.map(|limit| usize::try_from(limit).unwrap_or(0));
-        let (root, secrets) = (self.root.clone(), ctx.secrets.clone());
+        let (root, secrets, passphrases) = (
+            self.root.clone(),
+            ctx.secrets.clone(),
+            ctx.ssh_passphrases.clone(),
+        );
         Task::perform(
             async move {
-                tokio::task::spawn_blocking(move || execute(&root, &secrets, &conn, &texts, limit))
-                    .await
-                    .unwrap_or_else(|error| Err(DbError::QueryFailed(error.to_string())))
+                tokio::task::spawn_blocking(move || {
+                    execute_with_ssh(&root, &secrets, &conn, &passphrases, &texts, limit)
+                })
+                .await
+                .unwrap_or_else(|error| Err(DbError::QueryFailed(error.to_string())))
             },
             QueryMsg::Done,
         )
@@ -585,6 +593,20 @@ pub fn execute(
     })
 }
 
+/// Executa os statements na conexão `conn` com cache de passphrases SSH.
+pub fn execute_with_ssh(
+    root: &Path,
+    secrets: &SecretStore,
+    conn: &str,
+    ssh_passphrases: &BTreeMap<(String, String), String>,
+    texts: &[String],
+    limit: Option<usize>,
+) -> Result<QueryResult, DbError> {
+    run_on_with_ssh(root, secrets, conn, ssh_passphrases, |endpoint| {
+        gsh_db::driver::run_statements(&endpoint, texts, limit)
+    })
+}
+
 /// Largura base por coluna: nome mais amostra das primeiras linhas (`_computeWidths`).
 pub fn base_widths(result: &QueryResult) -> Vec<f32> {
     (0..result.columns.len())
@@ -719,8 +741,11 @@ mod tests {
         }
 
         fn ctx(&self) -> Ctx<'_> {
+            use std::sync::OnceLock;
+            static EMPTY: OnceLock<BTreeMap<(String, String), String>> = OnceLock::new();
             Ctx {
                 secrets: &self.secrets,
+                ssh_passphrases: EMPTY.get_or_init(BTreeMap::new),
             }
         }
 

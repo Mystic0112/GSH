@@ -127,7 +127,7 @@ fn hover_button<'a>(
 
 fn add_menu<'a>() -> Element<'a, DbMsg> {
     app_menu::menu(
-        Engine::SUPPORTED
+        Engine::ALL
             .into_iter()
             .map(|engine| {
                 Item::Entry(
@@ -157,6 +157,11 @@ fn conn_menu<'a>(conn: &Connection) -> Element<'a, DbMsg> {
         items.push(Item::Entry(
             Entry::new(labels::DB_NEW_QUERY, DbMsg::NewQuery(name.clone(), None))
                 .leading(Leading::Glyph(labels::ICON_PLUS)),
+        ));
+    } else if conn.engine == Engine::Redis {
+        items.push(Item::Entry(
+            Entry::new(labels::DB_BROWSE_KEYS, DbMsg::BrowseRedis(name.clone()))
+                .leading(Leading::Glyph(labels::ICON_GRID_ON)),
         ));
     }
     items.push(Item::Divider);
@@ -188,10 +193,13 @@ fn chip<'a>(label: &'static str) -> Element<'a, DbMsg> {
     .into()
 }
 
-/// Linha da conexão e, expandida, a árvore de schema embaixo.
+/// Linha da conexão e, expandida, a árvore de schema/coleções embaixo.
 fn tile<'a>(db: &'a DbState, conn: &'a Connection) -> Element<'a, DbMsg> {
     let palette = theme::palette();
-    let expandable = conn.engine.is_sql();
+    let is_mongo = conn.engine == Engine::Mongo;
+    let is_redis = conn.engine == Engine::Redis;
+    let expandable = conn.engine.is_sql() || is_mongo;
+    let interactive = expandable || is_redis;
     let expanded = db.expanded.contains(&conn.name);
 
     let leading: Element<'a, DbMsg> = if expandable {
@@ -274,12 +282,20 @@ fn tile<'a>(db: &'a DbState, conn: &'a Connection) -> Element<'a, DbMsg> {
     ]
     .align_y(Alignment::Center);
 
+    let on_press = if expandable {
+        Some(DbMsg::Toggle(conn.name.clone()))
+    } else if is_redis {
+        Some(DbMsg::BrowseRedis(conn.name.clone()))
+    } else {
+        None
+    };
+
     let tile_button = button(line)
         .width(Fill)
         .padding(theme::DB_TILE_PADDING)
-        .on_press_maybe(expandable.then(|| DbMsg::Toggle(conn.name.clone())))
+        .on_press_maybe(on_press)
         .style(move |_: &Theme, status| button::Style {
-            background: (expandable
+            background: (interactive
                 && matches!(status, button::Status::Hovered | button::Status::Pressed))
             .then(|| Background::Color(theme::palette().panel3)),
             text_color: theme::palette().text,
@@ -292,9 +308,148 @@ fn tile<'a>(db: &'a DbState, conn: &'a Connection) -> Element<'a, DbMsg> {
 
     let mut tile = column![container(tile_button).padding([theme::DB_TILE_GAP, 0.0])];
     if expanded && expandable {
-        tile = tile.push(schema_tree(db, conn));
+        tile = tile.push(if is_mongo {
+            mongo_tree(db, conn)
+        } else {
+            schema_tree(db, conn)
+        });
     }
     tile.into()
+}
+
+/// Árvore de databases -> collections MongoDB (`_MongoCollections` em `db_panel.dart`).
+fn mongo_tree<'a>(db: &'a DbState, conn: &'a Connection) -> Element<'a, DbMsg> {
+    let body: Element<'a, DbMsg> = if !DbState::mongo_needs_database(conn) {
+        mongo_collection_list(db, &conn.name, "")
+    } else {
+        match db.mongo_databases.get(&conn.name) {
+            None | Some(Load::Loading) => hint(labels::DB_LOADING.to_string(), false),
+            Some(Load::Failed(error)) => hint(labels::db_error_message(error), true),
+            Some(Load::Ready(names)) if names.is_empty() => {
+                hint(labels::DB_NO_DATABASES.to_string(), false)
+            }
+            Some(Load::Ready(names)) => names
+                .iter()
+                .fold(column![], |col, db_name| {
+                    col.push(mongo_database_node(db, conn, db_name))
+                })
+                .into(),
+        }
+    };
+    container(body)
+        .width(Fill)
+        .padding(Padding {
+            left: theme::DB_TREE_LEFT,
+            bottom: theme::DB_TREE_BOTTOM,
+            ..Padding::ZERO
+        })
+        .into()
+}
+
+fn mongo_database_node<'a>(
+    db: &'a DbState,
+    conn: &'a Connection,
+    database: &'a str,
+) -> Element<'a, DbMsg> {
+    let palette = theme::palette();
+    let open = db
+        .mongo_open_dbs
+        .get(&conn.name)
+        .is_some_and(|set| set.contains(database));
+    let header = hover_button(
+        row![
+            icon(
+                if open {
+                    labels::ICON_EXPAND_MORE
+                } else {
+                    labels::ICON_CHEVRON_RIGHT
+                },
+                theme::DB_TREE_CHEVRON_SIZE,
+                palette.text4,
+            ),
+            Space::new().width(2),
+            icon(
+                labels::ICON_STORAGE,
+                theme::DB_TREE_ICON_SIZE,
+                palette.text4
+            ),
+            Space::new().width(theme::DB_TREE_ICON_GAP),
+            container(
+                text(database)
+                    .font(theme::FONT_MONO)
+                    .size(theme::DB_TREE_TABLE_SIZE)
+                    .color(palette.text2)
+                    .wrapping(text::Wrapping::None),
+            )
+            .width(Fill)
+            .clip(true),
+        ]
+        .align_y(Alignment::Center)
+        .into(),
+        Padding::from(theme::DB_TREE_ROW_PADDING),
+        Some(DbMsg::ToggleMongoDatabase(
+            conn.name.clone(),
+            database.to_string(),
+        )),
+    );
+    let mut node = column![header];
+    if open {
+        node = node.push(
+            container(mongo_collection_list(db, &conn.name, database)).padding(Padding {
+                left: 15.0,
+                ..Padding::ZERO
+            }),
+        );
+    }
+    node.into()
+}
+
+fn mongo_collection_list<'a>(
+    db: &'a DbState,
+    conn_name: &'a str,
+    database: &'a str,
+) -> Element<'a, DbMsg> {
+    let palette = theme::palette();
+    let key = (conn_name.to_string(), database.to_string());
+    match db.mongo_collections.get(&key) {
+        None | Some(Load::Loading) => hint(labels::DB_LOADING.to_string(), false),
+        Some(Load::Failed(error)) => hint(labels::db_error_message(error), true),
+        Some(Load::Ready(names)) if names.is_empty() => {
+            hint(labels::DB_NO_COLLECTIONS.to_string(), false)
+        }
+        Some(Load::Ready(names)) => names
+            .iter()
+            .fold(column![], |col, name| {
+                col.push(hover_button(
+                    row![
+                        icon(
+                            labels::ICON_DATA_OBJECT,
+                            theme::DB_TREE_ICON_SIZE,
+                            palette.text4,
+                        ),
+                        Space::new().width(theme::DB_TREE_ICON_GAP),
+                        container(
+                            text(name.as_str())
+                                .font(theme::FONT_MONO)
+                                .size(theme::DB_TREE_TABLE_SIZE)
+                                .color(palette.text2)
+                                .wrapping(text::Wrapping::None),
+                        )
+                        .width(Fill)
+                        .clip(true),
+                    ]
+                    .align_y(Alignment::Center)
+                    .into(),
+                    Padding::from(theme::DB_TREE_ROW_PADDING),
+                    Some(DbMsg::OpenMongoCollection(
+                        conn_name.to_string(),
+                        database.to_string(),
+                        name.clone(),
+                    )),
+                ))
+            })
+            .into(),
+    }
 }
 
 /// Mensagem pequena dentro da árvore (carregando, vazio ou erro).
@@ -641,6 +796,37 @@ mod tests {
         db.menu = Some(MenuState::Conn("a".into()));
         let _ = view(&db);
         db.menu = Some(MenuState::Add);
+        let _ = view(&db);
+    }
+
+    #[test]
+    fn renders_redis_and_mongo_trees_in_all_states() {
+        let redis = Connection::from_json(
+            &serde_json::json!({"name": "cache", "url": "redis://127.0.0.1:6379/0"}),
+            Origin::Registered,
+        )
+        .unwrap();
+        let mongo = Connection::from_json(
+            &serde_json::json!({"name": "atlas", "url": "mongodb://127.0.0.1:27017"}),
+            Origin::Registered,
+        )
+        .unwrap();
+        let mut db = state(vec![redis, mongo]);
+        db.menu = Some(MenuState::Conn("cache".into()));
+        let _ = view(&db);
+
+        db.menu = None;
+        db.expanded.insert("atlas".into());
+        db.mongo_databases
+            .insert("atlas".into(), Load::Ready(vec!["prod".into()]));
+        db.mongo_open_dbs
+            .entry("atlas".into())
+            .or_default()
+            .insert("prod".into());
+        db.mongo_collections.insert(
+            ("atlas".into(), "prod".into()),
+            Load::Ready(vec!["users".into()]),
+        );
         let _ = view(&db);
     }
 }

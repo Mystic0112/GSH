@@ -71,6 +71,49 @@ pub fn schema_sql(
                 ),
             })
         }
+        Engine::Mysql => Ok(match table {
+            None => "SELECT table_name AS `table`, table_schema AS `schema`, \
+                CASE table_type WHEN 'VIEW' THEN 'view' ELSE 'table' END \
+                AS type FROM information_schema.tables \
+                WHERE table_schema = DATABASE() ORDER BY table_name"
+                .to_string(),
+            Some(t) => format!(
+                "SELECT column_name AS `column`, data_type AS type, \
+                CASE is_nullable WHEN 'YES' THEN 1 ELSE 0 END AS nullable, \
+                CASE column_key WHEN 'PRI' THEN 1 ELSE 0 END \
+                AS `primaryKey` FROM information_schema.columns \
+                WHERE table_schema = DATABASE() AND table_name = '{t}' \
+                ORDER BY ordinal_position"
+            ),
+        }),
+        Engine::Mssql => {
+            let s = safe_ident(schema.unwrap_or("dbo"))?;
+            Ok(match table {
+                None => "SELECT TABLE_NAME AS [table], TABLE_SCHEMA AS [schema], \
+                    CASE TABLE_TYPE WHEN 'VIEW' THEN 'view' ELSE 'table' END \
+                    AS type FROM INFORMATION_SCHEMA.TABLES \
+                    ORDER BY TABLE_SCHEMA, TABLE_NAME"
+                    .to_string(),
+                Some(t) => format!(
+                    "SELECT c.COLUMN_NAME AS [column], c.DATA_TYPE AS type, \
+                    CASE c.IS_NULLABLE WHEN 'YES' THEN 1 ELSE 0 END \
+                    AS nullable, \
+                    CASE WHEN pk.COLUMN_NAME IS NULL THEN 0 ELSE 1 END \
+                    AS [primaryKey] \
+                    FROM INFORMATION_SCHEMA.COLUMNS c \
+                    LEFT JOIN (\
+                     SELECT ku.COLUMN_NAME \
+                     FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc \
+                     JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku \
+                       ON ku.CONSTRAINT_NAME = tc.CONSTRAINT_NAME \
+                     WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' \
+                      AND tc.TABLE_SCHEMA = '{s}' AND tc.TABLE_NAME = '{t}'\
+                    ) pk ON pk.COLUMN_NAME = c.COLUMN_NAME \
+                    WHERE c.TABLE_SCHEMA = '{s}' AND c.TABLE_NAME = '{t}' \
+                    ORDER BY c.ORDINAL_POSITION"
+                ),
+            })
+        }
         other => Err(DbError::UnsupportedEngine(other)),
     }
 }
@@ -184,9 +227,11 @@ mod tests {
             schema_sql(Engine::Postgres, Some("t"), Some("x'; drop")),
             Err(DbError::InvalidIdentifier("x'; drop".into()))
         );
+        assert!(schema_sql(Engine::Mysql, None, None).is_ok());
+        assert!(schema_sql(Engine::Mssql, Some("Users"), Some("dbo")).is_ok());
         assert!(matches!(
-            schema_sql(Engine::Mysql, None, None),
-            Err(DbError::UnsupportedEngine(Engine::Mysql))
+            schema_sql(Engine::Redis, None, None),
+            Err(DbError::UnsupportedEngine(Engine::Redis))
         ));
     }
 

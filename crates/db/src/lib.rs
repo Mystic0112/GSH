@@ -1,8 +1,5 @@
 //! Banco de dados do GSH, sem UI: conexões do workspace (`.gsh/databases*.json`), cofre de
-//! senhas, drivers SQLite e PostgreSQL, introspecção de schema e execução com limites.
-//!
-//! MySQL, SQL Server, Redis, MongoDB e túnel SSH não têm driver ainda: as conexões desses motores
-//! são lidas, mantidas ao regravar o arquivo e recusadas com [`DbError::UnsupportedEngine`].
+//! senhas, drivers SQLite, PostgreSQL (com TLS), MySQL, SQL Server, Redis, MongoDB e túnel SSH.
 
 #![cfg_attr(
     not(test),
@@ -18,22 +15,35 @@ pub mod connection;
 pub mod dbq;
 pub mod driver;
 pub mod error;
+pub mod mongo;
+pub mod mongo_browse;
+pub mod mongo_store;
+pub mod mssql;
+pub mod mysql;
 pub mod postgres;
+pub mod redis;
+pub mod redis_browse;
 pub mod result;
 pub mod schema;
 pub mod secrets;
 pub mod sqlite;
+pub mod ssh;
+pub mod ssh_keys;
+pub mod ssh_socks;
 pub mod statements;
 pub mod store;
 pub mod url;
 
-pub use connection::{Access, Connection, Engine, Origin, SshTunnel};
+pub use connection::{redact_url, Access, Connection, Engine, Origin, SshTunnel};
 pub use dbq::DbqDocument;
 pub use driver::{Endpoint, DEFAULT_LIMIT};
 pub use error::{DbError, StoreError};
+pub use mongo_store::MongoDatabaseStore;
 pub use result::{Cell, Column, QueryResult};
 pub use schema::{SchemaColumn, SchemaTable};
 pub use secrets::SecretStore;
+pub use ssh::{SshTunnelManager, TunnelEndpoint};
+pub use ssh_keys::SshHostKeyStore;
 pub use statements::SqlStatement;
 
 use std::path::Path;
@@ -50,6 +60,44 @@ pub fn resolve_password(conn: &Connection, root: &Path, secrets: &SecretStore) -
         }
     }
     conn.url_password()
+}
+
+/// Passphrase da chave SSH, na ordem do Flutter: override digitado -> cofre -> cache de sessão.
+/// Devolve `Ok(None)` quando a chave não exige passphrase, ou `Err(DbError::SshCredentialRequired)`
+/// quando exige e nenhuma está disponível.
+pub fn resolve_ssh_passphrase(
+    conn: &Connection,
+    root: &Path,
+    secrets: &SecretStore,
+    override_pass: Option<&str>,
+    cached: Option<&str>,
+) -> Result<Option<String>, DbError> {
+    let Some(ssh) = conn
+        .ssh
+        .as_ref()
+        .filter(|_| conn.engine.supports_ssh_tunnel())
+    else {
+        return Ok(None);
+    };
+    if !ssh_keys::needs_passphrase(&ssh.key_path) {
+        return Ok(None);
+    }
+    if let Some(typed) = override_pass.filter(|p| !p.is_empty()) {
+        return Ok(Some(typed.to_string()));
+    }
+    if ssh.save_passphrase {
+        let key = SecretStore::ssh_key_for(&root.to_string_lossy(), &conn.name);
+        if let Some(saved) = secrets.read_raw(&key).filter(|p| !p.is_empty()) {
+            return Ok(Some(saved));
+        }
+    }
+    if let Some(session) = cached.filter(|p| !p.is_empty()) {
+        return Ok(Some(session.to_string()));
+    }
+    Err(DbError::SshCredentialRequired(format!(
+        "SSH passphrase required for \"{}\".",
+        conn.name
+    )))
 }
 
 #[cfg(test)]
