@@ -44,6 +44,14 @@ pub enum Message {
     PermissionSoundChanged(bool),
     TranscriptWidthChanged(gsh_config::schema::TranscriptWidth),
     ThemeSelected(gsh_config::schema::AppThemeMode),
+    TeamEnabledChanged(bool),
+    TeamNameChanged(String),
+    TeamDisplayNameChanged(String),
+    TeamShowTitlesChanged(bool),
+    TeamSecretChanged(String),
+    TeamNetworkChanged(String),
+    TeamDoorAllowChanged(String),
+    TeamDoorAskChanged(bool),
     SaveControls,
     Claude(claude::Message),
 }
@@ -55,6 +63,7 @@ pub enum Section {
     Terminal,
     Editor,
     Notifications,
+    Team,
 }
 
 pub struct Settings {
@@ -243,6 +252,38 @@ impl Settings {
                 let _ = self.update(Message::SaveControls);
             }
             Message::ThemeSelected(mode) => self.select_theme(mode),
+            Message::TeamEnabledChanged(value) => {
+                self.current.farm.team.enabled = value;
+                self.save_team();
+            }
+            Message::TeamNameChanged(value) => {
+                self.current.farm.team.name = value;
+                self.save_team();
+            }
+            Message::TeamDisplayNameChanged(value) => {
+                self.current.farm.team.me = value;
+                self.save_team();
+            }
+            Message::TeamShowTitlesChanged(value) => {
+                self.current.farm.team.show_titles = value;
+                self.save_team();
+            }
+            Message::TeamSecretChanged(value) => {
+                self.current.farm.team.secret = value;
+                self.save_team();
+            }
+            Message::TeamNetworkChanged(value) => {
+                self.current.farm.team.network = value;
+                self.save_team();
+            }
+            Message::TeamDoorAllowChanged(value) => {
+                self.current.farm.team.door_allow = value;
+                self.save_team();
+            }
+            Message::TeamDoorAskChanged(value) => {
+                self.current.farm.team.door_ask = value;
+                self.save_team();
+            }
             Message::SaveControls => {
                 let result = match &self.path {
                     Ok(path) => controls::save(path, self),
@@ -300,6 +341,17 @@ impl Settings {
             }
         }
         iced::Task::none()
+    }
+
+    fn save_team(&mut self) {
+        self.error = None;
+        self.saved = false;
+        let result = match &self.path {
+            Ok(path) => controls::save_team(path, &self.current.farm.team),
+            Err(_) => Err(Error::Config(gsh_config::ConfigError::NoHome)),
+        };
+        self.saved = result.is_ok();
+        self.error = result.err();
     }
 }
 

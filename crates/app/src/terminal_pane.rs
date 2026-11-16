@@ -309,6 +309,18 @@ impl TerminalPane {
         }
     }
 
+    pub fn working_directory(&self) -> Option<&Path> {
+        self.cwd.as_deref()
+    }
+
+    /// Entrega texto a uma sessão de agente que já foi validada pelo status do harness.
+    pub fn deliver_agent_text(&mut self, text: &str) -> Result<(), gsh_term::TermError> {
+        let session = self.session.as_ref().ok_or(gsh_term::TermError::Closed)?;
+        session.send(text.as_bytes())?;
+        self.sync_snapshot();
+        Ok(())
+    }
+
     /// Processa uma [`TerminalMsg`] e devolve uma [`Task`] (como leitura/escrita de clipboard).
     pub fn update(&mut self, msg: TerminalMsg) -> Task<TerminalMsg> {
         match msg {

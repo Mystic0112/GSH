@@ -1,7 +1,7 @@
 //! Interface da aba de configurações.
 use super::{claude, Error, Message, Section, Settings};
 use crate::{labels, theme};
-use gsh_config::schema::{AppThemeMode, TranscriptWidth};
+use gsh_config::schema::{AppFeature, AppThemeMode, TranscriptWidth};
 use iced::widget::{button, column, container, pick_list, row, text, text_input};
 use iced::{Alignment, Background, Border, Element, Fill, Theme};
 
@@ -298,6 +298,91 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
             ),
             text(labels::SETTINGS_NOTIFICATIONS_PENDING)
         ],
+        Section::Team => {
+            let team = &s.current.farm.team;
+            let mut rows = column![
+                text(labels::SETTINGS_TEAM)
+                    .font(theme::FONT_TITLE)
+                    .size(theme::SIZE_TITLE)
+                    .color(theme::palette().text),
+                setting_row_desc(
+                    labels::SETTINGS_TEAM_ENABLE,
+                    labels::SETTINGS_TEAM_ENABLE_DESC,
+                    switch(team.enabled, Message::TeamEnabledChanged(!team.enabled))
+                ),
+            ];
+            if team.enabled {
+                rows = rows
+                    .push(setting_row_desc(
+                        labels::SETTINGS_TEAM_NAME,
+                        labels::SETTINGS_TEAM_NAME_DESC,
+                        text_input(labels::SETTINGS_TEAM_NAME_HINT, &team.name)
+                            .on_input(Message::TeamNameChanged)
+                            .style(input_style)
+                            .width(240)
+                            .into(),
+                    ))
+                    .push(setting_row_desc(
+                        labels::SETTINGS_TEAM_ME,
+                        labels::SETTINGS_TEAM_ME_DESC,
+                        text_input(
+                            option_env!("USER")
+                                .or(option_env!("USERNAME"))
+                                .unwrap_or(""),
+                            &team.me,
+                        )
+                        .on_input(Message::TeamDisplayNameChanged)
+                        .style(input_style)
+                        .width(240)
+                        .into(),
+                    ))
+                    .push(setting_row_desc(
+                        labels::SETTINGS_TEAM_SHOW_TITLES,
+                        labels::SETTINGS_TEAM_SHOW_TITLES_DESC,
+                        switch(
+                            team.show_titles,
+                            Message::TeamShowTitlesChanged(!team.show_titles),
+                        ),
+                    ))
+                    .push(setting_row_desc(
+                        labels::SETTINGS_TEAM_SECRET,
+                        labels::SETTINGS_TEAM_SECRET_DESC,
+                        text_input(labels::SETTINGS_TEAM_SECRET_HINT, &team.secret)
+                            .secure(true)
+                            .on_input(Message::TeamSecretChanged)
+                            .style(input_style)
+                            .width(240)
+                            .into(),
+                    ));
+                if !team.secret.is_empty() {
+                    rows = rows
+                        .push(setting_row_desc(
+                            labels::SETTINGS_TEAM_DOOR_ALLOW,
+                            labels::SETTINGS_TEAM_DOOR_ALLOW_DESC,
+                            text_input(labels::SETTINGS_TEAM_DOOR_ALLOW_HINT, &team.door_allow)
+                                .on_input(Message::TeamDoorAllowChanged)
+                                .style(input_style)
+                                .width(240)
+                                .into(),
+                        ))
+                        .push(setting_row_desc(
+                            labels::SETTINGS_TEAM_DOOR_ASK,
+                            labels::SETTINGS_TEAM_DOOR_ASK_DESC,
+                            switch(team.door_ask, Message::TeamDoorAskChanged(!team.door_ask)),
+                        ));
+                }
+                rows = rows.push(setting_row_desc(
+                    labels::SETTINGS_TEAM_NETWORK,
+                    labels::SETTINGS_TEAM_NETWORK_DESC,
+                    text_input(labels::SETTINGS_TEAM_NETWORK_HINT, &team.network)
+                        .on_input(Message::TeamNetworkChanged)
+                        .style(input_style)
+                        .width(240)
+                        .into(),
+                ));
+            }
+            rows
+        }
     }
     .spacing(theme::SETTINGS_SECTION_TITLE_GAP)
     .width(Fill);
@@ -408,6 +493,7 @@ fn navigation(s: &Settings) -> Element<'_, Message> {
             labels::SETTINGS_NOTIFICATIONS,
             Section::Notifications,
         ),
+        (labels::ICON_FARM, labels::SETTINGS_TEAM, Section::Team),
     ];
     let mut nav_list = column![];
     let mut found = false;
@@ -466,7 +552,9 @@ fn navigation(s: &Settings) -> Element<'_, Message> {
     } else {
         let mut items = column![].spacing(theme::SETTINGS_NAV_ITEM_SPACING);
         for (icon, label, section) in entries {
-            if matches_search(label, &s.nav_search) {
+            if (section != Section::Team || s.current.shows_feature(AppFeature::Farm))
+                && matches_search(label, &s.nav_search)
+            {
                 found = true;
                 items = items.push(nav_item(icon, label, section, s.section));
             }
@@ -753,6 +841,31 @@ fn setting_row<'a>(label: &'static str, control: Element<'a, Message>) -> Elemen
         crate::panel_widgets::hairline_h()
     ]
     .width(Fill)
+    .into()
+}
+
+fn setting_row_desc<'a>(
+    label: &'static str,
+    description: &'static str,
+    control: Element<'a, Message>,
+) -> Element<'a, Message> {
+    column![
+        row![
+            column![
+                text(label)
+                    .font(theme::FONT_BODY)
+                    .size(theme::SETTINGS_NAV_TEXT_SIZE)
+                    .color(theme::palette().text),
+                text(description).size(12).color(theme::palette().text3),
+            ]
+            .width(Fill),
+            iced::widget::Space::new().width(theme::SETTINGS_ROW_GAP),
+            control
+        ]
+        .align_y(Alignment::Center)
+        .padding([theme::SETTINGS_ROW_VERTICAL, 0]),
+        crate::panel_widgets::hairline_h()
+    ]
     .into()
 }
 

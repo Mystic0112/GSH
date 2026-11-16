@@ -33,6 +33,15 @@ pub struct Backdrop {
     pub view: Viewport,
     /// O mundo para a câmera: tamanho, zoom que o mostra inteiro e centro do conteúdo.
     pub extent: Extent,
+    /// Com o que o fundo foi feito: o tamanho do meu mundo. O meu fundo usa o próprio; o de um
+    /// colega usa o meu (o lote acompanha o meu mundo e o cenário).
+    pub built_for: (i64, i64),
+    /// Borda do mundo (`layout.t`) e o miolo jogável (`layout.play`): o lote do colega herda a
+    /// borda da minha fazenda e o escritório cola os lotes pela parede.
+    pub t: i64,
+    pub play: Rect,
+    /// Porta de saída do cenário, onde o mensageiro começa quando não há agente.
+    pub door: (f32, f32),
     /// Quanto o layout comporta (`capPlots`/`capYard`).
     cap_plots: i64,
     cap_yard: i64,
@@ -65,27 +74,67 @@ pub fn viewport(size: Size) -> Viewport {
 impl Backdrop {
     /// Refaz o mundo para `size` e para o que `need` pede (`_rebuild` do Dart).
     pub fn build(size: Size, mode: Mode, need: Need) -> Self {
-        let view = viewport(size);
+        Self::paint(
+            viewport(size),
+            size,
+            mode,
+            need,
+            SEED,
+            |z| snap(z, true),
+            None,
+        )
+    }
+
+    /// A fazenda de um colega (`layoutLot` do Dart): a "janela" é o meu mundo inteiro em z = 1,
+    /// então o lote sai do tamanho do meu (maior só se não couber), com o miolo no meio e a
+    /// mesma borda. `seed` dá a cada colega árvores e móveis diferentes.
+    pub fn build_lot(mine: &Backdrop, mode: Mode, need: Need, seed: u32) -> Self {
+        let view = Viewport {
+            w: mine.width as f64,
+            h: mine.height as f64,
+            left: 0.0,
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+        };
+        let mut lot = Self::paint(view, mine.size, mode, need, seed, |_| 1.0, Some(mine.t));
+        lot.built_for = (mine.width as i64, mine.height as i64);
+        lot
+    }
+
+    fn paint(
+        view: Viewport,
+        size: Size,
+        mode: Mode,
+        need: Need,
+        seed: u32,
+        snap: impl Fn(f64) -> f64,
+        margin: Option<i64>,
+    ) -> Self {
         let mut layout = layout_farm(
             (need.plots as f64 * 1.15).ceil() as i64 + 1,
             (need.yard as f64 * 1.1).ceil() as i64 + 2,
             &view,
-            |z| snap(z, true),
-            None,
+            snap,
+            margin,
         );
         let (bg, fg, fg_y, screens) = match mode {
             Mode::Farm => {
-                let (mut bg, fg, fg_y) = paint_farm(&mut layout, SEED);
+                let (mut bg, fg, fg_y) = paint_farm(&mut layout, seed);
                 // ponytail: cultivos vão no raster porque o canvas desenha imagens por cima das formas
                 paint_crops(&mut bg, &layout.plots);
                 (bg, Some(fg), fg_y, None)
             }
             Mode::Office => {
-                let bg = paint_office(&mut layout, SEED);
+                let bg = paint_office(&mut layout, seed);
                 (bg, None, layout.h, Some(screens()))
             }
         };
         let (width, height) = (layout.w as i32, layout.h as i32);
+        let door = match mode {
+            Mode::Farm => (layout.door.dx as f32, (layout.door.dy + 5.0) as f32),
+            Mode::Office => (layout.pond_cx() as f32, (layout.play.bottom - 4.0) as f32),
+        };
         let plots = layout
             .plots
             .iter()
@@ -102,7 +151,12 @@ impl Backdrop {
                 z: layout.z,
                 cx: center.dx,
                 cy: center.dy,
+                team: None,
             },
+            built_for: (layout.w, layout.h),
+            t: layout.t,
+            play: layout.play,
+            door,
             cap_plots: layout.cap_plots as i64,
             cap_yard: layout.cap_yard,
             width,
@@ -120,6 +174,11 @@ impl Backdrop {
         need.plots > self.cap_plots
             || need.yard > self.cap_yard
             || (self.cap_plots > 8 && (need.plots as f64) < self.cap_plots as f64 * 0.45)
+    }
+
+    /// Tamanho do mundo em unidades de mundo (`layout.w` x `layout.h`).
+    pub fn world(&self) -> (f64, f64) {
+        (f64::from(self.width), f64::from(self.height))
     }
 
     /// Canteiros que o layout comporta.

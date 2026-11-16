@@ -245,20 +245,28 @@ fn ignorados_somem_e_malformada_vira_aviso_com_trecho() {
 }
 
 #[test]
-fn comando_valido_recebe_commands_unavailable_byte_a_byte() {
+fn comando_valido_chega_ao_app_e_recebe_resposta_byte_a_byte() {
     let fx = Fixture::start(Transport::native());
     let cmd = fx.authed(wire::cmd_request("list-panes", None, None));
-    assert_eq!(
-        fx.send(&format!("{cmd}\n")),
-        "{\"ok\":false,\"error\":\"commands unavailable\"}\n"
-    );
-    // O cliente de comando espera a resposta com a conexão aberta: ela chega
-    // sem ele fechar a escrita.
     let mut conn = Conn::connect(&fx.server);
     conn.write_all(format!("{cmd}\n").as_bytes()).unwrap();
-    let mut got = [0u8; 64];
-    let n = conn.read(&mut got).unwrap();
-    assert!(got.get(..n).unwrap().ends_with(b"\n"));
+    let Delivery::Command(command) = fx.rx.recv_timeout(WAIT).unwrap() else {
+        panic!("esperava comando encaminhado ao app");
+    };
+    assert_eq!(
+        command
+            .request
+            .get("cmd")
+            .and_then(serde_json::Value::as_str),
+        Some("list-panes")
+    );
+    command
+        .reply
+        .send(serde_json::json!({"ok": true, "data": []}))
+        .unwrap();
+    let mut got = String::new();
+    conn.read_to_string(&mut got).unwrap();
+    assert_eq!(got, "{\"data\":[],\"ok\":true}\n");
     fx.assert_quiet();
 }
 
@@ -392,11 +400,11 @@ fn tcp_exige_token_e_anuncia_o_endpoint() {
 
     // Comando com token ruim: resposta do app original, byte a byte.
     assert_eq!(
-        fx.send("{\"type\":\"cmd\",\"cmd\":\"list-panes\"}\n"),
+        fx.send("{\"type\":\"cmd\",\"cmd\":\"permission-ask\"}\n"),
         "{\"ok\":false,\"error\":\"invalid token\"}\n"
     );
     // Com o token certo chega na camada de comandos.
-    let cmd = wire::with_token(wire::cmd_request("list-panes", None, None), &tok);
+    let cmd = wire::with_token(wire::cmd_request("permission-ask", None, None), &tok);
     assert_eq!(
         fx.send(&format!("{cmd}\n")),
         "{\"ok\":false,\"error\":\"commands unavailable\"}\n"

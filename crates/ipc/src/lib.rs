@@ -19,5 +19,6 @@
 mod server;
 
 pub use server::{
-    gsh_dir_from_env, Delivery, Endpoint, ServerConfig, ServerError, StatusServer, Transport,
+    gsh_dir_from_env, Delivery, Endpoint, PendingCommand, ServerConfig, ServerError, StatusServer,
+    Transport,
 };

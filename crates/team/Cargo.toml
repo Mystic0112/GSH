@@ -1,0 +1,28 @@
+[package]
+name = "gsh-team"
+description = "GSH team on the LAN: farm announcements (UDP multicast) and agent mail (TCP), AES-256-GCM, wire-compatible with the Flutter app (protocol v2)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Cifra do time: AES-256-GCM + PBKDF2-HMAC-SHA256 (RustCrypto), os mesmos parametros
+# do team_crypto.dart. sha2 0.10 porque o pbkdf2 0.12 usa digest 0.10.
+aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha2 = "0.10"
+# Pacote da fazenda = JSON + gzip (o `gzip.encode` do Dart). Ja esta no Cargo.lock.
+flate2 = "1"
+# Bind com SO_REUSEADDR/SO_REUSEPORT e join no grupo multicast (std nao expoe).
+socket2 = { version = "0.6", features = ["all"] }
+# Corpo da batida do correio (`base64Encode` do Dart).
+base64 = "0.22"
+# Nonce da cifra e id da maquina: bytes do RNG do SO (mesma versao do gsh-ipc).
+getrandom = { version = "0.3", features = ["std"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+# getifaddrs: o filtro "rede do trabalho" olha todas as interfaces IPv4, como o Dart.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

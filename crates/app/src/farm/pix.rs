@@ -44,6 +44,41 @@ impl Pix {
         }
     }
 
+    pub fn line(&mut self, x0: i64, y0: i64, x1: i64, y1: i64, color: u32) {
+        let steps = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
+        for i in 0..=steps {
+            let x = (x0 as f64 + (x1 - x0) as f64 * i as f64 / steps as f64).round() as i64;
+            let y = (y0 as f64 + (y1 - y0) as f64 * i as f64 / steps as f64).round() as i64;
+            self.set(x, y, color);
+        }
+    }
+
+    pub fn oval_fn(
+        &mut self,
+        cx: f64,
+        cy: f64,
+        rx: f64,
+        ry: f64,
+        mut shader: impl FnMut(i64, i64, f64, f64) -> u32,
+    ) {
+        let radius = rx.max(ry) + 1.0;
+        let mut y = (cy - radius).floor() as i64;
+        while y as f64 <= cy + radius {
+            let mut x = (cx - radius).floor() as i64;
+            while x as f64 <= cx + radius {
+                let dx = x as f64 + 0.5 - cx;
+                let dy = y as f64 + 0.5 - cy;
+                let u = dx / rx;
+                let v = dy / ry;
+                if u * u + v * v <= 1.0 {
+                    self.set(x, y, shader(x, y, u, v));
+                }
+                x += 1;
+            }
+            y += 1;
+        }
+    }
+
     /// Contorna toda forma preenchida em `c`: os vazios vizinhos (4 direções) de um cheio.
     pub fn outline(&mut self, c: u32) {
         let mut add = Vec::new();

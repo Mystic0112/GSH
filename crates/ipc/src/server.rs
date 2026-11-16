@@ -15,13 +15,14 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use gsh_core::status::{decode_line, Incoming, LineError, StatusUpdate};
 use gsh_core::wire::{ENV_STATUS_PORT, ENV_STATUS_TOKEN};
+use serde_json::Value;
 use thiserror::Error;
 
 #[cfg(unix)]
@@ -147,8 +148,15 @@ pub enum Endpoint {
 #[derive(Debug)]
 pub enum Delivery {
     Status(StatusUpdate),
+    Command(PendingCommand),
     /// Linha que não é JSON (o app original registrava um aviso com o trecho).
     Malformed(LineError),
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingCommand {
+    pub request: Value,
+    pub reply: SyncSender<Value>,
 }
 
 /// Servidor de status em execução. Derrubar (`stop` ou `Drop`) fecha o listener
@@ -482,13 +490,35 @@ fn handle(mut stream: Stream, shared: &Shared) {
     let Ok(line) = read_line_capped(&mut stream, MAX_LINE_BYTES) else {
         return;
     };
-    let reply: Option<&[u8]> = match decode_line(&line, shared.token.as_deref()) {
+    let reply: Option<Vec<u8>> = match decode_line(&line, shared.token.as_deref()) {
         Ok(Incoming::Status(update)) => {
             let _ = shared.tx.send(Delivery::Status(update));
             None
         }
-        Ok(Incoming::Command) => Some(REPLY_COMMANDS_UNAVAILABLE),
-        Ok(Incoming::BadToken { command: true }) => Some(REPLY_INVALID_TOKEN),
+        Ok(Incoming::Command) => match serde_json::from_str::<Value>(&line) {
+            Ok(request) if request.get("cmd").and_then(Value::as_str) != Some("permission-ask") => {
+                let (reply, response) = mpsc::sync_channel(1);
+                if shared
+                    .tx
+                    .send(Delivery::Command(PendingCommand { request, reply }))
+                    .is_ok()
+                {
+                    let value = response
+                        .recv_timeout(Duration::from_secs(45))
+                        .unwrap_or_else(
+                            |_| serde_json::json!({"ok": false, "error": "command timed out"}),
+                        );
+                    serde_json::to_vec(&value).ok().map(|mut bytes| {
+                        bytes.push(b'\n');
+                        bytes
+                    })
+                } else {
+                    Some(REPLY_COMMANDS_UNAVAILABLE.to_vec())
+                }
+            }
+            _ => Some(REPLY_COMMANDS_UNAVAILABLE.to_vec()),
+        },
+        Ok(Incoming::BadToken { command: true }) => Some(REPLY_INVALID_TOKEN.to_vec()),
         Ok(Incoming::BadToken { command: false } | Incoming::Ignored) => None,
         Err(err) => {
             let _ = shared.tx.send(Delivery::Malformed(err));
@@ -496,7 +526,7 @@ fn handle(mut stream: Stream, shared: &Shared) {
         }
     };
     if let Some(reply) = reply {
-        let _ = stream.write_all(reply).and_then(|()| stream.flush());
+        let _ = stream.write_all(&reply).and_then(|()| stream.flush());
     }
 }
 

@@ -309,6 +309,7 @@ pub struct StatusRuntime {
     /// Arquivos tocados por aba, acumulados entre lotes do hook (`agentFiles` do Flutter).
     activity: AgentFileActivity,
     malformed_count: u64,
+    commands: Vec<gsh_ipc::PendingCommand>,
 }
 
 impl StatusRuntime {
@@ -329,6 +330,7 @@ impl StatusRuntime {
                 panes: BTreeMap::new(),
                 activity: AgentFileActivity::default(),
                 malformed_count: 0,
+                commands: Vec::new(),
             },
             Err(err) => Self {
                 server: None,
@@ -337,6 +339,7 @@ impl StatusRuntime {
                 panes: BTreeMap::new(),
                 activity: AgentFileActivity::default(),
                 malformed_count: 0,
+                commands: Vec::new(),
             },
         }
     }
@@ -350,6 +353,7 @@ impl StatusRuntime {
             panes: BTreeMap::new(),
             activity: AgentFileActivity::default(),
             malformed_count: 0,
+            commands: Vec::new(),
         }
     }
 
@@ -366,6 +370,10 @@ impl StatusRuntime {
     /// Quantidade de linhas malformadas descartadas pelo servidor.
     pub fn malformed_count(&self) -> u64 {
         self.malformed_count
+    }
+
+    pub fn take_commands(&mut self) -> Vec<gsh_ipc::PendingCommand> {
+        std::mem::take(&mut self.commands)
     }
 
     /// Variáveis de ambiente (`GSH_PANE_ID`, `GSH_TAB_ID`, `GSH_STATUS_SOCK` / TCP)
@@ -440,6 +448,10 @@ impl StatusRuntime {
     pub fn apply_delivery(&mut self, delivery: Delivery, now_ms: u64) -> bool {
         match delivery {
             Delivery::Status(update) => self.apply_update(update, now_ms),
+            Delivery::Command(command) => {
+                self.commands.push(command);
+                false
+            }
             Delivery::Malformed(_) => {
                 self.malformed_count = self.malformed_count.saturating_add(1);
                 false

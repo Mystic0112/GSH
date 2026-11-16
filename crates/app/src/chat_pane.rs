@@ -307,6 +307,18 @@ impl ChatPane {
         &self.input
     }
 
+    pub fn working_directory(&self) -> Option<&Path> {
+        self.cwd.as_deref()
+    }
+
+    pub fn deliver_agent_text(&mut self, text: String) -> Result<(), String> {
+        self.ensure_engine_and_send(&text)
+            .map_err(|error| error.to_string())?;
+        self.items.push(ChatItem::User { text });
+        self.busy = true;
+        Ok(())
+    }
+
     pub fn is_busy(&self) -> bool {
         self.busy
     }

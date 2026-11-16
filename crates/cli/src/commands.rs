@@ -22,6 +22,8 @@ pub fn run(cmd: Command) -> Result<Option<String>, CliError> {
         Command::Version => Ok(Some(format!("gsh {}\n", gsh_core::VERSION))),
         Command::Hook { harness } => hook::run(&harness),
         Command::Msg { to, text, json } => msg(&to, &text, json).map(Some),
+        Command::TeamSend { to, text, json } => team_send(&to, &text, json).map(Some),
+        Command::TeamPeers { json } => team_peers(json),
         Command::Deliver {
             to,
             file,
@@ -55,7 +57,11 @@ fn with_newline(text: &str) -> String {
 /// Envia e exige `ok: true`. O aviso do app vai pro stderr (nunca pro stdout,
 /// que pode ser uma linha JSON que agentes parseiam).
 fn call(req: Value) -> Result<Response, CliError> {
-    let resp = transport::request(req, DEFAULT_TIMEOUT)?;
+    call_with_timeout(req, DEFAULT_TIMEOUT)
+}
+
+fn call_with_timeout(req: Value, timeout: Duration) -> Result<Response, CliError> {
+    let resp = transport::request(req, timeout)?;
     if let Some(w) = resp.warning() {
         eprintln!("gsh: {w}");
     }
@@ -75,6 +81,15 @@ fn print_data(data: &Value, key: &str, json: bool) -> String {
     }
 }
 
+fn format_team_send_success(data: &Value, fallback: &str, json: bool) -> String {
+    if json {
+        format!("{data}\n")
+    } else {
+        let destination = data.get("to").and_then(Value::as_str).unwrap_or(fallback);
+        format!("Sent to {destination}.\n")
+    }
+}
+
 fn msg(to: &str, text: &str, json: bool) -> Result<String, CliError> {
     let from = self_tab_id().ok_or_else(|| {
         CliError::usage(
@@ -88,6 +103,39 @@ fn msg(to: &str, text: &str, json: bool) -> Result<String, CliError> {
         Some(json!({"to": to, "text": text})),
     ))?;
     Ok(print_data(&resp.data(), "to", json))
+}
+
+fn team_send(to: &str, text: &str, json: bool) -> Result<String, CliError> {
+    let from = self_tab_id().ok_or_else(|| {
+        CliError::usage("gsh send: GSH_TAB_ID is unset — run it inside a GSH terminal")
+    })?;
+    let resp = call_with_timeout(
+        cmd_request("send", Some(&from), Some(json!({"to": to, "text": text}))),
+        Duration::from_secs(45),
+    )?;
+    Ok(format_team_send_success(&resp.data(), to, json))
+}
+
+fn team_peers(json: bool) -> Result<Option<String>, CliError> {
+    let from = self_tab_id().ok_or_else(|| {
+        CliError::usage("gsh peers: GSH_TAB_ID is unset — run it inside a GSH terminal")
+    })?;
+    let resp = call(cmd_request("peers", Some(&from), None))?;
+    let data = resp.data();
+    if json {
+        return Ok(Some(format!("{data:#}\n")));
+    }
+    let Some(entries) = data.as_array() else {
+        return Ok(Some("(none)\n".into()));
+    };
+    if entries.is_empty() {
+        return Ok(Some("(none)\n".into()));
+    }
+    let lines = entries
+        .iter()
+        .filter_map(|entry| entry.get("label").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    Ok((!lines.is_empty()).then(|| format!("{}\n", lines.join("\n"))))
 }
 
 fn deliver(to: &str, file: &str, note: &str, json: bool) -> Result<String, CliError> {
@@ -161,4 +209,23 @@ fn list_tabs(target: &Target, json: bool) -> Result<Option<String>, CliError> {
     // Lista não vazia só de entradas que não são objeto: o original não imprime nada.
     let lines = format_tab_list(&data);
     Ok((!lines.is_empty()).then(|| format!("{}\n", lines.join("\n"))))
+}
+
+#[cfg(test)]
+mod team_send_output_tests {
+    use super::format_team_send_success;
+    use serde_json::json;
+
+    #[test]
+    fn successful_send_prints_confirmation_and_json_keeps_flutter_data() {
+        let data = json!({"from": "t1", "to": "beta/worker", "team": true});
+        assert_eq!(
+            format_team_send_success(&data, "ignored", false),
+            "Sent to beta/worker.\n"
+        );
+        assert_eq!(
+            format_team_send_success(&data, "ignored", true),
+            "{\"from\":\"t1\",\"team\":true,\"to\":\"beta/worker\"}\n"
+        );
+    }
 }
