@@ -46,7 +46,8 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         .width(Fill)
         .clip(true),
     ];
-    let select_btn = button(tab_label.align_y(Alignment::Center))
+    // o button não centra o conteúdo: a linha ocupa a altura toda e centra ícone e título
+    let select_btn = button(tab_label.height(Fill).align_y(Alignment::Center))
         .width(Fill)
         .height(Fill)
         .padding(0)
