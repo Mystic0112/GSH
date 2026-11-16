@@ -7,6 +7,8 @@ alias of `list-tabs`.
 USAGE:
   gsh msg --to <label|tab-id> <text>       message another agent's tab
                                                (typed + Enter, signed with your tab)
+  gsh send --to <Name/agent> <text>        knock on a teammate's agent over the LAN
+  gsh peers                                list agents reachable through the team
   gsh deliver --to <Name/agent> <file> [note]  hand a file to a teammate's
                                                agent on the office network
   gsh list-tabs       [--json]             list active tabs (alias: list-panes)
@@ -25,7 +27,7 @@ MSG:
   tab's detected `harness` (claudeCode, codex, antigravity, …) or null.
 
 TEAM (office network):
-  gsh msg --to "Bianca/financeiro" "I changed the payments table, check your side"
+  gsh send --to "Bianca/financeiro" "I changed the payments table, check your side"
   gsh deliver --to "Bianca/financeiro" report.pdf "weekly report"
   With the team farm on (same team name and password on both GSHs), a
   teammate's agent is addressed as `Name/agent`. The message knocks on

@@ -20,6 +20,33 @@ pub struct Extent {
     pub z: f64,
     pub cx: f64,
     pub cy: f64,
+    /// Com colegas do time na cena: o mundo todo e o zoom que o mostra inteiro
+    /// (`team`/`teamZ` do FarmCamera). `None` = só a minha fazenda.
+    pub team: Option<TeamBounds>,
+}
+
+/// O conjunto das fazendas (a minha e as dos colegas), em pixels de mundo.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TeamBounds {
+    pub left: f64,
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub z: f64,
+}
+
+impl Extent {
+    /// Limites da câmera: o conjunto com colegas, senão a minha fazenda (`_bounds`).
+    fn bounds(&self) -> (f64, f64, f64, f64) {
+        self.team.map_or((0.0, 0.0, self.w, self.h), |t| {
+            (t.left, t.top, t.right, t.bottom)
+        })
+    }
+
+    /// Zoom mínimo: o que enquadra a minha fazenda ou, com colegas, o conjunto (`minZ`).
+    pub fn min_z(&self) -> f64 {
+        self.team.map_or(self.z, |t| self.z.min(t.z))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -111,15 +138,16 @@ impl Camera {
     pub fn clamp_to(&mut self, e: &Extent, view: Size) {
         let dz = snap(self.z, false);
         let (vw, vh) = (f64::from(view.width) / dz, f64::from(view.height) / dz);
-        self.x = if e.w <= vw {
-            (e.w - vw) / 2.0
+        let (left, top, right, bottom) = e.bounds();
+        self.x = if right - left <= vw {
+            left + (right - left - vw) / 2.0
         } else {
-            self.x.min(e.w - vw).max(0.0)
+            self.x.min(right - vw).max(left)
         };
-        self.y = if e.h <= vh {
-            (e.h - vh) / 2.0
+        self.y = if bottom - top <= vh {
+            top + (bottom - top - vh) / 2.0
         } else {
-            self.y.min(e.h - vh).max(0.0)
+            self.y.min(bottom - vh).max(top)
         };
     }
 
@@ -128,7 +156,7 @@ impl Camera {
         let (sx, sy) = (f64::from(at.x), f64::from(at.y));
         let z0 = snap(self.z, false);
         let (wx, wy) = (self.x + sx / z0, self.y + sy / z0);
-        self.z = (self.z * factor).min(8.0_f64.max(e.z * 3.0)).max(e.z);
+        self.z = (self.z * factor).min(8.0_f64.max(e.z * 3.0)).max(e.min_z());
         let z1 = snap(self.z, false);
         self.x = wx - sx / z1;
         self.y = wy - sy / z1;
@@ -154,6 +182,7 @@ mod tests {
         z: 2.0,
         cx: 200.0,
         cy: 150.0,
+        team: None,
     };
 
     fn viewport(w: f64, h: f64) -> Viewport {
@@ -210,6 +239,32 @@ mod tests {
                 EXTENT.h - f64::from(view.height) / dz
             )
         );
+    }
+
+    /// Com colegas, o zoom mínimo e os limites passam a ser os do conjunto (`team`/`teamZ`).
+    #[test]
+    fn com_colegas_os_limites_sao_os_do_conjunto() {
+        let team = Extent {
+            team: Some(TeamBounds {
+                left: 0.0,
+                top: 0.0,
+                right: 800.0,
+                bottom: 300.0,
+                z: 1.0,
+            }),
+            ..EXTENT
+        };
+        let view = Size::new(800.0, 600.0);
+        let mut cam = Camera::default();
+        cam.fit(&team, &viewport(800.0, 600.0));
+        assert_eq!(team.min_z(), 1.0);
+        // dá para afastar até o conjunto caber, o que a minha fazenda sozinha não deixa
+        cam.zoom_at(Point::new(400.0, 300.0), 0.01, &team, view);
+        assert_eq!(cam.z, 1.0);
+        cam.zoom_at(Point::new(400.0, 300.0), 4.0, &team, view);
+        cam.pan(Vector::new(-1.0e6, 0.0), &team, view);
+        let dz = snap(cam.z, false);
+        assert_eq!(cam.x, 800.0 - f64::from(view.width) / dz);
     }
 
     #[test]

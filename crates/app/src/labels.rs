@@ -433,6 +433,41 @@ pub const SETTINGS_APPEARANCE: &str = "Aparência";
 pub const SETTINGS_TERMINAL: &str = "Terminal";
 pub const SETTINGS_EDITOR: &str = "Editor";
 pub const SETTINGS_NOTIFICATIONS: &str = "Notificações";
+pub const SETTINGS_TEAM: &str = "Fazenda do time";
+pub const SETTINGS_TEAM_ENABLE: &str = "Ver a fazenda dos colegas";
+pub const SETTINGS_TEAM_ENABLE_DESC: &str = "Na mesma rede (ex.: no escritório), cada GSH anuncia a própria fazenda e mostra a dos colegas ao lado da sua — diminua o zoom para ver. Sem servidor: nada sai da rede local. Desligado, nada sai do seu GSH.";
+pub const SETTINGS_TEAM_NAME: &str = "Time";
+pub const SETTINGS_TEAM_NAME_DESC: &str = "Só quem usar o mesmo nome de time se enxerga.";
+pub const SETTINGS_TEAM_NAME_HINT: &str = "ex.: gorila";
+pub const SETTINGS_TEAM_ME: &str = "Seu nome";
+pub const SETTINGS_TEAM_ME_DESC: &str = "Aparece em cima da sua fazenda para os colegas.";
+pub const SETTINGS_TEAM_SHOW_TITLES: &str = "Mostrar títulos das sessões";
+pub const SETTINGS_TEAM_SHOW_TITLES_DESC: &str = "Os títulos podem ter trechos dos seus prompts. Desligado, os colegas veem só a pasta, o status e os tokens de cada agente.";
+pub const SETTINGS_TEAM_SECRET: &str = "Senha do time";
+pub const SETTINGS_TEAM_SECRET_DESC: &str = "Liga a conversa entre agentes: o seu agente pode mandar mensagens e arquivos para os agentes dos colegas, e os deles para o seu. Todo mundo do time usa a mesma senha; sem ela, ninguém bate na sua porta (e a fazenda de quem não tem a senha não aparece).";
+pub const SETTINGS_TEAM_SECRET_HINT: &str = "combinem uma senha";
+pub const SETTINGS_TEAM_DOOR_ALLOW: &str = "Quem pode bater na porta";
+pub const SETTINGS_TEAM_DOOR_ALLOW_DESC: &str =
+    "Nomes dos colegas, separados por vírgula. Vazio = todo o time.";
+pub const SETTINGS_TEAM_DOOR_ALLOW_HINT: &str = "todo o time";
+pub const SETTINGS_TEAM_DOOR_ASK: &str = "Perguntar antes de abrir a porta";
+pub const SETTINGS_TEAM_DOOR_ASK_DESC: &str = "Quando um colega mandar algo para um agente seu, o GSH pergunta a você antes de entregar. Desligado, o seu agente recebe direto, marcado como informação de colega (não como ordem sua).";
+pub const SETTINGS_TEAM_NETWORK: &str = "Rede do trabalho";
+pub const SETTINGS_TEAM_NETWORK_DESC: &str = "Faixa de IP da rede do escritório (ex.: 192.168.10.0/24). Preenchida, o GSH só anuncia e escuta quando você está nela.";
+pub const SETTINGS_TEAM_NETWORK_HINT: &str = "qualquer rede local";
+pub const FARM_TEAM_DOOR_TITLE: &str = "Batendo na porta";
+pub const FARM_TEAM_DOOR_OPEN: &str = "Abrir a porta";
+pub const FARM_TEAM_DOOR_REFUSE: &str = "Recusar";
+pub fn farm_team_door_message(name: &str, agent: &str, target: &str) -> String {
+    format!("{name} (agente {agent}) quer falar com o seu agente {target}")
+}
+pub fn farm_team_door_file(name: &str, agent: &str, file: &str, target: &str) -> String {
+    format!("{name} (agente {agent}) quer entregar {file} ao seu agente {target}")
+}
+
+pub fn farm_peer_banner(name: &str) -> String {
+    format!("TIME · {name}")
+}
 pub const SETTINGS_COMING_SOON: &str = "Em breve";
 pub const SETTINGS_LOCALE: &str = "Idioma";
 pub const SETTINGS_LOCALE_HINT: &str = "Ex.: pt-BR ou en; vazio acompanha o sistema";

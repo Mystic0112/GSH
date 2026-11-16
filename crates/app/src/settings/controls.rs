@@ -1,5 +1,6 @@
 //! Validação por seção e alteração pontual do TOML existente.
 use super::{Error, Section, Settings};
+use gsh_config::schema::FarmTeam;
 use std::path::Path;
 
 pub fn save(path: &Path, settings: &Settings) -> Result<gsh_config::Config, Error> {
@@ -13,6 +14,7 @@ pub fn save(path: &Path, settings: &Settings) -> Result<gsh_config::Config, Erro
         .parse::<toml_edit::DocumentMut>()
         .map_err(Error::Document)?;
     match settings.section {
+        Section::Team => return save_team(path, &settings.current.farm.team),
         Section::Appearance => {
             let size = number(
                 &settings.interface_size,
@@ -118,6 +120,47 @@ fn table<'a>(
         .ok_or(Error::InvalidSection)
 }
 
+/// Persiste os campos de `[farm.team]`, preservando o restante do TOML como o Flutter faz ao
+/// atualizar uma preferência isolada.
+pub fn save_team(path: &Path, team: &FarmTeam) -> Result<gsh_config::Config, Error> {
+    let _ = gsh_config::load(path).map_err(Error::Config)?;
+    let original = match std::fs::read_to_string(path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(Error::Io(error)),
+    };
+    let mut doc = original
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(Error::Document)?;
+    let farm = table(&mut doc, "farm")?;
+    if !farm.contains_key("team") {
+        farm.insert("team", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    let team_table = farm
+        .get_mut("team")
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .ok_or(Error::InvalidSection)?;
+    team_table.insert("enabled", toml_edit::value(team.enabled));
+    team_table.insert("name", toml_edit::value(team.name.trim()));
+    team_table.insert("me", toml_edit::value(team.me.trim()));
+    team_table.insert("showTitles", toml_edit::value(team.show_titles));
+    team_table.insert("network", toml_edit::value(team.network.trim()));
+    team_table.insert("doorAsk", toml_edit::value(team.door_ask));
+    team_table.insert("doorAllow", toml_edit::value(team.door_allow.trim()));
+    if team.secret.is_empty() {
+        team_table.remove("secret");
+    } else {
+        team_table.insert("secret", toml_edit::value(&team.secret));
+    }
+    let contents = doc.to_string();
+    let config = gsh_config::load::parse(path, &contents).map_err(Error::Config)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(Error::Io)?;
+    }
+    super::write_atomic(path, &contents)?;
+    Ok(config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +259,39 @@ mod tests {
         assert_eq!(cfg.editor.tab_size, 4);
         assert!(cfg.editor.syntax_highlight);
         assert!(!cfg.editor.word_wrap);
+    }
+
+    #[test]
+    fn team_settings_are_saved_in_flutter_compatible_toml_and_keep_unknown_keys() {
+        let dir = std::env::temp_dir().join(format!("gsh-team-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "futureKey = 'keep'\n[farm]\nscenery = 'office'\n").unwrap();
+        let config = save_team(
+            &path,
+            &FarmTeam {
+                enabled: true,
+                name: " core ".into(),
+                me: " Ana ".into(),
+                show_titles: true,
+                network: " 192.168.1.0/24 ".into(),
+                secret: "segredo".into(),
+                door_ask: true,
+                door_allow: "ana, bia".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(config.farm.scenery, gsh_config::schema::FarmScenery::Office);
+        assert!(config.farm.team.enabled);
+        assert_eq!(config.farm.team.name, "core");
+        assert_eq!(config.farm.team.me, "Ana");
+        assert_eq!(config.farm.team.network, "192.168.1.0/24");
+        assert_eq!(config.farm.team.secret, "segredo");
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("futureKey = 'keep'"));
+        assert!(contents.contains("doorAllow = \"ana, bia\""));
+        save_team(&path, &FarmTeam::default()).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("secret ="));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

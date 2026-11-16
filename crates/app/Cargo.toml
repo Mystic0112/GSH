@@ -21,6 +21,7 @@ gsh-harness = { path = "../harness" }
 gsh-search = { path = "../search" }
 gsh-ipc = { path = "../ipc" }
 gsh-term = { path = "../term" }
+gsh-team = { path = "../team" }
 iced = { version = "0.14", features = ["advanced", "canvas", "tokio", "svg", "image"] }
 rfd.workspace = true
 serde_json.workspace = true

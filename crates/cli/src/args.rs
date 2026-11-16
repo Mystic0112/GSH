@@ -209,6 +209,14 @@ pub enum Command {
         text: String,
         json: bool,
     },
+    TeamSend {
+        to: String,
+        text: String,
+        json: bool,
+    },
+    TeamPeers {
+        json: bool,
+    },
     Deliver {
         to: String,
         file: String,
@@ -246,6 +254,10 @@ pub fn parse(argv: &[String]) -> Result<Command, CliError> {
             harness: harness_from(args),
         }),
         "msg" => parse_msg(args),
+        "send" => parse_team_send(args),
+        "peers" => Ok(Command::TeamPeers {
+            json: Flags::parse(args)?.json,
+        }),
         "deliver" => parse_deliver(args),
         "new-tab" => parse_new_tab(args),
         "close-tab" => parse_close_tab(args),
@@ -259,6 +271,26 @@ pub fn parse(argv: &[String]) -> Result<Command, CliError> {
         }
         other => Err(CliError::usage(format!("gsh: unknown verb: {other}"))),
     }
+}
+
+fn parse_team_send(args: &[String]) -> Result<Command, CliError> {
+    if wants_help(args) {
+        return Ok(Command::Help("gsh send --to <Name/agent> [--json] <text...>\n  Sends a message to a teammate's agent on the office network."));
+    }
+    let (to, rest) = split_to(args);
+    let parsed = Flags::parse(&rest)?;
+    let to = to
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CliError::usage("gsh send: missing --to"))?;
+    let text = parsed.positionals.join(" ");
+    if text.is_empty() {
+        return Err(CliError::usage("gsh send: missing text"));
+    }
+    Ok(Command::TeamSend {
+        to,
+        text,
+        json: parsed.json,
+    })
 }
 
 fn wants_help(args: &[String]) -> bool {
@@ -552,6 +584,30 @@ mod tests {
         assert_eq!(
             usage_msg(parse(&v(&["msg", "--lines"]))),
             "gsh: --lines requires a value"
+        );
+    }
+
+    #[test]
+    fn team_send_le_colega_agente_e_texto_para_o_app() {
+        assert_eq!(
+            parse(&v(&["send", "--to", "Bianca/financeiro", "diff", "ready",])).unwrap(),
+            Command::TeamSend {
+                to: "Bianca/financeiro".into(),
+                text: "diff ready".into(),
+                json: false,
+            }
+        );
+        assert_eq!(
+            parse(&v(&["send", "--to=Bianca/financeiro", "--json", "hello"])).unwrap(),
+            Command::TeamSend {
+                to: "Bianca/financeiro".into(),
+                text: "hello".into(),
+                json: true,
+            }
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["send", "--to", "Bianca/financeiro"]))),
+            "gsh send: missing text"
         );
     }
 
