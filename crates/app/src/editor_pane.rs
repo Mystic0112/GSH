@@ -1,6 +1,6 @@
 //! Adaptador de interação do editor iced; o documento pertence a EditorState.
 use crate::{editor_state::EditorState, theme};
-use iced::widget::text_editor::{Action, Content, Cursor};
+use iced::widget::text_editor::{Action, Content, Cursor, Position};
 use iced::Task;
 
 #[derive(Debug, Clone)]
@@ -136,6 +136,32 @@ impl EditorPane {
             }
         }
         Task::none()
+    }
+    /// Resultado de busca: cursor no início da linha (base 1) e rolagem até ela, como o
+    /// `_reveal(select: false)` do Flutter. Linha fora do arquivo: não faz nada.
+    pub fn reveal_line(&mut self, line: usize) -> Task<EditorMsg> {
+        let Some(index) = line
+            .checked_sub(1)
+            .filter(|index| *index < self.content.line_count())
+        else {
+            return Task::none();
+        };
+        self.content.move_to(Cursor {
+            position: Position {
+                line: index,
+                column: 0,
+            },
+            selection: None,
+        });
+        let y =
+            crate::editor_scroll::reveal_offset(index, theme::SIZE_MONO * theme::LINE_HEIGHT_MONO);
+        iced::widget::operation::scroll_to(
+            self.scroll_id.clone(),
+            iced::widget::scrollable::AbsoluteOffset {
+                x: Some(0.0),
+                y: Some(y),
+            },
+        )
     }
     fn restore(&mut self, cursor: Cursor) {
         self.content = Content::with_text(self.state.buffer.text());

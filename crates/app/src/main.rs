@@ -18,6 +18,8 @@ pub mod chat_composer;
 pub mod chat_pane;
 pub mod chat_view;
 pub mod claude_hook_installer;
+pub mod content_search_panel;
+pub mod content_search_state;
 pub mod db_pane;
 pub mod editor_gutter;
 pub mod editor_highlight;
@@ -79,6 +81,8 @@ use crate::agent_status::{
     now_epoch_ms, pane_id_for_term, term_id_from_pane_id, PaneDescriptor, StatusRuntime,
 };
 use crate::chat_pane::{ChatMsg, ChatPane};
+use crate::content_search_panel::SearchMsg;
+use crate::content_search_state::SearchState;
 use crate::file_tree::{FileTree, ViewerHook};
 use crate::file_viewer::FileViewerState;
 use crate::files_panel::FilesMsg;
@@ -96,6 +100,17 @@ use crate::topbar::TopbarProps;
 /// Intervalo de polling do canal de status na `Subscription` do `Shell` (50 ms).
 const STATUS_POLL_INTERVAL_MS: u64 = 50;
 
+/// Quadro do spinner da busca (~30 fps).
+const SEARCH_SPIN_TICK_MS: u64 = 33;
+
+/// Espera do debounce da busca (200 ms) sem ocupar a thread da UI.
+async fn search_debounce() {
+    let _ = tokio::task::spawn_blocking(|| {
+        std::thread::sleep(Duration::from_millis(content_search_state::DEBOUNCE_MS));
+    })
+    .await;
+}
+
 #[derive(Debug, Clone)]
 enum Msg {
     Island(IslandMsg),
@@ -107,6 +122,9 @@ enum Msg {
     Files(FilesMsg),
     Git(git_panel::GitMsg),
     SelectRightTab(RightTab),
+    Search(SearchMsg),
+    /// Ctrl/Cmd+Shift+F: mostra o painel direito na aba Busca e foca o campo.
+    FocusSearch,
     Gallery(GalleryMsg),
     GalleryCreated(Result<PathBuf, GalleryError>),
     DismissGalleryError,
@@ -173,6 +191,8 @@ struct Shell {
     git: git_state::GitState,
     /// Aba escolhida do painel direito; a exibida é `right_tab()` (cai em Arquivos se sumiu).
     right_tab: RightTab,
+    /// Aba Busca: campo, toggles e resultados (somem ao sair da aba, como no Flutter).
+    search: SearchState,
     /// Falha da criação de um modelo da Galeria, mostrada num diálogo.
     gallery_error: Option<GalleryError>,
     rail_open: bool,
@@ -230,6 +250,7 @@ impl Default for Shell {
             file_create_generation: 0,
             git,
             right_tab: RightTab::default(),
+            search: SearchState::default(),
             gallery_error: None,
             rail_open: true,
             files_open: true,
@@ -249,6 +270,7 @@ impl Shell {
     /// Quais abas do painel direito existem agora (git: a pasta é um repo; galeria: há workspace).
     fn right_available(&self) -> right_tabs::Available {
         right_tabs::Available {
+            search: self.workspaces.active().is_some(),
             git: self.git.root.is_some(),
             gallery: self.workspaces.active().is_some(),
         }
@@ -257,6 +279,108 @@ impl Shell {
     /// Aba do painel direito que aparece: a escolhida, ou Arquivos se a condição dela sumiu.
     fn right_tab(&self) -> RightTab {
         self.right_tab.effective(self.right_available())
+    }
+
+    /// Carrega o arquivo (editor ou visualizador) e o abre no pane focado; devolve o caminho
+    /// canônico que indexa `editors` e `file_viewers`.
+    fn open_in_editor(&mut self, target: PathBuf) -> PathBuf {
+        let target = target.canonicalize().unwrap_or(target);
+        if !self.editors.contains_key(&target) && !self.file_viewers.contains_key(&target) {
+            match FileViewerState::load(&target) {
+                FileViewerState::Loaded(doc) => {
+                    self.editors.insert(
+                        target.clone(),
+                        editor_pane::EditorPane::new(target.clone(), doc.into_source())
+                            .with_config(self.settings.current.editor.clone()),
+                    );
+                }
+                fallback => {
+                    self.file_viewers.insert(target.clone(), fallback);
+                }
+            }
+        }
+        self.panes.focused_model_mut().open_file(target.clone());
+        target
+    }
+
+    /// Clique num resultado da busca: abre o arquivo e revela a linha (`openSearchResult`).
+    fn open_search_result(&mut self, relative: &str, line: usize) -> Task<Msg> {
+        let Some(path) = self.file_tree.root().map(|root| root.join(relative)) else {
+            return Task::none();
+        };
+        let target = self.open_in_editor(path);
+        match self.editors.get_mut(&target) {
+            Some(editor) => editor
+                .reveal_line(line)
+                .map(move |message| Msg::Editor(target.clone(), message)),
+            None => Task::none(),
+        }
+    }
+
+    /// Dispara a busca do estado atual numa thread própria; os lotes voltam por mensagem.
+    fn run_search(&mut self) -> Task<Msg> {
+        let root = self.file_tree.root().map(Path::to_path_buf);
+        let Some(launch) = self.search.begin(root) else {
+            return Task::none();
+        };
+        let generation = launch.generation;
+        let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+        let spawned = std::thread::Builder::new()
+            .name("gsh-content-search".into())
+            .spawn(move || {
+                let outcome = gsh_search::search(&launch.query, &launch.cancel, |batch| {
+                    let _ = sender.unbounded_send(SearchMsg::Batch(generation, batch));
+                });
+                let _ = sender.unbounded_send(SearchMsg::Finished(generation, outcome));
+            });
+        if spawned.is_err() {
+            self.search.finish(generation, Ok(()));
+            return Task::none();
+        }
+        Task::run(receiver, Msg::Search)
+    }
+
+    fn update_search(&mut self, msg: SearchMsg) -> Task<Msg> {
+        match msg {
+            SearchMsg::TermChanged(term) => {
+                let token = self.search.type_term(term);
+                Task::perform(search_debounce(), move |()| {
+                    Msg::Search(SearchMsg::DebounceElapsed(token))
+                })
+            }
+            SearchMsg::DebounceElapsed(token) if self.search.debounce_due(token) => {
+                self.run_search()
+            }
+            SearchMsg::DebounceElapsed(_) => Task::none(),
+            SearchMsg::Toggle(toggle) => {
+                self.search.toggle(toggle);
+                self.run_search()
+            }
+            SearchMsg::ToggleGroup(path) => {
+                self.search.toggle_group(path);
+                Task::none()
+            }
+            SearchMsg::Clear => {
+                self.search.type_term(String::new());
+                Task::batch([
+                    self.run_search(),
+                    iced::widget::operation::focus(content_search_panel::INPUT_ID),
+                ])
+            }
+            SearchMsg::Open(relative, line) => self.open_search_result(&relative, line),
+            SearchMsg::Batch(generation, batch) => {
+                self.search.apply_batch(generation, batch);
+                Task::none()
+            }
+            SearchMsg::Finished(generation, outcome) => {
+                self.search.finish(generation, outcome);
+                Task::none()
+            }
+            SearchMsg::Spin => {
+                self.search.spin_ms = self.search.spin_ms.wrapping_add(SEARCH_SPIN_TICK_MS);
+                Task::none()
+            }
+        }
     }
 
     fn active_workspace_dir(&self) -> Option<&Path> {
@@ -511,6 +635,12 @@ impl Shell {
             Msg::Terminal(TerminalMsg::Keyboard(_)) if self.pending_close_pane.is_some() => {
                 Task::none()
             }
+            // Ctrl/Cmd+Shift+F é do shell (`FocusSearch`), não vai para o PTY
+            Msg::Terminal(TerminalMsg::Keyboard(iced::keyboard::Event::KeyPressed {
+                ref key,
+                modifiers,
+                ..
+            })) if content_search_panel::is_focus_shortcut(key, modifiers) => Task::none(),
             Msg::Terminal(term_msg) => {
                 if matches!(term_msg, TerminalMsg::Tick)
                     && self.status_runtime.drain_deliveries(now_epoch_ms())
@@ -589,27 +719,7 @@ impl Shell {
                     FilesMsg::ToggleDir(dir) => self.file_tree.toggle_dir(&dir),
                     FilesMsg::SelectFile(file_path) => {
                         let ViewerHook::OpenFile(target) = self.file_tree.select_file(file_path);
-                        let target = target.canonicalize().unwrap_or(target);
-                        if !self.editors.contains_key(&target)
-                            && !self.file_viewers.contains_key(&target)
-                        {
-                            match FileViewerState::load(&target) {
-                                FileViewerState::Loaded(doc) => {
-                                    self.editors.insert(
-                                        target.clone(),
-                                        editor_pane::EditorPane::new(
-                                            target.clone(),
-                                            doc.into_source(),
-                                        )
-                                        .with_config(self.settings.current.editor.clone()),
-                                    );
-                                }
-                                fallback => {
-                                    self.file_viewers.insert(target.clone(), fallback);
-                                }
-                            }
-                        }
-                        self.panes.focused_model_mut().open_file(target);
+                        self.open_in_editor(target);
                     }
                     FilesMsg::CollapseAll => self.file_tree.collapse_all(),
                     FilesMsg::Refresh => {
@@ -681,6 +791,9 @@ impl Shell {
                 Task::none()
             }
             Msg::SelectRightTab(tab) => {
+                if self.right_tab() == RightTab::Search && tab != RightTab::Search {
+                    self.search.reset();
+                }
                 self.right_tab = tab;
                 if tab == RightTab::Git && !self.git.busy {
                     return self
@@ -689,6 +802,18 @@ impl Shell {
                         .map(Msg::GitResult);
                 }
                 Task::none()
+            }
+            Msg::Search(msg) => self.update_search(msg),
+            Msg::FocusSearch => {
+                if self.workspaces.active().is_none() {
+                    return Task::none();
+                }
+                self.files_open = true;
+                self.right_tab = RightTab::Search;
+                Task::batch([
+                    iced::widget::operation::focus(content_search_panel::INPUT_ID),
+                    iced::widget::operation::select_all(content_search_panel::INPUT_ID),
+                ])
             }
             Msg::Gallery(GalleryMsg::Create(template)) => match self.file_tree.root() {
                 Some(root) => Task::perform(
@@ -984,10 +1109,46 @@ impl Shell {
         } else {
             Subscription::none()
         };
+        let search_shortcut = iced::event::listen_with(|event, _, _| match event {
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. })
+                if content_search_panel::is_focus_shortcut(&key, modifiers) =>
+            {
+                Some(Msg::FocusSearch)
+            }
+            _ => None,
+        });
+        let search_visible = self.files_open && self.right_tab() == RightTab::Search;
+        // Esc no campo (o text_input captura e desfoca): limpa a busca
+        let search_clear = if search_visible {
+            iced::event::listen_with(|event, status, _| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                    ..
+                }) if status == iced::event::Status::Captured => {
+                    Some(Msg::Search(SearchMsg::Clear))
+                }
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
+        let search_spinner = if search_visible && self.search.searching {
+            iced::time::every(Duration::from_millis(SEARCH_SPIN_TICK_MS))
+                .map(|_| Msg::Search(SearchMsg::Spin))
+        } else {
+            Subscription::none()
+        };
         Subscription::batch(
-            [status_sub, windows, cancel_create]
-                .into_iter()
-                .chain(pane_subs),
+            [
+                status_sub,
+                windows,
+                cancel_create,
+                search_shortcut,
+                search_clear,
+                search_spinner,
+            ]
+            .into_iter()
+            .chain(pane_subs),
         )
     }
 
@@ -1174,6 +1335,10 @@ impl Shell {
                     self.file_create.as_ref(),
                 )
                 .map(Msg::Files),
+                RightTab::Search => {
+                    content_search_panel::view(&self.search, self.file_tree.root().is_some())
+                        .map(Msg::Search)
+                }
                 RightTab::Git => git_panel::view(&self.git).map(Msg::Git),
                 RightTab::Gallery => {
                     gallery_panel::view(self.file_tree.root().is_some()).map(Msg::Gallery)
@@ -1338,6 +1503,7 @@ mod tests {
             file_create_generation: 0,
             git: git_state::GitState::default(),
             right_tab: RightTab::default(),
+            search: SearchState::default(),
             gallery_error: None,
             rail_open: true,
             files_open: true,
@@ -1780,6 +1946,67 @@ mod tests {
             .contains(&PaneTab::File(opened.clone())));
         assert!(shell.editors.contains_key(&opened));
         assert_eq!(shell.gallery_error, None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn search_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gsh-shell-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn atalho_de_busca_mostra_o_painel_e_troca_para_a_aba_busca() {
+        let mut shell = test_shell();
+        shell.files_open = false;
+        let _ = shell.update(Msg::FocusSearch);
+        assert!(shell.files_open);
+        assert_eq!(shell.right_tab(), RightTab::Search);
+        // sem workspace: nada acontece
+        let mut shell = test_shell();
+        shell.files_open = false;
+        shell.workspaces = WorkspaceList::new(Vec::new());
+        let _ = shell.update(Msg::FocusSearch);
+        assert!(!shell.files_open);
+        assert_eq!(shell.right_tab(), RightTab::Files);
+    }
+
+    #[test]
+    fn sair_da_aba_busca_limpa_campo_e_resultados() {
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::SelectRightTab(RightTab::Search));
+        let _ = shell.update(Msg::Search(SearchMsg::TermChanged("needle".into())));
+        assert_eq!(shell.search.term, "needle");
+        let _ = shell.update(Msg::SelectRightTab(RightTab::Search));
+        assert_eq!(shell.search.term, "needle");
+        let _ = shell.update(Msg::SelectRightTab(RightTab::Gallery));
+        assert!(shell.search.term.is_empty());
+    }
+
+    #[test]
+    fn busca_so_dispara_no_ultimo_debounce() {
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::Search(SearchMsg::TermChanged("a".into())));
+        let stale = shell.search.type_term("ab".into()) - 1;
+        let _ = shell.update(Msg::Search(SearchMsg::DebounceElapsed(stale)));
+        assert!(!shell.search.searching);
+    }
+
+    #[test]
+    fn clicar_no_resultado_abre_o_arquivo_na_linha() {
+        let mut shell = test_shell();
+        let dir = search_dir("open-result");
+        std::fs::write(dir.join("a.txt"), "um\ndois\ntres\n").unwrap();
+        shell.file_tree.set_root(Some(dir.clone()));
+        let _ = shell.update(Msg::Search(SearchMsg::Open("a.txt".into(), 3)));
+        let opened = dir.join("a.txt").canonicalize().unwrap();
+        assert!(shell
+            .panes
+            .focused_model()
+            .tabs()
+            .contains(&PaneTab::File(opened.clone())));
+        let cursor = shell.editors.get(&opened).unwrap().content.cursor();
+        assert_eq!((cursor.position.line, cursor.position.column), (2, 0));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -17,6 +17,7 @@ gsh-config = { path = "../config" }
 gsh-core = { path = "../core" }
 gsh-editor = { path = "../editor" }
 gsh-git = { path = "../git" }
+gsh-search = { path = "../search" }
 gsh-ipc = { path = "../ipc" }
 gsh-term = { path = "../term" }
 iced = { version = "0.14", features = ["advanced", "canvas", "tokio", "svg", "image"] }

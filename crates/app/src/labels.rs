@@ -493,6 +493,29 @@ pub const SETTINGS_LOCALES: [&str; 4] = [
 pub const FILES_TOOLTIP: &str = "Arquivos";
 pub const SOURCE_CONTROL_TOOLTIP: &str = "Controle de versão";
 pub const GALLERY_TOOLTIP: &str = "Galeria";
+pub const SEARCH_TOOLTIP: &str = "Buscar";
+pub const ICON_SEARCH_TAB: &str = "\u{ef7a}";
+
+// Busca por conteúdo (`pt_BR.i18n.json` -> `gsh.contentSearch`)
+pub const CONTENT_SEARCH_SECTION: &str = "BUSCA";
+pub const CONTENT_SEARCH_PLACEHOLDER: &str = "Buscar nos arquivos";
+pub const CONTENT_SEARCH_MATCH_CASE: &str = "Diferenciar maiúsculas";
+pub const CONTENT_SEARCH_WHOLE_WORD: &str = "Palavra inteira";
+pub const CONTENT_SEARCH_USE_REGEX: &str = "Usar expressão regular";
+pub const CONTENT_SEARCH_INVALID_REGEX: &str = "Expressão regular inválida.";
+pub const CONTENT_SEARCH_TYPE_TO_SEARCH: &str = "Digite para buscar em todos os arquivos.";
+pub const CONTENT_SEARCH_SEARCHING: &str = "Buscando…";
+pub const CONTENT_SEARCH_NO_RESULTS: &str = "Nenhum resultado.";
+pub const CONTENT_SEARCH_ELLIPSIS: &str = "…";
+// Rótulos dos toggles (fixos no Flutter, não traduzidos)
+pub const CONTENT_SEARCH_TOGGLE_CASE: &str = "Aa";
+pub const CONTENT_SEARCH_TOGGLE_WORD: &str = "ab";
+pub const CONTENT_SEARCH_TOGGLE_REGEX: &str = ".*";
+
+/// Pílula do cabeçalho: texto fixo em inglês no Flutter (`'$total in $files'`).
+pub fn content_search_summary(total: usize, files: usize) -> String {
+    format!("{total} in {files}")
+}
 pub const GALLERY_SECTION_UPPER: &str = "GALERIA";
 pub const ICON_GALLERY: &str = "\u{e660}";
 pub const GALLERY_INTRO: &str =

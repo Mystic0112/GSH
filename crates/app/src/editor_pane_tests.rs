@@ -46,3 +46,28 @@ mod path_tests {
         assert_eq!(pane.state.buffer.text(), "á\tb");
     }
 }
+
+#[cfg(test)]
+mod reveal_tests {
+    use super::*;
+
+    #[test]
+    fn reveal_line_puts_the_cursor_at_the_start_of_the_line_without_selecting() {
+        let mut pane = EditorPane::new("f.rs".into(), "one\ntwo\n  three\n".into());
+        let _ = pane.reveal_line(3);
+        let cursor = pane.content.cursor();
+        assert_eq!((cursor.position.line, cursor.position.column), (2, 0));
+        assert!(cursor.selection.is_none());
+        assert_eq!(pane.state.buffer.text(), "one\ntwo\n  three\n");
+        assert!(!pane.state.buffer.is_dirty());
+    }
+
+    #[test]
+    fn reveal_line_ignores_lines_outside_the_file() {
+        let mut pane = EditorPane::new("f.rs".into(), "one\ntwo".into());
+        let _ = pane.reveal_line(2);
+        let _ = pane.reveal_line(0);
+        let _ = pane.reveal_line(99);
+        assert_eq!(pane.content.cursor().position.line, 1);
+    }
+}

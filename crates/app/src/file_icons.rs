@@ -132,12 +132,22 @@ pub fn asset_view<Message: 'static>(stem: &str, size: f32) -> Element<'static, M
 }
 
 pub fn view<Message: 'static>(name: &str, is_dir: bool, open: bool) -> Element<'static, Message> {
+    view_sized(name, is_dir, open, theme::FILE_TREE_ICON_SIZE)
+}
+
+/// Como [`view`], com o tamanho em px (a Busca usa 15, a árvore 16).
+pub fn view_sized<Message: 'static>(
+    name: &str,
+    is_dir: bool,
+    open: bool,
+    size: f32,
+) -> Element<'static, Message> {
     if uses_gsh_logo(name, is_dir) {
-        gsh_logo(theme::FILE_TREE_ICON_SIZE)
+        gsh_logo(size)
     } else if let Some(bytes) = resolve(name, is_dir, open) {
         svg(svg::Handle::from_memory(bytes))
-            .width(theme::FILE_TREE_ICON_SIZE)
-            .height(theme::FILE_TREE_ICON_SIZE)
+            .width(size)
+            .height(size)
             .into()
     } else {
         text(if is_dir {
@@ -146,7 +156,7 @@ pub fn view<Message: 'static>(name: &str, is_dir: bool, open: bool) -> Element<'
             labels::ICON_FILE_ITEM
         })
         .font(theme::FONT_ICON)
-        .size(theme::FILE_TREE_ICON_SIZE)
+        .size(size)
         .color(theme::palette().text3)
         .into()
     }

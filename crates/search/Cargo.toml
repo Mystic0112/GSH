@@ -1,0 +1,15 @@
+[package]
+name = "gsh-search"
+description = "GSH: busca por conteudo (find-in-files) no workspace, sem UI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# O Flutter usa RegExp (lookaround e backreference); mesma versao que o syntect ja traz.
+fancy-regex = "0.16.2"
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

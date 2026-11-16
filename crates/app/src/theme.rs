@@ -6,7 +6,7 @@
 
 use gsh_term::{indexed_to_rgb, Cell, CellColor, NamedColor, Rgb};
 use iced::font::{Style as FontStyle, Weight};
-use iced::{Color, Font};
+use iced::{Color, Font, Padding};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Estrutura completa de tokens de superfície, borda, texto, marca e semântica
@@ -483,6 +483,57 @@ pub const FILE_PANEL_HEADER_LEFT: f32 = 12.0;
 pub const FILE_PANEL_HEADER_TOP: f32 = 10.0;
 pub const FILE_PANEL_HEADER_RIGHT: f32 = 6.0;
 pub const FILE_PANEL_HEADER_BOTTOM: f32 = 4.0;
+// Aba Busca (`content_search_panel.dart`)
+pub const SEARCH_HEADER_HEIGHT: f32 = 34.0;
+pub const SEARCH_HEADER_LEFT: f32 = 12.0;
+pub const SEARCH_HEADER_RIGHT: f32 = 8.0;
+pub const SEARCH_HEADER_GAP: f32 = 8.0;
+pub const SEARCH_PILL_TEXT_SIZE: f32 = 10.5;
+pub const SEARCH_PILL_PADDING: [f32; 2] = [1.0, 7.0];
+pub const SEARCH_PILL_RADIUS: f32 = 10.0;
+pub const SEARCH_SPINNER_SIZE: f32 = 12.0;
+pub const SEARCH_FIELD_PADDING: Padding = Padding {
+    top: 2.0,
+    right: 10.0,
+    bottom: 10.0,
+    left: 10.0,
+};
+pub const SEARCH_INPUT_SIZE: f32 = 13.0;
+pub const SEARCH_INPUT_PADDING: [f32; 2] = [6.0, 8.0];
+pub const SEARCH_INPUT_RADIUS: f32 = 6.0;
+pub const SEARCH_FIELD_GAP: f32 = 6.0;
+pub const SEARCH_TOGGLE_SIZE: f32 = 26.0;
+pub const SEARCH_TOGGLE_TEXT_SIZE: f32 = 11.5;
+pub const SEARCH_TOGGLE_ACTIVE_ALPHA: f32 = 0.18;
+pub const SEARCH_MESSAGE_PADDING: Padding = Padding {
+    top: 4.0,
+    right: 12.0,
+    bottom: 12.0,
+    left: 12.0,
+};
+pub const SEARCH_LIST_BOTTOM: f32 = 8.0;
+pub const SEARCH_GROUP_PADDING: [f32; 2] = [4.0, 8.0];
+pub const SEARCH_GROUP_ICON_SIZE: f32 = 15.0;
+pub const SEARCH_GROUP_CHEVRON_GAP: f32 = 2.0;
+pub const SEARCH_GROUP_GAP: f32 = 6.0;
+pub const SEARCH_GROUP_NAME_SIZE: f32 = 12.5;
+pub const SEARCH_GROUP_DIR_SIZE: f32 = 11.0;
+pub const SEARCH_COUNT_TEXT_SIZE: f32 = 10.0;
+pub const SEARCH_COUNT_PADDING: [f32; 2] = [1.0, 6.0];
+pub const SEARCH_COUNT_RADIUS: f32 = 9.0;
+pub const SEARCH_MATCH_PADDING: Padding = Padding {
+    top: 2.0,
+    right: 8.0,
+    bottom: 2.0,
+    left: 14.0,
+};
+pub const SEARCH_MATCH_NUMBER_WIDTH: f32 = 34.0;
+pub const SEARCH_MATCH_GAP: f32 = 10.0;
+pub const SEARCH_MATCH_TEXT_SIZE: f32 = 11.5;
+pub const SEARCH_MATCH_HIGHLIGHT_ALPHA: f32 = 0.28;
+pub const SEARCH_MATCH_RADIUS: f32 = 7.0;
+/// Rolagem do reveal: a linha fica 80px abaixo do topo (`code_editor.dart:_reveal`).
+pub const EDITOR_REVEAL_MARGIN: f32 = 80.0;
 // Barra de abas do painel direito e aba Galeria (`file_tree_panel.dart`, `gallery_panel.dart`)
 pub const RIGHT_TAB_BAR_LEFT: f32 = 14.0;
 pub const RIGHT_TAB_BAR_RIGHT: f32 = 8.0;
