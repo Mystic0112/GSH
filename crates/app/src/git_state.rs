@@ -47,7 +47,6 @@ pub struct GitState {
     pub message: String,
     pub busy: bool,
     pub history_open: bool,
-    pub git_open: bool,
     pub committing: bool,
     pub renames: BTreeMap<String, String>,
     generation: u64,

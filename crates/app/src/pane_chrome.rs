@@ -131,27 +131,27 @@ fn tool_button<'a, M: Clone + 'a>(
     if !show_tooltip {
         return button.into();
     }
-    tooltip(
-        button,
-        container(
-            text(tip)
-                .font(theme::FONT_BODY)
-                .size(theme::SIZE_LABEL)
-                .color(theme::palette().text),
-        )
-        .padding([4, 8])
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::palette().panel2)),
-            border: Border {
-                color: theme::palette().border2,
-                width: 1.0,
-                radius: theme::RADIUS_BUTTON.into(),
-            },
-            ..Default::default()
-        }),
-        tooltip::Position::Bottom,
+    tooltip(button, tip_bubble(tip), tooltip::Position::Bottom).into()
+}
+
+/// Balão de dica (tooltip do Flutter): `panel2`, borda `border2`, texto `text`.
+pub fn tip_bubble<'a, M: 'a>(tip: &'static str) -> iced::widget::Container<'a, M> {
+    container(
+        text(tip)
+            .font(theme::FONT_BODY)
+            .size(theme::SIZE_LABEL)
+            .color(theme::palette().text),
     )
-    .into()
+    .padding([4, 8])
+    .style(|_: &Theme| container::Style {
+        background: Some(Background::Color(theme::palette().panel2)),
+        border: Border {
+            color: theme::palette().border2,
+            width: 1.0,
+            radius: theme::RADIUS_BUTTON.into(),
+        },
+        ..Default::default()
+    })
 }
 
 /// Divisor entre panes (`PaneDivider`): a linha de 1px é `border` (fundo do grid) e vira `accent`

@@ -4,7 +4,6 @@ use iced::widget::{column, container, text};
 use iced::{Element, Fill};
 #[derive(Debug, Clone)]
 pub enum GitMsg {
-    Files,
     Refresh,
     Changes,
     History,
@@ -45,5 +44,5 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
         crate::git_changes_view::view(state)
     };
     content = content.push(body);
-    panel_widgets::frame(content.into())
+    content.into()
 }

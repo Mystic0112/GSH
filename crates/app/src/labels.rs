@@ -5,6 +5,8 @@
 //! permite que o futuro módulo de i18n substitua os textos sem varrer a árvore
 //! de componentes.
 
+use crate::gallery_template::GalleryTemplate;
+
 pub const APP_TITLE: &str = "GSH Desktop";
 
 // Shell (colunas laterais, topbar, abas e rodapés)
@@ -486,3 +488,44 @@ pub const SETTINGS_LOCALES: [&str; 4] = [
     SETTINGS_LOCALE_ES,
     SETTINGS_LOCALE_PT,
 ];
+
+// Abas do painel direito e Galeria (`pt_BR.i18n.json` -> `gsh.fileTreePanel`, `gsh.gallery`, `fileOperation.error`)
+pub const FILES_TOOLTIP: &str = "Arquivos";
+pub const SOURCE_CONTROL_TOOLTIP: &str = "Controle de versão";
+pub const GALLERY_TOOLTIP: &str = "Galeria";
+pub const GALLERY_SECTION_UPPER: &str = "GALERIA";
+pub const ICON_GALLERY: &str = "\u{e660}";
+pub const GALLERY_INTRO: &str =
+    "Documentos especiais do GSH Desktop para que você tenha o visual do que o agente de IA esteja fazendo.";
+pub const GALLERY_CREATE_ERROR_TITLE: &str = "Não foi possível criar o arquivo";
+pub const GALLERY_ERR_NO_WORKSPACE: &str = "Nenhum workspace selecionado.";
+pub const GALLERY_ERR_WRITE_FAILED: &str = "Não foi possível gravar o arquivo.";
+pub const DIALOG_OK: &str = "OK";
+
+pub fn gallery_title(template: GalleryTemplate) -> &'static str {
+    match template {
+        GalleryTemplate::DbQuery => "Consulta de banco",
+        GalleryTemplate::Kanban => "Quadro kanban",
+        GalleryTemplate::Notebook => "Caderno",
+        GalleryTemplate::Html => "Visual HTML",
+        GalleryTemplate::Panel => "Painel",
+        GalleryTemplate::HttpRequest => "Requests HTTP",
+        GalleryTemplate::Tasks => "Tarefas",
+        GalleryTemplate::Layout => "Layout de panes",
+        GalleryTemplate::WorkspaceEnv => "Env do workspace",
+    }
+}
+
+pub fn gallery_description(template: GalleryTemplate) -> &'static str {
+    match template {
+        GalleryTemplate::DbQuery => "Editor SQL com grid de resultado, usando uma das conexões registradas.",
+        GalleryTemplate::Kanban => "Colunas e cards gravados como markdown puro. Arraste, edite e comente.",
+        GalleryTemplate::Notebook => "Uma pasta de notas curtas com tags. O agente escreve, você lê e edita. Abre no Obsidian também.",
+        GalleryTemplate::Html => "Uma página que o agente escreve e o GSH Desktop renderiza direto: mapa mental, diagrama, gráfico, o que precisar.",
+        GalleryTemplate::Panel => "Uma página HTML com ponte para o app: os botões rodam comandos da CLI do GSH Desktop e do shell nesta máquina. Um playground para dashboards rápidos.",
+        GalleryTemplate::HttpRequest => "Escreva requests num arquivo e execute com a resposta ao lado.",
+        GalleryTemplate::Tasks => "Comandos para rodar pelo painel de Tasks, como dev server, testes e build. Fica em .gsh/tasks.json.",
+        GalleryTemplate::Layout => "Terminais e splits para abrir de uma vez, estilo tmuxinator. Pode rodar sozinho em worktrees novas.",
+        GalleryTemplate::WorkspaceEnv => "Variáveis injetadas em todo terminal deste workspace. Coloque tokens ou logins de API aqui em vez de colar no prompt do agente. Fica fora do git.",
+    }
+}

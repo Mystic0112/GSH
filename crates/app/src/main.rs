@@ -32,6 +32,9 @@ pub mod file_ops;
 pub mod file_tree;
 pub mod file_viewer;
 pub mod files_panel;
+pub mod gallery_create;
+pub mod gallery_panel;
+pub mod gallery_template;
 pub mod git_changes_view;
 pub mod git_diff_view;
 pub mod git_file_row;
@@ -54,6 +57,7 @@ pub mod pane_tool_icon;
 pub mod pane_tree;
 pub mod panel_widgets;
 pub mod rail;
+pub mod right_tabs;
 pub mod settings;
 pub mod terminal_canvas;
 pub mod terminal_grid;
@@ -78,10 +82,13 @@ use crate::chat_pane::{ChatMsg, ChatPane};
 use crate::file_tree::{FileTree, ViewerHook};
 use crate::file_viewer::FileViewerState;
 use crate::files_panel::FilesMsg;
+use crate::gallery_create::GalleryError;
+use crate::gallery_panel::GalleryMsg;
 use crate::island::{AgentIsland, IslandMsg, PermissionDecision};
 use crate::pane_chrome::ChromeCallbacks;
 use crate::pane_model::{ChatId, PaneModel, PaneTab, TermId};
 use crate::pane_tree::PaneTree;
+use crate::right_tabs::RightTab;
 use crate::terminal_input::{classify_key_press, KeyAction};
 use crate::terminal_pane::{TerminalMsg, TerminalPane};
 use crate::topbar::TopbarProps;
@@ -99,6 +106,10 @@ enum Msg {
     Chat(ChatId, ChatMsg),
     Files(FilesMsg),
     Git(git_panel::GitMsg),
+    SelectRightTab(RightTab),
+    Gallery(GalleryMsg),
+    GalleryCreated(Result<PathBuf, GalleryError>),
+    DismissGalleryError,
     GitResult(git_state::ResultMsg),
     Editor(PathBuf, editor_pane::EditorMsg),
     WindowCloseRequested(iced::window::Id),
@@ -160,6 +171,10 @@ struct Shell {
     file_create: Option<file_ops::CreateForm>,
     file_create_generation: u64,
     git: git_state::GitState,
+    /// Aba escolhida do painel direito; a exibida é `right_tab()` (cai em Arquivos se sumiu).
+    right_tab: RightTab,
+    /// Falha da criação de um modelo da Galeria, mostrada num diálogo.
+    gallery_error: Option<GalleryError>,
     rail_open: bool,
     files_open: bool,
     static_test_mode: bool,
@@ -214,6 +229,8 @@ impl Default for Shell {
             file_create: None,
             file_create_generation: 0,
             git,
+            right_tab: RightTab::default(),
+            gallery_error: None,
             rail_open: true,
             files_open: true,
             static_test_mode: false,
@@ -229,6 +246,19 @@ async fn pick_workspace_folder() -> Option<PathBuf> {
 }
 
 impl Shell {
+    /// Quais abas do painel direito existem agora (git: a pasta é um repo; galeria: há workspace).
+    fn right_available(&self) -> right_tabs::Available {
+        right_tabs::Available {
+            git: self.git.root.is_some(),
+            gallery: self.workspaces.active().is_some(),
+        }
+    }
+
+    /// Aba do painel direito que aparece: a escolhida, ou Arquivos se a condição dela sumiu.
+    fn right_tab(&self) -> RightTab {
+        self.right_tab.effective(self.right_available())
+    }
+
     fn active_workspace_dir(&self) -> Option<&Path> {
         self.workspaces.active().and_then(|ws| ws.path.as_deref())
     }
@@ -647,17 +677,39 @@ impl Shell {
                             }
                         }
                     }
-                    FilesMsg::OpenGit => {
-                        self.git.git_open = true;
-                        if self.git.busy {
-                            return Task::none();
-                        }
-                        return self
-                            .git
-                            .start(git_state::Action::Refresh)
-                            .map(Msg::GitResult);
-                    }
                 }
+                Task::none()
+            }
+            Msg::SelectRightTab(tab) => {
+                self.right_tab = tab;
+                if tab == RightTab::Git && !self.git.busy {
+                    return self
+                        .git
+                        .start(git_state::Action::Refresh)
+                        .map(Msg::GitResult);
+                }
+                Task::none()
+            }
+            Msg::Gallery(GalleryMsg::Create(template)) => match self.file_tree.root() {
+                Some(root) => Task::perform(
+                    gallery_create::create_async(root.to_path_buf(), template),
+                    Msg::GalleryCreated,
+                ),
+                None => {
+                    self.gallery_error = Some(GalleryError::NoWorkspace);
+                    Task::none()
+                }
+            },
+            Msg::GalleryCreated(Ok(path)) => {
+                self.file_tree.refresh();
+                self.update(Msg::Files(FilesMsg::SelectFile(path)))
+            }
+            Msg::GalleryCreated(Err(error)) => {
+                self.gallery_error = Some(error);
+                Task::none()
+            }
+            Msg::DismissGalleryError => {
+                self.gallery_error = None;
                 Task::none()
             }
             Msg::GitResult(result) => {
@@ -674,10 +726,6 @@ impl Shell {
                 let action = match msg {
                     GitMsg::CloseDiff => {
                         self.git.diff = None;
-                        None
-                    }
-                    GitMsg::Files => {
-                        self.git.git_open = false;
                         None
                     }
                     GitMsg::Changes => {
@@ -923,7 +971,7 @@ impl Shell {
             _ => None,
         });
         let cancel_create = if self.files_open
-            && !self.git.git_open
+            && self.right_tab() == RightTab::Files
             && self.file_create.as_ref().is_some_and(|form| !form.busy)
         {
             iced::event::listen_with(|event, _, _| match event {
@@ -1115,20 +1163,30 @@ impl Shell {
         }
         body = body.push(center_pane);
         if self.files_open {
-            if self.git.git_open {
-                body = body.push(git_panel::view(&self.git).map(Msg::Git));
-            } else {
-                body = body.push(
-                    files_panel::view(
-                        &self.file_tree,
-                        self.git.status.as_ref(),
-                        self.git.root.as_deref(),
-                        self.git.busy,
-                        self.file_create.as_ref(),
-                    )
-                    .map(Msg::Files),
-                );
-            }
+            let available = self.right_available();
+            let tab = self.right_tab();
+            let panel: Element<'_, Msg> = match tab {
+                RightTab::Files => files_panel::view(
+                    &self.file_tree,
+                    self.git.status.as_ref(),
+                    self.git.root.as_deref(),
+                    self.git.busy,
+                    self.file_create.as_ref(),
+                )
+                .map(Msg::Files),
+                RightTab::Git => git_panel::view(&self.git).map(Msg::Git),
+                RightTab::Gallery => {
+                    gallery_panel::view(self.file_tree.root().is_some()).map(Msg::Gallery)
+                }
+            };
+            body = body.push(crate::panel_widgets::frame(
+                column![
+                    right_tabs::bar(tab, available).map(Msg::SelectRightTab),
+                    crate::panel_widgets::hairline_h(),
+                    panel
+                ]
+                .into(),
+            ));
         }
 
         let mut root = column![top].width(Fill).height(Fill);
@@ -1173,7 +1231,7 @@ impl Shell {
             base.into()
         };
 
-        match self
+        let layered: Element<'_, Msg> = match self
             .pending_close_pane
             .and_then(|pane| self.panes.model(pane))
         {
@@ -1183,6 +1241,19 @@ impl Shell {
                     model.tabs().len(),
                     Msg::CancelClosePane,
                     Msg::ConfirmClosePane,
+                    Msg::Noop,
+                )
+            ]
+            .into(),
+            None => layered,
+        };
+        match &self.gallery_error {
+            Some(error) => stack![
+                layered,
+                pane_close_dialog::notice(
+                    labels::GALLERY_CREATE_ERROR_TITLE,
+                    error.message(),
+                    Msg::DismissGalleryError,
                     Msg::Noop,
                 )
             ]
@@ -1266,6 +1337,8 @@ mod tests {
             file_create: None,
             file_create_generation: 0,
             git: git_state::GitState::default(),
+            right_tab: RightTab::default(),
+            gallery_error: None,
             rail_open: true,
             files_open: true,
             static_test_mode: true,
@@ -1660,5 +1733,53 @@ mod tests {
         let _ = shell.update(Msg::ClosePane(first));
         assert_eq!(shell.panes.focused(), first);
         assert_eq!(shell.pending_close_pane, Some(first));
+    }
+
+    #[test]
+    fn aba_do_painel_direito_volta_para_arquivos_quando_a_condicao_some() {
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::SelectRightTab(RightTab::Gallery));
+        assert_eq!(shell.right_tab(), RightTab::Gallery);
+        let _ = shell.update(Msg::SelectRightTab(RightTab::Git));
+        assert_eq!(shell.right_tab, RightTab::Git);
+        assert_eq!(shell.right_tab(), RightTab::Files);
+        shell.git.root = Some(PathBuf::from("/repo"));
+        assert_eq!(shell.right_tab(), RightTab::Git);
+        shell.git.root = None;
+        assert_eq!(shell.right_tab(), RightTab::Files);
+    }
+
+    #[test]
+    fn galeria_sem_pasta_acusa_erro_e_o_dialogo_fecha() {
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::Gallery(GalleryMsg::Create(
+            gallery_template::GalleryTemplate::Kanban,
+        )));
+        assert_eq!(shell.gallery_error, Some(GalleryError::NoWorkspace));
+        let _ = shell.update(Msg::DismissGalleryError);
+        assert_eq!(shell.gallery_error, None);
+        let _ = shell.update(Msg::GalleryCreated(Err(GalleryError::WriteFailed)));
+        assert_eq!(shell.gallery_error, Some(GalleryError::WriteFailed));
+    }
+
+    #[test]
+    fn galeria_criada_abre_o_arquivo_numa_aba() {
+        let mut shell = test_shell();
+        let dir = std::env::temp_dir().join(format!("gsh-shell-gallery-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        shell.file_tree.set_root(Some(dir.clone()));
+        let path =
+            gallery_create::create_from_template(&dir, gallery_template::GalleryTemplate::Kanban)
+                .unwrap();
+        let _ = shell.update(Msg::GalleryCreated(Ok(path.clone())));
+        let opened = path.canonicalize().unwrap();
+        assert!(shell
+            .panes
+            .focused_model()
+            .tabs()
+            .contains(&PaneTab::File(opened.clone())));
+        assert!(shell.editors.contains_key(&opened));
+        assert_eq!(shell.gallery_error, None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

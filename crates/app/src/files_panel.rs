@@ -1,6 +1,6 @@
-//! Painel lateral direito de arquivos (`file_tree_panel.dart` do Flutter).
+//! Aba Arquivos do painel direito (`file_tree_panel.dart` do Flutter).
 //!
-//! Superfície `BG`, divisória esquerda de 1px `BORDER`, barra de modo de 40px,
+//! Corpo da aba (a moldura e a barra de abas ficam em `right_tabs`):
 //! cabeçalho "ARQUIVOS" com ações de recolher/atualizar, árvore de arquivos
 //! interativa (pastas expansíveis de forma lazy e seleção de arquivo) e rodapé
 //! de status LSP de 34px.
@@ -26,7 +26,6 @@ pub enum FilesMsg {
     CollapseAll,
     /// Atualiza os diretórios abertos no painel.
     Refresh,
-    OpenGit,
     StartCreate(CreateKind),
     CreateNameChanged(String),
     SubmitCreate,
@@ -34,7 +33,7 @@ pub enum FilesMsg {
     CreateFinished(u64, PathBuf, Result<(), FileOpError>),
 }
 
-/// Renderiza o painel de arquivos à direita com a divisória esquerda de 1px `BORDER`.
+/// Corpo da aba Arquivos: cabeçalho (só com pasta), árvore e rodapé de status LSP.
 pub fn view<'a>(
     tree: &'a FileTree,
     status: Option<&'a gsh_git::GitRepoStatus>,
@@ -42,105 +41,34 @@ pub fn view<'a>(
     busy: bool,
     form: Option<&'a CreateForm>,
 ) -> Element<'a, FilesMsg> {
-    let mode_bar = view_mode_bar();
-    let section_header = view_section_header(busy, tree.root().is_some(), form.is_some());
-    let tree_body = view_tree_body(tree, status, repo_root);
-    let footer = view_footer();
-
-    crate::panel_widgets::frame(
-        column![
-            mode_bar,
-            crate::panel_widgets::hairline_h(),
-            section_header,
-            create_input(form),
-            tree_body,
-            crate::panel_widgets::hairline_h(),
-            footer
-        ]
-        .into(),
-    )
+    let has_root = tree.root().is_some();
+    let mut body = column![];
+    if has_root {
+        body = body.push(view_section_header(busy, form.is_some()));
+    }
+    body.push(create_input(form))
+        .push(view_tree_body(tree, status, repo_root))
+        .push(crate::panel_widgets::hairline_h())
+        .push(view_footer())
+        .into()
 }
 
-fn view_mode_bar<'a>() -> Element<'a, FilesMsg> {
-    container(
-        row![
-            mode_icon(labels::ICON_FOLDER, None, true),
-            mode_icon(labels::ICON_ACCOUNT_TREE, Some(FilesMsg::OpenGit), false),
-            Space::new().width(Fill)
-        ]
-        .align_y(Alignment::Center)
-        .padding([0, 14]),
-    )
-    .width(Fill)
-    .center_y(Length::Fixed(theme::TAB_STRIP_HEIGHT - 1.0))
-    .into()
-}
-
-fn view_section_header<'a>(busy: bool, has_root: bool, creating: bool) -> Element<'a, FilesMsg> {
-    container(
-        row![
-            text(labels::FILES_SECTION_UPPER)
-                .font(theme::FONT_BODY)
-                .size(theme::FILE_PANEL_HEADER_TITLE_SIZE)
-                .color(theme::palette().text3),
-            Space::new().width(Fill),
+fn view_section_header<'a>(busy: bool, creating: bool) -> Element<'a, FilesMsg> {
+    crate::panel_widgets::section_header(
+        labels::FILES_SECTION_UPPER,
+        vec![
             header_action(
                 labels::ICON_NEW_FILE,
-                (has_root && !creating).then_some(FilesMsg::StartCreate(CreateKind::File))
+                (!creating).then_some(FilesMsg::StartCreate(CreateKind::File)),
             ),
             header_action(
                 labels::ICON_NEW_FOLDER,
-                (has_root && !creating).then_some(FilesMsg::StartCreate(CreateKind::Folder))
+                (!creating).then_some(FilesMsg::StartCreate(CreateKind::Folder)),
             ),
             header_action(labels::ICON_COLLAPSE, Some(FilesMsg::CollapseAll)),
             header_action(labels::ICON_REFRESH, (!busy).then_some(FilesMsg::Refresh)),
-        ]
-        .align_y(Alignment::Center),
+        ],
     )
-    .width(Fill)
-    .padding(Padding {
-        top: theme::FILE_PANEL_HEADER_TOP,
-        right: theme::FILE_PANEL_HEADER_RIGHT,
-        bottom: theme::FILE_PANEL_HEADER_BOTTOM,
-        left: theme::FILE_PANEL_HEADER_LEFT,
-    })
-    .into()
-}
-
-fn mode_icon<'a>(
-    glyph: &'static str,
-    message: Option<FilesMsg>,
-    active: bool,
-) -> Element<'a, FilesMsg> {
-    button(
-        container(text(glyph).font(theme::FONT_ICON).size(theme::SIZE_ICON))
-            .center_x(Fill)
-            .center_y(Fill),
-    )
-    .width(28)
-    .height(28)
-    .padding(0)
-    .on_press_maybe(message)
-    .style(move |_, status| button::Style {
-        background: if active {
-            Some(theme::palette().panel2.into())
-        } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
-            Some(theme::palette().panel3.into())
-        } else {
-            None
-        },
-        text_color: if active {
-            theme::palette().text
-        } else {
-            theme::palette().text3
-        },
-        border: Border {
-            radius: theme::RADIUS_BUTTON.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    })
-    .into()
 }
 
 fn header_action<'a>(glyph: &'static str, message: Option<FilesMsg>) -> Element<'a, FilesMsg> {
@@ -217,7 +145,7 @@ fn view_tree_body<'a>(
     repo_root: Option<&'a std::path::Path>,
 ) -> Element<'a, FilesMsg> {
     if tree.root().is_none() {
-        return empty_state_label(labels::FILES_NO_FOLDER);
+        return crate::panel_widgets::empty_label(labels::FILES_NO_FOLDER);
     }
 
     let rows = tree.visible_rows();
@@ -341,18 +269,6 @@ fn view_entry_row<'a>(
             }
         })
         .into()
-}
-
-fn empty_state_label<'a>(msg: &'static str) -> Element<'a, FilesMsg> {
-    container(
-        text(msg)
-            .font(theme::FONT_BODY)
-            .size(theme::SIZE_LABEL)
-            .color(theme::palette().text3),
-    )
-    .center_x(Fill)
-    .center_y(Fill)
-    .into()
 }
 
 fn view_footer<'a>() -> Element<'a, FilesMsg> {

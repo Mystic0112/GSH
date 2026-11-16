@@ -16,17 +16,63 @@ pub fn view<'a, M: Clone + 'a>(
     on_confirm: M,
     on_noop: M,
 ) -> Element<'a, M> {
-    let title = text(labels::PANE_CLOSE_TITLE)
+    dialog(
+        labels::PANE_CLOSE_TITLE,
+        labels::pane_close_message(tab_count),
+        labels::PANE_CLOSE_CONFIRM,
+        Emphasis::Danger,
+        on_cancel,
+        on_confirm,
+        on_noop,
+    )
+}
+
+/// `showConfirmDialog` sem `danger` (confirmar em `PrimaryButton`): o aviso de
+/// erro da Galeria, com "OK".
+pub fn notice<'a, M: Clone + 'a>(
+    title: &'static str,
+    message: String,
+    on_close: M,
+    on_noop: M,
+) -> Element<'a, M> {
+    dialog(
+        title,
+        message,
+        labels::DIALOG_OK,
+        Emphasis::Primary,
+        on_close.clone(),
+        on_close,
+        on_noop,
+    )
+}
+
+/// Botão de confirmação: `DestructiveButton` ou `PrimaryButton`.
+#[derive(Clone, Copy)]
+enum Emphasis {
+    Danger,
+    Primary,
+}
+
+fn dialog<'a, M: Clone + 'a>(
+    title: &'static str,
+    message: String,
+    confirm_label: &'static str,
+    emphasis: Emphasis,
+    on_cancel: M,
+    on_confirm: M,
+    on_noop: M,
+) -> Element<'a, M> {
+    let title = text(title)
         .font(theme::FONT_TITLE)
         .size(theme::DIALOG_TITLE_SIZE)
         .color(theme::palette().text);
-    let message = text(labels::pane_close_message(tab_count))
+    let message = text(message)
         .font(theme::FONT_BODY)
         .size(theme::DIALOG_MESSAGE_SIZE)
         .color(theme::palette().text2);
     let actions = row![
-        dialog_button(labels::DIALOG_CANCEL, on_cancel.clone(), false),
-        dialog_button(labels::PANE_CLOSE_CONFIRM, on_confirm, true),
+        dialog_button(labels::DIALOG_CANCEL, on_cancel.clone(), None),
+        dialog_button(confirm_label, on_confirm, Some(emphasis)),
     ]
     .spacing(theme::DIALOG_ACTIONS_GAP)
     .align_y(Alignment::Center);
@@ -75,11 +121,11 @@ pub fn view<'a, M: Clone + 'a>(
     .into()
 }
 
-/// Botão do diálogo: `DestructiveButton` (fundo de erro) ou `OutlineButton` (contorno).
+/// Botão do diálogo: confirmação (`emphasis`) ou `OutlineButton` (contorno).
 fn dialog_button<'a, M: Clone + 'a>(
     label: &'static str,
     on_press: M,
-    danger: bool,
+    emphasis: Option<Emphasis>,
 ) -> Element<'a, M> {
     let content = move |color: Color| {
         text(label)
@@ -87,10 +133,10 @@ fn dialog_button<'a, M: Clone + 'a>(
             .size(theme::DIALOG_BUTTON_SIZE)
             .color(color)
     };
-    let foreground = if danger {
-        theme::on_color(theme::palette().error)
-    } else {
-        theme::palette().text
+    let foreground = match emphasis {
+        Some(Emphasis::Danger) => theme::on_color(theme::palette().error),
+        Some(Emphasis::Primary) => theme::ON_ACCENT,
+        None => theme::palette().text,
     };
     button(content(foreground))
         .padding([8, 16])
@@ -98,21 +144,21 @@ fn dialog_button<'a, M: Clone + 'a>(
         .style(move |_: &Theme, status| {
             let palette = theme::palette();
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let (background, border_color) = if danger {
-                let error = if hovered {
-                    Color {
-                        a: 0.9,
-                        ..palette.error
-                    }
+            let fill = |color: Color| {
+                let color = if hovered {
+                    Color { a: 0.9, ..color }
                 } else {
-                    palette.error
+                    color
                 };
-                (Some(Background::Color(error)), error)
-            } else {
-                (
+                (Some(Background::Color(color)), color)
+            };
+            let (background, border_color) = match emphasis {
+                Some(Emphasis::Danger) => fill(palette.error),
+                Some(Emphasis::Primary) => fill(palette.accent),
+                None => (
                     hovered.then_some(Background::Color(palette.panel3)),
                     palette.border,
-                )
+                ),
             };
             button::Style {
                 background,

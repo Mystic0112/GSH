@@ -1,7 +1,7 @@
 //! Superfícies e ações compartilhadas pelos painéis laterais.
 use crate::theme;
 use iced::widget::{button, container, row, text, Space};
-use iced::{Background, Border, Element, Fill, Length, Theme};
+use iced::{Alignment, Background, Border, Element, Fill, Length, Padding, Theme};
 
 pub fn ghost<'a, M: Clone + 'a>(
     glyph: &'static str,
@@ -68,5 +68,45 @@ pub fn frame<'a, M: 'a>(content: Element<'a, M>) -> Element<'a, M> {
     ]
     .width(theme::FILES_PANEL_WIDTH)
     .height(Fill)
+    .into()
+}
+
+/// Cabeçalho de seção do painel direito (`_PanelHeader`): título em caixa alta
+/// `text3` e as ações à direita.
+pub fn section_header<'a, M: 'a>(
+    title: &'static str,
+    actions: Vec<Element<'a, M>>,
+) -> Element<'a, M> {
+    container(
+        row![
+            text(title)
+                .font(theme::FONT_BODY)
+                .size(theme::FILE_PANEL_HEADER_TITLE_SIZE)
+                .color(theme::palette().text3),
+            Space::new().width(Fill),
+        ]
+        .extend(actions)
+        .align_y(Alignment::Center),
+    )
+    .width(Fill)
+    .padding(Padding {
+        top: theme::FILE_PANEL_HEADER_TOP,
+        right: theme::FILE_PANEL_HEADER_RIGHT,
+        bottom: theme::FILE_PANEL_HEADER_BOTTOM,
+        left: theme::FILE_PANEL_HEADER_LEFT,
+    })
+    .into()
+}
+
+/// Mensagem centralizada de corpo vazio (`noFolderMessage`).
+pub fn empty_label<'a, M: 'a>(message: &'static str) -> Element<'a, M> {
+    container(
+        text(message)
+            .font(theme::FONT_BODY)
+            .size(theme::SIZE_LABEL)
+            .color(theme::palette().text3),
+    )
+    .center_x(Fill)
+    .center_y(Fill)
     .into()
 }

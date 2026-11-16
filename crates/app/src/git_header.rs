@@ -1,4 +1,4 @@
-//! Barra de modos e abas do controle de versão.
+//! Cabeçalho e abas do controle de versão (a barra de abas do painel é `right_tabs`).
 use crate::{git_panel::GitMsg, git_state::GitState, labels, panel_widgets, theme};
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Border, Element, Fill, Theme};
@@ -28,16 +28,6 @@ fn tab<'a>(label: &'static str, active: bool, msg: GitMsg) -> Element<'a, GitMsg
         .into()
 }
 pub fn view(state: &GitState) -> Element<'_, GitMsg> {
-    let mode = container(
-        row![
-            panel_widgets::ghost(labels::ICON_FOLDER, Some(GitMsg::Files), false),
-            panel_widgets::ghost(labels::ICON_ACCOUNT_TREE, None, true),
-            Space::new().width(Fill)
-        ]
-        .align_y(iced::Alignment::Center)
-        .padding([0, 14]),
-    )
-    .center_y(theme::TAB_STRIP_HEIGHT - 1.0);
     let title = row![
         text(labels::SOURCE_CONTROL_SECTION_UPPER)
             .font(theme::FONT_TITLE)
@@ -60,10 +50,7 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
         tab(labels::GIT_TAB_HISTORY, state.history_open, GitMsg::History)
     ]
     .spacing(4);
-    column![
-        mode,
-        panel_widgets::hairline_h(),
-        container(column![title, tabs].spacing(6)).padding([6, 14])
-    ]
-    .into()
+    container(column![title, tabs].spacing(6))
+        .padding([6, 14])
+        .into()
 }

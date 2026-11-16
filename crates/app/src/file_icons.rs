@@ -104,14 +104,36 @@ fn resolve(name: &str, is_dir: bool, open: bool) -> Option<&'static [u8]> {
     }
 }
 
+fn gsh_logo<Message: 'static>(size: f32) -> Element<'static, Message> {
+    image(image::Handle::from_bytes(
+        &include_bytes!("../assets/branding/gsh_logo.png")[..],
+    ))
+    .width(size)
+    .height(size)
+    .into()
+}
+
+/// Ícone pelo nome do asset (SVG do tema ou `gsh_logo`), em `size` px: cartões da Galeria.
+pub fn asset_view<Message: 'static>(stem: &str, size: f32) -> Element<'static, Message> {
+    if stem == "gsh_logo" {
+        gsh_logo(size)
+    } else if let Some(bytes) = asset(stem) {
+        svg(svg::Handle::from_memory(bytes))
+            .width(size)
+            .height(size)
+            .into()
+    } else {
+        text(labels::ICON_FILE_ITEM)
+            .font(theme::FONT_ICON)
+            .size(size)
+            .color(theme::palette().text3)
+            .into()
+    }
+}
+
 pub fn view<Message: 'static>(name: &str, is_dir: bool, open: bool) -> Element<'static, Message> {
     if uses_gsh_logo(name, is_dir) {
-        image(image::Handle::from_bytes(
-            &include_bytes!("../assets/branding/gsh_logo.png")[..],
-        ))
-        .width(theme::FILE_TREE_ICON_SIZE)
-        .height(theme::FILE_TREE_ICON_SIZE)
-        .into()
+        gsh_logo(theme::FILE_TREE_ICON_SIZE)
     } else if let Some(bytes) = resolve(name, is_dir, open) {
         svg(svg::Handle::from_memory(bytes))
             .width(theme::FILE_TREE_ICON_SIZE)
@@ -137,7 +159,16 @@ fn uses_gsh_logo(name: &str, is_dir: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{folder_name, resolve, uses_gsh_logo};
+    use super::{asset, folder_name, resolve, uses_gsh_logo};
+    use crate::gallery_template::GalleryTemplate;
+
+    #[test]
+    fn every_gallery_card_icon_exists() {
+        for template in GalleryTemplate::ALL {
+            let stem = template.icon();
+            assert!(stem == "gsh_logo" || asset(stem).is_some(), "{stem}");
+        }
+    }
 
     #[test]
     fn gsh_logo_matches_flutter_special_cases() {

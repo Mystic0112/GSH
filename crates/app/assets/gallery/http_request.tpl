@@ -1,0 +1,3 @@
+### Ping
+GET https://httpbin.org/get
+Accept: application/json

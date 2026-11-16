@@ -47,6 +47,43 @@ pub fn root(workspace: &Path) -> Result<PathBuf, GitError> {
     })?;
     Ok(PathBuf::from(path.trim_end_matches(['\r', '\n'])))
 }
+/// Tira `relative` do git de `root` sem tocar em arquivo versionado: se o repo
+/// ainda não o ignora, acrescenta em `.git/info/exclude` (local, nunca
+/// comitado) (`_excludeFromGit` de `gsh_viewmodel.dart`). Best-effort: pasta
+/// sem git, git ausente ou falha de escrita só não excluem.
+pub fn exclude_from_git(root: &Path, relative: &str) {
+    let _ = try_exclude(root, relative);
+}
+fn try_exclude(root: &Path, relative: &str) -> Option<()> {
+    // `-q`: 0 = já ignorado; 1 = não ignorado; 128 = não é repo git.
+    match command(root, &["check-ignore", "-q", "--", relative]) {
+        Err(GitError::CommandFailed {
+            exit_code: Some(1), ..
+        }) => {}
+        _ => return None,
+    }
+    let out = command(root, &["rev-parse", "--git-path", "info/exclude"]).ok()?;
+    let out = String::from_utf8(out).ok()?;
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // `--git-path` devolve relativo ao cwd no repo comum e absoluto em worktree.
+    let file = root.join(trimmed);
+    std::fs::create_dir_all(file.parent()?).ok()?;
+    let existing = std::fs::read_to_string(&file).unwrap_or_default();
+    let sep = if existing.is_empty() || existing.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    let mut handle = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&file)
+        .ok()?;
+    std::io::Write::write_all(&mut handle, format!("{sep}/{relative}\n").as_bytes()).ok()
+}
 pub fn renames(repo: &Path) -> Result<BTreeMap<String, String>, GitError> {
     let output = command(
         repo,
@@ -150,5 +187,21 @@ mod tests {
         assert_eq!(diff.path, "new");
         gsh_git::unstage(&root, &["new", "old"]).unwrap();
         assert!(gsh_git::status(&root).unwrap().staged.is_empty());
+    }
+    #[test]
+    fn exclude_from_git_appends_once_and_ignores_non_repos() {
+        let repo = Repo::new();
+        exclude_from_git(&repo.0, ".env.gsh");
+        exclude_from_git(&repo.0, ".env.gsh");
+        let exclude = fs::read_to_string(repo.0.join(".git/info/exclude")).unwrap();
+        assert_eq!(exclude.matches("/.env.gsh\n").count(), 1);
+        fs::write(repo.0.join(".env.gsh"), "A=1\n").unwrap();
+        let status = gsh_git::status(&repo.0).unwrap();
+        assert!(status.files.is_empty());
+        let plain = std::env::temp_dir().join(format!("gsh-no-git-{}", std::process::id()));
+        fs::create_dir_all(&plain).unwrap();
+        exclude_from_git(&plain, ".env.gsh");
+        assert!(!plain.join(".git").exists());
+        let _ = fs::remove_dir_all(plain);
     }
 }
