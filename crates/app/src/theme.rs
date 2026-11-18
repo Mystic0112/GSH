@@ -288,8 +288,10 @@ pub const TERM_SCROLLBAR: Color = Color { a: 0.45, ..TEXT3 };
 // - Hanken Grotesk (corpo/UI) e Montserrat (títulos/abas): instâncias estáticas
 //   por peso (Regular 400, Medium 500, SemiBold 600, Bold 700) geradas via
 //   fontTools a partir dos `-VF.ttf` e embutidas no binário via `include_bytes!`.
-// - JetBrainsMono NF: instalada no sistema (`~/.local/share/fonts/JetBrainsMono`).
-pub const FONT_FAMILY_MONO: &str = "JetBrainsMono NF";
+// - JetBrains Mono: as mesmas faces que o Flutter usa (`GoogleFonts.jetBrainsMono`,
+//   300/500/600 do cache do google_fonts; 400 do pacote gpt_markdown), embutidas
+//   para o terminal não depender de fonte instalada no sistema.
+pub const FONT_FAMILY_MONO: &str = "JetBrains Mono";
 pub const FONT_FAMILY_BODY: &str = "Hanken Grotesk";
 pub const FONT_FAMILY_TITLE: &str = "Montserrat";
 
@@ -309,10 +311,16 @@ pub const MONTSERRAT_SEMIBOLD_TTF: &[u8] =
 pub const MONTSERRAT_BOLD_TTF: &[u8] = include_bytes!("../assets/fonts/Montserrat-Bold.ttf");
 
 /// Todas as faces estáticas embutidas para registro no `iced::application`.
+pub const JETBRAINS_LIGHT_TTF: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Light.ttf");
+pub const JETBRAINS_REGULAR_TTF: &[u8] =
+    include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
+pub const JETBRAINS_MEDIUM_TTF: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Medium.ttf");
+pub const JETBRAINS_SEMIBOLD_TTF: &[u8] =
+    include_bytes!("../assets/fonts/JetBrainsMono-SemiBold.ttf");
 pub const MATERIAL_SYMBOLS_TTF: &[u8] =
     include_bytes!("../assets/fonts/MaterialSymbolsOutlined.ttf");
 
-pub const EMBEDDED_FONTS: [&[u8]; 9] = [
+pub const EMBEDDED_FONTS: [&[u8]; 13] = [
     HANKEN_REGULAR_TTF,
     HANKEN_MEDIUM_TTF,
     HANKEN_SEMIBOLD_TTF,
@@ -321,6 +329,10 @@ pub const EMBEDDED_FONTS: [&[u8]; 9] = [
     MONTSERRAT_MEDIUM_TTF,
     MONTSERRAT_SEMIBOLD_TTF,
     MONTSERRAT_BOLD_TTF,
+    JETBRAINS_LIGHT_TTF,
+    JETBRAINS_REGULAR_TTF,
+    JETBRAINS_MEDIUM_TTF,
+    JETBRAINS_SEMIBOLD_TTF,
     MATERIAL_SYMBOLS_TTF,
 ];
 
@@ -1031,7 +1043,7 @@ mod tests {
         assert_ne!(FONT_TITLE, Font::DEFAULT);
         assert_ne!(FONT_TAB, Font::DEFAULT);
 
-        assert_eq!(EMBEDDED_FONTS.len(), 9);
+        assert_eq!(EMBEDDED_FONTS.len(), 13);
         for bytes in EMBEDDED_FONTS {
             // Assinatura TrueType sfnt (0x00010000)
             assert_eq!(bytes.get(..4), Some(&[0x00, 0x01, 0x00, 0x00][..]));

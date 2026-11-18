@@ -2,7 +2,7 @@
 //! `file_reader_impl.dart` do app Flutter).
 //!
 //! Carrega arquivos UTF-8 até [`MAX_VIEWER_BYTES`] (2 MiB) com numeração de
-//! linha à esquerda em `JetBrainsMono NF` (`TEXT2`) e corpo em `PANEL`.
+//! linha à esquerda em `JetBrains Mono` (`TEXT2`) e corpo em `PANEL`.
 //! Acima do limite, binários (bytes nulos ou UTF-8 inválido) e falhas de I/O
 //! viram estados tipados sem carregar nem causar `panic`.
 
