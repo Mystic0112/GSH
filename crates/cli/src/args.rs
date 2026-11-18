@@ -204,6 +204,9 @@ pub enum Command {
     Hook {
         harness: String,
     },
+    Mcp {
+        agent: String,
+    },
     Msg {
         to: String,
         text: String,
@@ -254,6 +257,7 @@ pub fn parse(argv: &[String]) -> Result<Command, CliError> {
         "hook" => Ok(Command::Hook {
             harness: harness_from(args),
         }),
+        "mcp" => parse_mcp(args),
         "msg" => parse_msg(args),
         "send" => parse_team_send(args),
         "peers" => Ok(Command::TeamPeers {
@@ -273,6 +277,29 @@ pub fn parse(argv: &[String]) -> Result<Command, CliError> {
         "telemetry" => Ok(Command::Telemetry(args.to_vec())),
         other => Err(CliError::usage(format!("gsh: unknown verb: {other}"))),
     }
+}
+
+fn parse_mcp(args: &[String]) -> Result<Command, CliError> {
+    if wants_help(args) {
+        return Ok(Command::Help("gsh mcp --agent <claude-desktop|cursor|codex-desktop>\n  Runs the GSH tools over MCP stdio."));
+    }
+    let mut agent = None;
+    let mut index = 0;
+    while let Some(value) = args.get(index) {
+        if value == "--agent" {
+            index += 1;
+            agent = args.get(index).cloned();
+        } else if let Some(value) = value.strip_prefix("--agent=") {
+            agent = Some(value.to_owned());
+        } else {
+            return Err(CliError::usage("gsh mcp: expected --agent <id>"));
+        }
+        index += 1;
+    }
+    let agent = agent
+        .filter(|agent| ["claude-desktop", "cursor", "codex-desktop"].contains(&agent.as_str()))
+        .ok_or_else(|| CliError::usage("gsh mcp: missing or invalid --agent"))?;
+    Ok(Command::Mcp { agent })
 }
 
 fn parse_team_send(args: &[String]) -> Result<Command, CliError> {
@@ -528,6 +555,23 @@ mod tests {
         for a in ["-V", "version"] {
             assert_ne!(parse(&v(&[a])).ok(), Some(Command::Version), "{a}");
         }
+    }
+
+    #[test]
+    fn mcp_requires_a_supported_desktop_agent() {
+        assert_eq!(
+            parse(&v(&["mcp", "--agent", "cursor"])).unwrap(),
+            Command::Mcp {
+                agent: "cursor".into()
+            }
+        );
+        assert_eq!(
+            parse(&v(&["mcp", "--agent=codex-desktop"])).unwrap(),
+            Command::Mcp {
+                agent: "codex-desktop".into()
+            }
+        );
+        assert!(parse(&v(&["mcp", "--agent", "unknown"])).is_err());
     }
 
     #[test]

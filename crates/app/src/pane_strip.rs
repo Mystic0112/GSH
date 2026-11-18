@@ -28,9 +28,12 @@ where
         let is_active = active_idx == Some(idx);
         tabs_row = tabs_row.push(view_tab(
             tab,
-            is_active,
-            dirty(tab),
-            hovered == Some(idx),
+            crate::pane_tab::TabPresentation {
+                title: model.display_title(tab),
+                active: is_active,
+                dirty: dirty(tab),
+                hovered: hovered == Some(idx),
+            },
             (callbacks.on_select_tab)(idx),
             (callbacks.on_close_tab)(idx),
             (on_hover(Some(idx)), on_hover(None)),

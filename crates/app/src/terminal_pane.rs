@@ -2,8 +2,9 @@
 //! `iced`, teclado (`keyboard::listen`), área de transferência
 //! (`Ctrl+Shift+C`/`Ctrl+Shift+V`), mouse (scrollback e seleção) e resize.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gsh_term::{Cell, Cursor, GridPos, ShellCommand, TermSession, TermSnapshot};
 use iced::widget::{canvas, container, text};
@@ -59,6 +60,7 @@ pub struct TerminalPane {
     cwd: Option<PathBuf>,
     has_spawn_error: bool,
     config: gsh_config::Config,
+    pending_agent_enters: VecDeque<Instant>,
 }
 
 impl Default for TerminalPane {
@@ -174,6 +176,7 @@ impl TerminalPane {
                 cwd: cwd_owned,
                 has_spawn_error: true,
                 config,
+                pending_agent_enters: VecDeque::new(),
             },
         }
     }
@@ -192,6 +195,7 @@ impl TerminalPane {
             cwd: None,
             has_spawn_error: false,
             config: gsh_config::Config::default(),
+            pending_agent_enters: VecDeque::new(),
         }
     }
 
@@ -213,6 +217,7 @@ impl TerminalPane {
             cwd,
             has_spawn_error: false,
             config: gsh_config::Config::default(),
+            pending_agent_enters: VecDeque::new(),
         }
     }
 
@@ -270,6 +275,17 @@ impl TerminalPane {
         }
     }
 
+    /// Escreve a mensagem e envia Enter após a pausa que os TUI precisam para
+    /// distinguir texto submetido de uma colagem.
+    pub fn send_agent_message(&mut self, message: &str) -> bool {
+        if !self.send_text(message) {
+            return false;
+        }
+        self.pending_agent_enters
+            .push_back(Instant::now() + Duration::from_millis(400));
+        true
+    }
+
     /// Fotografia atual do grid visível.
     pub fn snapshot(&self) -> &TermSnapshot {
         &self.snapshot
@@ -325,6 +341,14 @@ impl TerminalPane {
     pub fn update(&mut self, msg: TerminalMsg) -> Task<TerminalMsg> {
         match msg {
             TerminalMsg::Tick => {
+                if self
+                    .pending_agent_enters
+                    .front()
+                    .is_some_and(|due| *due <= Instant::now())
+                {
+                    self.pending_agent_enters.pop_front();
+                    let _ = self.send_text("\r");
+                }
                 self.sync_snapshot();
                 Task::none()
             }

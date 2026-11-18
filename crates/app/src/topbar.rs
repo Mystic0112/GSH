@@ -27,6 +27,7 @@ pub struct TopbarActions<M> {
     pub on_farm: M,
     /// Abre a aba Harness do workspace; `None` esconde o botão (sem pasta local ou recurso desligado).
     pub on_harness: Option<M>,
+    pub on_agent_graph: M,
 }
 
 /// Renderiza a barra superior do shell com a pílula da ilha centralizada.
@@ -62,6 +63,11 @@ pub fn view<'a, M: Clone + 'a>(
             tooltip::Position::Bottom,
         ));
     }
+    right = right.push(tooltip(
+        icon_toggle_button(labels::ICON_HUB_OUTLINED, false, actions.on_agent_graph),
+        crate::pane_chrome::tip_bubble(labels::TOPBAR_VISUALIZE_AGENTS),
+        tooltip::Position::Bottom,
+    ));
     // ponytail: o grafo de agentes entra com o painel dele
     let right = right
         .push(icon_toggle_button(

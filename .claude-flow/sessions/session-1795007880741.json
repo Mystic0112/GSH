@@ -1,0 +1,15 @@
+{
+  "id": "session-1795007880741",
+  "startedAt": "2026-11-18T13:18:00.741Z",
+  "cwd": "/home/heliodev/projetos/GSH-wt/graph",
+  "context": {},
+  "metrics": {
+    "edits": 108,
+    "commands": 0,
+    "tasks": 0,
+    "errors": 0
+  },
+  "restoredAt": "2026-11-18T14:29:00.858Z",
+  "endedAt": "2026-11-18T14:31:58.570Z",
+  "duration": 4437830
+}

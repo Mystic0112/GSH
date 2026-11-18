@@ -42,6 +42,7 @@ libc = "0.2"
 
 [dev-dependencies]
 iced_test = "0.14"
+ttf-parser = "0.25.1"
 # só os testes do banco criam arquivos SQLite temporários
 rusqlite = { version = "0.43.0", features = ["bundled"] }
 tempfile = "3.27.0"

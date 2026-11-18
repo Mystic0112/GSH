@@ -173,6 +173,9 @@ pub const ICON_STOP: &str = "\u{e047}";
 pub const ICON_TOOL_RUNNING: &str = "◌";
 pub const ICON_GIT_BRANCH: &str = "\u{e0b6}";
 pub const ICON_ACCOUNT_TREE: &str = "\u{e97a}";
+pub const ICON_HUB_OUTLINED: &str = "\u{e9f4}";
+pub const ICON_INFO_OUTLINE: &str = "\u{e88e}";
+pub const TOPBAR_VISUALIZE_AGENTS: &str = "Visualizar agentes";
 pub const ICON_DIFF: &str = "\u{eb7d}";
 pub const ICON_MINUS: &str = "\u{e15b}";
 pub const ICON_SPEED: &str = "\u{e9e4}";
@@ -454,6 +457,82 @@ pub fn format_git_error(err: &gsh_git::GitError) -> String {
 }
 
 pub const FARM_TAB_TITLE: &str = "Cenário";
+pub const AGENT_GRAPH_TAB_TITLE: &str = "Agentes";
+pub const AGENT_GRAPH_EMPTY_TITLE: &str = "Nenhum agente neste workspace";
+pub const AGENT_GRAPH_EMPTY_HINT: &str = "Inicie um agente num terminal ou crie um aqui. Arraste da porta de um agente até outro para conectá-los.";
+pub const AGENT_GRAPH_NEW_AGENT: &str = "Novo agente";
+pub const AGENT_GRAPH_SHELL: &str = "Shell";
+pub const AGENT_GRAPH_DESKTOP_APPS: &str = "Apps desktop";
+pub const AGENT_GRAPH_AGENT_NAME: &str = "Nome";
+pub const AGENT_GRAPH_INTEGRATION: &str = "Integração";
+pub const AGENT_GRAPH_INTEGRATION_HINT: &str = "O GSH Desktop adiciona um servidor MCP chamado \"gsh\" a este arquivo e salva um backup ao lado. Os outros servidores não são tocados.";
+pub fn agent_graph_integration_consent(app: &str) -> String {
+    format!("Adicionar o servidor MCP do GSH Desktop ao config do {app}")
+}
+pub fn agent_graph_restart_hint(app: &str) -> String {
+    format!("Reinicie o {app} se ele já estava aberto, para carregar o servidor MCP do GSH Desktop; depois peça a ele para chamar wait_messages.")
+}
+pub fn agent_graph_integration_invalid(path: &str) -> String {
+    format!("{path} não é um JSON/TOML simples que o GSH Desktop consiga editar com segurança (comentários ou outro formato). Nada foi alterado.")
+}
+pub fn agent_graph_cli_missing(path: &str) -> String {
+    format!("A CLI do GSH Desktop ainda não foi instalada ({path}). Reinicie o GSH Desktop e tente de novo.")
+}
+pub fn agent_graph_write_failed(detail: &str) -> String {
+    format!("Não foi possível atualizar o config: {detail}")
+}
+pub const AGENT_GRAPH_QUICK_START: &str = "INÍCIO RÁPIDO";
+pub const AGENT_GRAPH_DETAILS: &str = "Detalhes";
+pub const AGENT_GRAPH_APPEARANCE: &str = "Aparência";
+pub const AGENT_GRAPH_AGENT: &str = "Agente";
+pub const AGENT_GRAPH_NAME: &str = "Nome do terminal";
+pub const AGENT_GRAPH_NAME_PLACEHOLDER: &str = "ex.: Revisor";
+pub const AGENT_GRAPH_NAME_TAKEN: &str =
+    "Outra aba já usa este nome. Os nomes precisam ser únicos para o `gsh msg --to` achar a aba.";
+pub const AGENT_GRAPH_COMMAND: &str = "Comando";
+pub const AGENT_GRAPH_COMMAND_PLACEHOLDER: &str = "ex.: claude --model opus (vazio = shell)";
+pub const AGENT_GRAPH_CWD: &str = "Diretório de trabalho";
+pub const AGENT_GRAPH_BROWSE: &str = "Procurar…";
+pub const AGENT_GRAPH_CWD_MISSING: &str = "Esta pasta não existe.";
+pub const AGENT_GRAPH_MONITOR: &str = "Monitorar atividade";
+pub const AGENT_GRAPH_MONITOR_HINT: &str = "Badge, som e notificação quando um turno termina.";
+pub const AGENT_GRAPH_MAESTRO: &str = "Maestro";
+pub const AGENT_GRAPH_MAESTRO_TOOLTIP: &str =
+    "Promove este agente a maestro: ele fica conectado a todos os agentes do canvas e os coordena.";
+pub const AGENT_GRAPH_COLOR: &str = "Cor";
+pub const AGENT_GRAPH_COLOR_AUTO: &str = "Automática";
+pub const AGENT_GRAPH_ROLE: &str = "Papel / instruções";
+pub const AGENT_GRAPH_ROLE_PLACEHOLDER: &str =
+    "Enviado como primeira mensagem assim que o agente estiver pronto.";
+pub const AGENT_GRAPH_TASK: &str = "Tarefa inicial";
+pub const AGENT_GRAPH_TASK_PLACEHOLDER: &str = "Enviada logo depois do papel.";
+pub const AGENT_GRAPH_STATUS_WORKING: &str = "Trabalhando";
+pub const AGENT_GRAPH_STATUS_WAITING: &str = "Aguardando";
+pub const AGENT_GRAPH_STATUS_IDLE: &str = "Ocioso";
+pub const AGENT_GRAPH_STATUS_OFFLINE: &str = "Offline";
+pub const AGENT_GRAPH_STATUS_ONLINE: &str = "Online";
+pub const NOTIFICATION_AGENT_FINISHED: &str = "Agente terminou";
+pub const NOTIFICATION_AGENT_NEEDS_YOU: &str = "Agente precisa de você";
+pub const AGENT_GRAPH_LINKED: &str = "Conectado";
+pub const AGENT_GRAPH_REMOVE_LINK_HINT: &str = "Clique direito para remover a conexão";
+pub fn agent_graph_message_count(count: usize) -> String {
+    format!("Mensagens: {count}")
+}
+pub fn agent_graph_last_message(preview: &str) -> String {
+    format!("Última: {preview}")
+}
+pub const AGENT_GRAPH_CONNECT_HINT: &str = "Arraste até outro agente para conectar";
+pub const AGENT_GRAPH_REMOVE_LINK: &str = "Remover conexão";
+pub const AGENT_GRAPH_FOCUS: &str = "Focar";
+pub const AGENT_GRAPH_RENAME: &str = "Renomear";
+pub const AGENT_GRAPH_RENAME_TITLE: &str = "Renomear agente";
+pub const AGENT_GRAPH_MAKE_MAESTRO: &str = "Tornar maestro";
+pub const AGENT_GRAPH_REMOVE_MAESTRO: &str = "Remover maestro";
+pub const AGENT_GRAPH_CLOSE_TAB: &str = "Fechar aba";
+pub const AGENT_GRAPH_REMOVE_FROM_CANVAS: &str = "Remover do canvas";
+pub fn agent_graph_maestro_replaces(name: &str) -> String {
+    format!("{name} é o maestro atual e deixará de ser.")
+}
 pub const FARM_OFFICE: &str = "Escritório";
 pub const FARM_FARM: &str = "Fazenda";
 

@@ -26,6 +26,7 @@ mod commands;
 mod env;
 mod error;
 mod hook;
+mod mcp;
 mod telemetry;
 mod transport;
 
