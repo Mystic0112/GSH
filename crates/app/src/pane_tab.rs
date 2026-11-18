@@ -3,15 +3,26 @@ use gsh_db::Engine;
 use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
 
+pub(crate) struct TabPresentation {
+    pub title: String,
+    pub active: bool,
+    pub dirty: bool,
+    pub hovered: bool,
+}
+
 pub(crate) fn view_tab<'a, M: Clone + 'a>(
     tab: &PaneTab,
-    is_active: bool,
-    dirty: bool,
-    hovered: bool,
+    presentation: TabPresentation,
     on_select: M,
     on_close: M,
     hover_messages: (M, M),
 ) -> Element<'a, M> {
+    let TabPresentation {
+        title,
+        active: is_active,
+        dirty,
+        hovered,
+    } = presentation;
     let icon_color = if is_active {
         theme::palette().accent_text
     } else {
@@ -45,7 +56,7 @@ pub(crate) fn view_tab<'a, M: Clone + 'a>(
         leading_icon,
         Space::new().width(theme::PANE_TAB_ICON_GAP),
         container(
-            text(tab.title())
+            text(title)
                 .font(theme::FONT_TAB)
                 .size(theme::SIZE_TAB)
                 .color(title_color)

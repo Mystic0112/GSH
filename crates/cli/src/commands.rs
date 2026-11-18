@@ -21,6 +21,7 @@ pub fn run(cmd: Command) -> Result<Option<String>, CliError> {
         Command::Help(text) => Ok(Some(with_newline(text))),
         Command::Version => Ok(Some(format!("gsh {}\n", gsh_core::VERSION))),
         Command::Hook { harness } => hook::run(&harness),
+        Command::Mcp { agent } => crate::mcp::run(&agent),
         Command::Msg { to, text, json } => msg(&to, &text, json).map(Some),
         Command::TeamSend { to, text, json } => team_send(&to, &text, json).map(Some),
         Command::TeamPeers { json } => team_peers(json),

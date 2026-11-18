@@ -13,6 +13,11 @@
 )]
 
 pub mod agent_file_marks;
+pub mod agent_graph;
+pub mod agent_graph_dialog;
+#[cfg(test)]
+mod agent_graph_interaction_tests;
+pub mod agent_graph_store;
 pub mod agent_island_panel;
 pub mod agent_status;
 pub mod anchored;
@@ -34,6 +39,7 @@ pub mod db_query_view;
 pub mod db_redis;
 pub mod db_redis_view;
 pub mod db_state;
+pub mod desktop_agent_apps;
 pub mod drag_handle;
 pub mod editor_gutter;
 pub mod editor_highlight;
@@ -87,6 +93,7 @@ pub mod topbar;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc::SyncSender;
 use std::time::Duration;
 use std::time::Instant;
@@ -206,6 +213,27 @@ fn safe_team_text(value: &str) -> String {
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
 }
+
+fn external_message_json(messages: Vec<agent_graph_store::AgentMessage>) -> Vec<serde_json::Value> {
+    messages
+        .into_iter()
+        .map(|message| {
+            serde_json::json!({
+                "from": message.signed_by,
+                "text": message.preview,
+                "sentAt": message.sent_at_ms
+            })
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn send_desktop_notification(title: &str, body: &str) {
+    let _ = Command::new("notify-send").arg(title).arg(body).spawn();
+}
+
+#[cfg(not(target_os = "linux"))]
+fn send_desktop_notification(_: &str, _: &str) {}
 
 fn resolve_team_target(
     contacts: &[(gsh_team::Peer, TeamAgent)],
@@ -349,6 +377,7 @@ enum Msg {
     ConfirmWindowClose,
     CancelWindowClose,
     WindowUnfocused,
+    WindowFocused,
     StatusTick,
     TabHover(Option<(Pane, usize)>),
     SelectTab(usize),
@@ -367,6 +396,13 @@ enum Msg {
     CancelClosePane,
     ResizePane(pane_grid::ResizeEvent),
     OpenFarm,
+    OpenAgentGraph,
+    AgentGraph(agent_graph::Message),
+    AgentGraphDialog(agent_graph_dialog::Message),
+    AgentGraphFolderPicked(Option<String>),
+    AgentDesktopInstalled(
+        Result<(desktop_agent_apps::Integration, PathBuf), desktop_agent_apps::Error>,
+    ),
     OpenSettings,
     Settings(settings::Message),
     Farm(farm::Message),
@@ -460,6 +496,7 @@ struct Shell {
     ssh_prompt: Option<PendingSsh>,
     /// Query com alterações não salvas que o usuário mandou fechar (aguarda a escolha).
     pending_close_query: Option<QueryId>,
+    agent_graph_dialog: Option<agent_graph_dialog::Draft>,
     harness: harness_pane::HarnessState,
     settings: settings::Settings,
     panes: PaneTree,
@@ -467,6 +504,13 @@ struct Shell {
     pending_close_pane: Option<Pane>,
     hovered_tab: Option<(Pane, usize)>,
     terminals: BTreeMap<TermId, TerminalPane>,
+    terminal_labels: HashMap<TermId, String>,
+    agent_graphs: HashMap<PathBuf, agent_graph_store::AgentGraphStore>,
+    agent_graph_save_due: HashMap<PathBuf, Instant>,
+    external_waiters: Vec<ExternalWaiter>,
+    pending_agent_deliveries: Vec<PendingAgentDelivery>,
+    graph_context: Option<String>,
+    graph_rename: Option<(String, String)>,
     chats: BTreeMap<ChatId, ChatPane>,
     file_viewers: BTreeMap<PathBuf, FileViewerState>,
     editors: BTreeMap<PathBuf, editor_pane::EditorPane>,
@@ -490,6 +534,24 @@ struct Shell {
     rail_open: bool,
     files_open: bool,
     static_test_mode: bool,
+    window_focused: bool,
+}
+
+struct ExternalWaiter {
+    reply: SyncSender<serde_json::Value>,
+    workspace: PathBuf,
+    id: String,
+    deadline: Instant,
+}
+
+struct PendingAgentDelivery {
+    workspace: PathBuf,
+    from: String,
+    to: String,
+    messages: Vec<String>,
+    next: usize,
+    next_at: Instant,
+    ready: bool,
 }
 
 impl Default for Shell {
@@ -535,12 +597,20 @@ impl Default for Shell {
             mongo_tabs: BTreeMap::new(),
             ssh_prompt: None,
             pending_close_query: None,
+            agent_graph_dialog: None,
             harness: harness_pane::HarnessState::default(),
             settings,
             panes,
             pending_close_pane: None,
             hovered_tab: None,
             terminals,
+            terminal_labels: HashMap::new(),
+            agent_graphs: HashMap::new(),
+            agent_graph_save_due: HashMap::new(),
+            external_waiters: Vec::new(),
+            pending_agent_deliveries: Vec::new(),
+            graph_context: None,
+            graph_rename: None,
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
             editors: BTreeMap::new(),
@@ -558,6 +628,7 @@ impl Default for Shell {
             rail_open: true,
             files_open: true,
             static_test_mode: false,
+            window_focused: true,
         };
         shell.configure_team();
         shell
@@ -569,6 +640,17 @@ async fn pick_workspace_folder() -> Option<PathBuf> {
         .pick_folder()
         .await
         .map(|handle| handle.path().to_path_buf())
+}
+
+async fn pick_agent_folder(initial: Option<PathBuf>) -> Option<String> {
+    let mut picker = rfd::AsyncFileDialog::new();
+    if let Some(path) = initial.filter(|path| path.is_dir()) {
+        picker = picker.set_directory(path);
+    }
+    picker
+        .pick_folder()
+        .await
+        .map(|handle| handle.path().to_string_lossy().into_owned())
 }
 
 impl Shell {
@@ -747,7 +829,7 @@ impl Shell {
         self.farm.sync_knocks(self.team_knocks.clone(), targets);
     }
 
-    fn handle_team_cli(&self, command: gsh_ipc::PendingCommand) -> Task<Msg> {
+    fn handle_team_cli(&mut self, command: gsh_ipc::PendingCommand) -> Task<Msg> {
         let request = &command.request;
         let cmd = request
             .get("cmd")
@@ -758,15 +840,265 @@ impl Shell {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
         let args = request.get("args");
-        if cmd == "peers" {
-            if self.team_sender_for_tab(tab_id).is_none() {
+        if cmd == "msg" {
+            let target = args
+                .and_then(|value| value.get("to"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            let message = args
+                .and_then(|value| value.get("text"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let reply = command.reply;
+            let sender_external = self
+                .active_workspace_dir()
+                .and_then(|workspace| self.agent_graphs.get(workspace))
+                .and_then(|graph| graph.externals().get(tab_id));
+            if !self
+                .terminals
+                .keys()
+                .any(|id| agent_status::pane_id_for_term(*id) == tab_id)
+                && sender_external.is_none()
+            {
+                let _ = reply.send(serde_json::json!({"ok": false, "error": "unknown tab (run inside a GSH terminal)"}));
+                return Task::none();
+            }
+            if target.is_empty() {
+                let _ = reply.send(serde_json::json!({"ok": false, "error": "missing --to"}));
+                return Task::none();
+            }
+            if message.is_empty() {
+                let _ = reply.send(serde_json::json!({"ok": false, "error": "missing text"}));
+                return Task::none();
+            }
+            let mut target_id = if self
+                .terminals
+                .keys()
+                .any(|id| agent_status::pane_id_for_term(*id) == target)
+            {
+                target.clone()
+            } else {
+                let matched = self
+                    .terminal_labels
+                    .iter()
+                    .filter(|(_, label)| label.eq_ignore_ascii_case(&target))
+                    .map(|(id, _)| *id)
+                    .collect::<Vec<_>>();
+                match matched.as_slice() {
+                    [id] => agent_status::pane_id_for_term(*id),
+                    [] => {
+                        let _ = reply.send(serde_json::json!({"ok": false, "error": format!("no tab with id or label \"{target}\" (see `gsh list-tabs`)")}));
+                        return Task::none();
+                    }
+                    _ => {
+                        let _ = reply.send(serde_json::json!({"ok": false, "error": format!("label \"{target}\" is ambiguous — use a tab-id from `gsh list-tabs`")}));
+                        return Task::none();
+                    }
+                }
+            };
+            if !self
+                .terminals
+                .keys()
+                .any(|id| agent_status::pane_id_for_term(*id) == target_id)
+            {
+                let external = self
+                    .active_workspace_dir()
+                    .and_then(|workspace| self.agent_graphs.get(workspace))
+                    .and_then(|graph| {
+                        graph
+                            .externals()
+                            .iter()
+                            .find(|(id, node)| {
+                                id.as_str() == target
+                                    || node.label.eq_ignore_ascii_case(&target)
+                                    || node.app.label().eq_ignore_ascii_case(&target)
+                            })
+                            .map(|(id, _)| id.clone())
+                    });
+                if let Some(external) = external {
+                    target_id = external;
+                }
+            }
+            if target_id == tab_id {
+                let _ = reply
+                    .send(serde_json::json!({"ok": false, "error": "cannot message your own tab"}));
+                return Task::none();
+            }
+            let sender_name = self
+                .terminal_labels
+                .iter()
+                .find(|(id, _)| agent_status::pane_id_for_term(**id) == tab_id)
+                .map(|(_, label)| label.as_str())
+                .or_else(|| sender_external.map(|external| external.label.as_str()))
+                .unwrap_or(tab_id)
+                .to_owned();
+            let sender_harness = self
+                .status_runtime
+                .pane_record(tab_id)
+                .and_then(|record| record.harness())
+                .map(agent_status::harness_label)
+                .or_else(|| sender_external.map(|external| external.app.label()));
+            let signed_by = sender_harness.map_or_else(
+                || sender_name.clone(),
+                |harness| format!("{sender_name} · {harness}"),
+            );
+            let line = format!("[from: {signed_by}] {message}");
+            let delivered = if target_id.starts_with("ext:") {
+                let message_record = agent_graph_store::AgentMessage {
+                    from_tab_id: tab_id.to_owned(),
+                    to_tab_id: target_id.clone(),
+                    sent_at_ms: agent_status::now_epoch_ms(),
+                    preview: message.chars().take(200).collect(),
+                    signed_by: signed_by.clone(),
+                };
+                self.active_workspace_dir()
+                    .map(Path::to_path_buf)
+                    .is_some_and(|workspace| {
+                        self.agent_graphs
+                            .get_mut(&workspace)
+                            .is_some_and(|graph| graph.enqueue_external(&target_id, message_record))
+                    })
+            } else {
+                agent_status::term_id_from_pane_id(&target_id)
+                    .and_then(|target_term| self.terminals.get_mut(&target_term))
+                    .is_some_and(|term| term.send_agent_message(&line))
+            };
+            if !delivered {
+                let _ = reply
+                    .send(serde_json::json!({"ok": false, "error": "target tab is not running"}));
+                return Task::none();
+            }
+            if let Some(workspace) = self.active_workspace_dir().map(Path::to_path_buf) {
+                self.agent_graphs.entry(workspace).or_default().record(
+                    agent_graph_store::AgentMessage {
+                        from_tab_id: tab_id.to_owned(),
+                        to_tab_id: target_id.clone(),
+                        sent_at_ms: agent_status::now_epoch_ms(),
+                        preview: message.chars().take(200).collect(),
+                        signed_by,
+                    },
+                );
+            }
+            let _ = reply
+                .send(serde_json::json!({"ok": true, "data": {"from": tab_id, "to": target_id}}));
+            return Task::none();
+        }
+        if cmd == "peers" || cmd == "agents" {
+            let external_caller = self
+                .active_workspace_dir()
+                .and_then(|workspace| self.agent_graphs.get(workspace))
+                .is_some_and(|graph| graph.externals().contains_key(tab_id));
+            if self.team_sender_for_tab(tab_id).is_none() && !external_caller {
                 let _ = command.reply.send(serde_json::json!({"ok": false, "error": "unknown tab (run inside a GSH terminal)"}));
                 return Task::none();
             }
-            let contacts = self.team_contacts();
+            let mut contacts = Vec::new();
+            if let Some(workspace) = self.active_workspace_dir().map(Path::to_path_buf) {
+                if let Some(graph) = self.agent_graphs.get(&workspace) {
+                    let peer_ids = if cmd == "peers" {
+                        graph
+                            .peers(tab_id)
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>()
+                    } else {
+                        self.live_graph_agents(&workspace)
+                            .into_iter()
+                            .filter(|id| id != tab_id)
+                            .collect()
+                    };
+                    for peer in peer_ids {
+                        if let Some(external) = graph.externals().get(&peer) {
+                            contacts.push(serde_json::json!({
+                                "id": peer,
+                                "label": external.label,
+                                "title": external.app.label(),
+                                "harness": external.app.label(),
+                                "working": false,
+                                "maestro": graph.maestro() == Some(peer.as_str()),
+                                "app": external.app.id(),
+                                "online": agent_status::now_epoch_ms().saturating_sub(external.last_seen_ms) <= 15_000,
+                                "linked": graph.peers(tab_id).contains(&peer.as_str()),
+                            }));
+                            continue;
+                        }
+                        let Some(term_id) = agent_status::term_id_from_pane_id(&peer) else {
+                            continue;
+                        };
+                        let label = self
+                            .terminal_labels
+                            .get(&term_id)
+                            .cloned()
+                            .unwrap_or_else(|| peer.clone());
+                        let record = self.status_runtime.pane_record(&peer);
+                        contacts.push(serde_json::json!({
+                            "id": peer,
+                            "label": label,
+                            "title": label,
+                            "harness": record.and_then(|record| record.harness()).map(agent_status::harness_label),
+                            "working": record.is_some_and(|record| record.status() == gsh_core::status::TurnStatus::Working),
+                            "maestro": graph.maestro() == Some(peer.as_str()),
+                            "linked": graph.peers(tab_id).contains(&peer.as_str()),
+                        }));
+                    }
+                }
+            }
+            contacts.extend(self.team_contacts());
             let _ = command
                 .reply
                 .send(serde_json::json!({"ok": true, "data": contacts}));
+            return Task::none();
+        }
+        if cmd == "ext-ping" {
+            let marked = self
+                .active_workspace_dir()
+                .map(Path::to_path_buf)
+                .is_some_and(|workspace| {
+                    self.agent_graphs.get_mut(&workspace).is_some_and(|graph| {
+                        graph.external_seen(tab_id, agent_status::now_epoch_ms())
+                    })
+                });
+            let _ = command.reply.send(serde_json::json!({"ok": marked, "data": {"online": marked}, "error": if marked { serde_json::Value::Null } else { serde_json::json!("unknown external agent") }}));
+            return Task::none();
+        }
+        if cmd == "ext-wait" {
+            let workspace = self
+                .active_workspace_dir()
+                .map(Path::to_path_buf)
+                .unwrap_or_default();
+            let timeout = args
+                .and_then(|value| value.get("timeout"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(45)
+                .min(55);
+            let result = self.agent_graphs.get_mut(&workspace).and_then(|graph| {
+                graph
+                    .external_seen(tab_id, agent_status::now_epoch_ms())
+                    .then(|| graph.take_external_messages(tab_id))
+                    .flatten()
+            });
+            if let Some(messages) = result {
+                if !messages.is_empty() || timeout == 0 {
+                    let _ = command.reply.send(serde_json::json!({
+                        "ok": true,
+                        "data": external_message_json(messages)
+                    }));
+                } else {
+                    self.external_waiters.push(ExternalWaiter {
+                        reply: command.reply,
+                        workspace,
+                        id: tab_id.to_owned(),
+                        deadline: Instant::now() + Duration::from_secs(timeout),
+                    });
+                }
+            } else {
+                let _ = command
+                    .reply
+                    .send(serde_json::json!({"ok": false, "error": "unknown external agent"}));
+            }
             return Task::none();
         }
         if cmd != "send" {
@@ -1118,6 +1450,339 @@ impl Shell {
         self.workspaces.active().and_then(|ws| ws.path.as_deref())
     }
 
+    fn poll_external_waiters(&mut self) {
+        let now = Instant::now();
+        let mut waiting = Vec::new();
+        for waiter in std::mem::take(&mut self.external_waiters) {
+            let messages = self
+                .agent_graphs
+                .get_mut(&waiter.workspace)
+                .and_then(|graph| graph.take_external_messages(&waiter.id));
+            match messages {
+                Some(messages) if !messages.is_empty() => {
+                    let _ = waiter.reply.send(serde_json::json!({
+                        "ok": true,
+                        "data": external_message_json(messages)
+                    }));
+                }
+                Some(_) if now < waiter.deadline => waiting.push(waiter),
+                Some(_) => {
+                    let _ = waiter
+                        .reply
+                        .send(serde_json::json!({"ok": true, "data": []}));
+                }
+                None => {
+                    let _ = waiter.reply.send(serde_json::json!({
+                        "ok": false,
+                        "error": "unknown external agent"
+                    }));
+                }
+            }
+        }
+        self.external_waiters = waiting;
+    }
+
+    fn queue_agent_delivery(
+        &mut self,
+        workspace: PathBuf,
+        from: String,
+        to: String,
+        messages: Vec<String>,
+    ) {
+        if messages.is_empty() {
+            return;
+        }
+        self.pending_agent_deliveries.push(PendingAgentDelivery {
+            workspace,
+            from,
+            to,
+            messages,
+            next: 0,
+            next_at: Instant::now(),
+            ready: false,
+        });
+    }
+
+    fn notify_monitored_agent_changes(
+        &self,
+        before: &HashMap<String, gsh_core::status::TurnStatus>,
+    ) {
+        if self.window_focused
+            || self.static_test_mode
+            || !self.settings.current.notifications_enabled
+        {
+            return;
+        }
+        let workspace = self.active_workspace_dir().unwrap_or_else(|| Path::new(""));
+        for id in self
+            .terminals
+            .keys()
+            .map(|id| agent_status::pane_id_for_term(*id))
+        {
+            let Some(previous) = before.get(&id) else {
+                continue;
+            };
+            let Some(record) = self.status_runtime.pane_record(&id) else {
+                continue;
+            };
+            let title = match (*previous, record.status()) {
+                (gsh_core::status::TurnStatus::Working, gsh_core::status::TurnStatus::Waiting) => {
+                    labels::NOTIFICATION_AGENT_NEEDS_YOU
+                }
+                (gsh_core::status::TurnStatus::Working, gsh_core::status::TurnStatus::Idle) => {
+                    labels::NOTIFICATION_AGENT_FINISHED
+                }
+                _ => continue,
+            };
+            if self
+                .agent_graphs
+                .get(workspace)
+                .is_some_and(|graph| !graph.is_monitored(&id))
+            {
+                continue;
+            }
+            let name = agent_status::term_id_from_pane_id(&id)
+                .and_then(|term| self.terminal_labels.get(&term))
+                .map_or(id.as_str(), String::as_str);
+            let workspace_name = self
+                .workspaces
+                .active()
+                .map_or("", |item| item.name.as_str());
+            let body = if workspace_name.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{name} · {workspace_name}")
+            };
+            send_desktop_notification(title, &body);
+        }
+    }
+
+    fn live_graph_agents(&self, workspace: &Path) -> Vec<String> {
+        let mut ids = self
+            .terminals
+            .keys()
+            .filter_map(|id| {
+                let pane_id = agent_status::pane_id_for_term(*id);
+                self.status_runtime
+                    .pane_record(&pane_id)
+                    .and_then(|record| record.harness())
+                    .is_some()
+                    .then_some(pane_id)
+            })
+            .collect::<Vec<_>>();
+        if let Some(graph) = self.agent_graphs.get(workspace) {
+            ids.extend(graph.externals().keys().cloned());
+        }
+        ids
+    }
+
+    fn graph_agent_label(
+        &self,
+        workspace: &Path,
+        id: &str,
+    ) -> (
+        String,
+        Option<String>,
+        Option<gsh_core::status::AgentHarness>,
+    ) {
+        if let Some(term_id) = agent_status::term_id_from_pane_id(id) {
+            let label = self
+                .terminal_labels
+                .get(&term_id)
+                .cloned()
+                .unwrap_or_else(|| id.to_owned());
+            let harness = self
+                .status_runtime
+                .pane_record(id)
+                .and_then(|record| record.harness());
+            let kind = harness.map(agent_status::harness_label).map(str::to_owned);
+            (label, kind, harness)
+        } else {
+            let external = self
+                .agent_graphs
+                .get(workspace)
+                .and_then(|graph| graph.externals().get(id));
+            external.map_or_else(
+                || (id.to_owned(), None, None),
+                |agent| {
+                    (
+                        agent.label.clone(),
+                        Some(agent.app.label().to_owned()),
+                        None,
+                    )
+                },
+            )
+        }
+    }
+
+    fn link_intro(&self, workspace: &Path, receiver: &str, peer: &str) -> String {
+        let (label, kind, _) = self.graph_agent_label(workspace, peer);
+        let raw = label.as_str();
+        let address = if raw
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || "_.:-".contains(ch))
+        {
+            raw.to_owned()
+        } else {
+            format!("\"{raw}\"")
+        };
+        let kind = kind.map_or_else(String::new, |kind| format!(" ({kind})"));
+        let channel = if receiver.starts_with("ext:") {
+            "queue"
+        } else if self
+            .status_runtime
+            .pane_record(receiver)
+            .and_then(|record| record.harness())
+            == Some(gsh_core::status::AgentHarness::Codex)
+        {
+            "codex"
+        } else {
+            "shell"
+        };
+        let text = match channel {
+            "queue" => format!("Talk to it with the send tool (to: {address}); its replies are queued for you: collect them with wait_messages."),
+            "codex" => format!("You are GSH tab {receiver}. Use the tools of the `gsh` MCP server (the `gsh` shell commands are blocked by your sandbox), and always pass from: \"{receiver}\" when calling them. Talk to it with the send tool (to: {address}); its replies are typed into your terminal (wait_messages also returns them)."),
+            _ => format!("Talk to it with: gsh msg --to {address} \"...\""),
+        };
+        format!("You are now connected to {label}{kind}. {text}")
+    }
+
+    fn maestro_intro(&self, workspace: &Path, maestro: &str) -> String {
+        let peers = self
+            .agent_graphs
+            .get(workspace)
+            .map(|graph| graph.peers(maestro))
+            .unwrap_or_default();
+        let names = peers
+            .iter()
+            .map(|peer| {
+                let (label, kind, _) = self.graph_agent_label(workspace, peer);
+                kind.map_or(label.clone(), |kind| format!("{label} ({kind})"))
+            })
+            .collect::<Vec<_>>();
+        let list = if names.is_empty() {
+            "(none yet)".to_owned()
+        } else {
+            names.join(", ")
+        };
+        let channel = if maestro.starts_with("ext:") {
+            "queue"
+        } else if self
+            .status_runtime
+            .pane_record(maestro)
+            .and_then(|record| record.harness())
+            == Some(gsh_core::status::AgentHarness::Codex)
+        {
+            "codex"
+        } else {
+            "shell"
+        };
+        let how = match channel {
+            "queue" => "Message one with the send tool (to: <label>). Replies are not pushed to you: they are queued, so call wait_messages after dispatching work to collect them. List agents anytime with peers (connected) or list_agents (whole workspace).".to_owned(),
+            "codex" => format!("You are GSH tab {maestro}. Use the tools of the `gsh` MCP server (the `gsh` shell commands are blocked by your sandbox), and always pass from: \"{maestro}\" when calling them. Message one with the send tool (to: <label>); replies are typed into your terminal (wait_messages also returns them). List agents anytime with peers (connected) or list_agents (whole workspace)."),
+            _ => "Message one with: gsh msg --to <label> \"...\"; list them anytime with: gsh peers".to_owned(),
+        };
+        format!("You are the maestro of this workspace: you are connected to every agent on the canvas and coordinate them. Agents: {list}. {how}")
+    }
+
+    fn pump_agent_deliveries(&mut self) {
+        let now = Instant::now();
+        let mut pending = Vec::new();
+        for mut delivery in std::mem::take(&mut self.pending_agent_deliveries) {
+            if delivery.next_at > now {
+                pending.push(delivery);
+                continue;
+            }
+            let external = delivery.to.starts_with("ext:");
+            if !external && !delivery.ready {
+                let ready = agent_status::term_id_from_pane_id(&delivery.to)
+                    .and_then(|id| {
+                        self.status_runtime
+                            .pane_record(&delivery.to)
+                            .map(|record| (id, record))
+                    })
+                    .is_some_and(|(_, record)| {
+                        record.harness().is_some()
+                            && record.status() == gsh_core::status::TurnStatus::Idle
+                    });
+                if !ready {
+                    delivery.next_at = now + Duration::from_millis(500);
+                    pending.push(delivery);
+                    continue;
+                }
+                delivery.ready = true;
+                delivery.next_at = now + Duration::from_secs(2);
+                pending.push(delivery);
+                continue;
+            }
+            let Some(message) = delivery.messages.get(delivery.next).cloned() else {
+                continue;
+            };
+            let line = format!("[from: gsh] {message}");
+            let sent = if external {
+                let record = agent_graph_store::AgentMessage {
+                    from_tab_id: delivery.from.clone(),
+                    to_tab_id: delivery.to.clone(),
+                    sent_at_ms: agent_status::now_epoch_ms(),
+                    preview: message.chars().take(200).collect(),
+                    signed_by: "gsh".to_owned(),
+                };
+                self.agent_graphs
+                    .get_mut(&delivery.workspace)
+                    .is_some_and(|graph| graph.enqueue_external(&delivery.to, record))
+            } else {
+                agent_status::term_id_from_pane_id(&delivery.to)
+                    .and_then(|id| self.terminals.get_mut(&id))
+                    .is_some_and(|term| term.send_agent_message(&line))
+            };
+            if sent {
+                if let Some(graph) = self.agent_graphs.get_mut(&delivery.workspace) {
+                    graph.record(agent_graph_store::AgentMessage {
+                        from_tab_id: delivery.from.clone(),
+                        to_tab_id: delivery.to.clone(),
+                        sent_at_ms: agent_status::now_epoch_ms(),
+                        preview: message.chars().take(200).collect(),
+                        signed_by: "gsh".to_owned(),
+                    });
+                }
+            }
+            delivery.next += 1;
+            if delivery.next < delivery.messages.len() && sent {
+                delivery.next_at = now + Duration::from_millis(1200);
+                pending.push(delivery);
+            }
+        }
+        self.pending_agent_deliveries = pending;
+    }
+
+    fn schedule_agent_graph_save(&mut self, workspace: PathBuf) {
+        self.agent_graph_save_due
+            .insert(workspace, Instant::now() + Duration::from_millis(150));
+    }
+
+    fn flush_agent_graph_saves(&mut self) {
+        let now = Instant::now();
+        let due = self
+            .agent_graph_save_due
+            .iter()
+            .filter(|(_, deadline)| **deadline <= now)
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        for workspace in due {
+            self.agent_graph_save_due.remove(&workspace);
+            let Some(graph) = self.agent_graphs.get(&workspace) else {
+                continue;
+            };
+            let mut live = self
+                .terminals
+                .keys()
+                .map(|id| agent_status::pane_id_for_term(*id))
+                .collect::<BTreeSet<_>>();
+            live.extend(graph.externals().keys().cloned());
+            let _ = agent_graph_store::save_workspace(&workspace, graph, &live);
+        }
+    }
+
     fn spawn_terminal_for_dir(&mut self, id: TermId, cwd: Option<&Path>) -> TerminalPane {
         let pane_id = pane_id_for_term(id);
         self.status_runtime.register_pane(pane_id.clone());
@@ -1151,52 +1816,44 @@ impl Shell {
             .map(|ws| ws.name.clone())
             .unwrap_or_else(|| labels::WORKSPACE_GSH.to_string());
 
-        self.panes
-            .models()
-            .into_iter()
-            .flat_map(PaneModel::tabs)
-            .filter_map(|tab| match tab {
-                PaneTab::Terminal(id) => Some(PaneDescriptor::new(
-                    pane_id_for_term(*id),
-                    format!("{} · t{id}", tab.title()),
-                    workspace_name.clone(),
-                )),
-                PaneTab::Chat(_)
-                | PaneTab::File(_)
-                | PaneTab::Farm
-                | PaneTab::Settings
-                | PaneTab::Query { .. }
-                | PaneTab::Redis { .. }
-                | PaneTab::Mongo { .. }
-                | PaneTab::Harness(_) => None,
-            })
-            .collect()
+        let mut descriptors = Vec::new();
+        for model in self.panes.models() {
+            for tab in model.tabs() {
+                if let PaneTab::Terminal(id) = tab {
+                    descriptors.push(PaneDescriptor::new(
+                        pane_id_for_term(*id),
+                        format!("{} · t{id}", model.display_title(tab)),
+                        workspace_name.clone(),
+                    ));
+                }
+            }
+        }
+        descriptors
     }
 
     /// Abas do menu do filtro por agente: terminais com harness ativo ou com arquivos tocados
     /// (`agentTabs` em `gsh_page.dart`).
     fn agent_tabs(&self) -> Vec<AgentTab> {
         let activity = self.status_runtime.file_activity();
-        self.panes
-            .models()
-            .into_iter()
-            .flat_map(PaneModel::tabs)
-            .filter_map(|tab| {
-                let PaneTab::Terminal(id) = tab else {
-                    return None;
-                };
+        let mut tabs = Vec::new();
+        for model in self.panes.models() {
+            for tab in model.tabs() {
+                let PaneTab::Terminal(id) = tab else { continue };
                 let pane_id = pane_id_for_term(*id);
                 let by_hook = self
                     .status_runtime
                     .pane_record(&pane_id)
                     .is_some_and(|record| record.harness().is_some());
-                (by_hook || activity.touched_count(&pane_id) > 0).then(|| AgentTab {
-                    id: pane_id,
-                    label: tab.title(),
-                    by_hook,
-                })
-            })
-            .collect()
+                if by_hook || activity.touched_count(&pane_id) > 0 {
+                    tabs.push(AgentTab {
+                        id: pane_id,
+                        label: model.display_title(tab),
+                        by_hook,
+                    });
+                }
+            }
+        }
+        tabs
     }
 
     fn sync_island_from_status(&mut self) {
@@ -1285,10 +1942,18 @@ impl Shell {
     fn dispose_tab(&mut self, tab: PaneTab) {
         match tab {
             PaneTab::Terminal(id) => {
+                self.terminal_labels.remove(&id);
                 if let Some(mut term) = self.terminals.remove(&id) {
                     term.close_session();
                 }
                 let pane_id = pane_id_for_term(id);
+                for (workspace, graph) in &mut self.agent_graphs {
+                    graph.remove_agent(&pane_id);
+                    self.agent_graph_save_due.insert(
+                        workspace.clone(),
+                        Instant::now() + Duration::from_millis(150),
+                    );
+                }
                 if self.status_runtime.remove_pane(&pane_id) {
                     self.sync_island_from_status();
                 }
@@ -1317,7 +1982,7 @@ impl Shell {
             PaneTab::Settings => {
                 let _ = self.settings.update(settings::Message::Back);
             }
-            PaneTab::Farm | PaneTab::Harness(_) => {}
+            PaneTab::Farm | PaneTab::Harness(_) | PaneTab::AgentGraph(_) => {}
         }
     }
 
@@ -1681,12 +2346,33 @@ impl Shell {
                 Task::none()
             }
             Msg::WindowUnfocused => {
+                self.window_focused = false;
                 self.pending_window_close = None;
                 self.hovered_tab = None;
                 Task::none()
             }
+            Msg::WindowFocused => {
+                self.window_focused = true;
+                Task::none()
+            }
             Msg::StatusTick => {
+                self.flush_agent_graph_saves();
+                self.poll_external_waiters();
+                self.pump_agent_deliveries();
+                let before = self
+                    .terminals
+                    .keys()
+                    .map(|id| {
+                        let pane_id = agent_status::pane_id_for_term(*id);
+                        let status = self
+                            .status_runtime
+                            .pane_record(&pane_id)
+                            .map_or(gsh_core::status::TurnStatus::Idle, |record| record.status());
+                        (pane_id, status)
+                    })
+                    .collect::<HashMap<_, _>>();
                 if self.status_runtime.drain_deliveries(now_epoch_ms()) {
+                    self.notify_monitored_agent_changes(&before);
                     self.sync_island_from_status();
                 }
                 let command_tasks = self
@@ -2070,7 +2756,8 @@ impl Shell {
                         | PaneTab::Settings
                         | PaneTab::Redis { .. }
                         | PaneTab::Mongo { .. }
-                        | PaneTab::Harness(_) => {}
+                        | PaneTab::Harness(_)
+                        | PaneTab::AgentGraph(_) => {}
                     }
                 }
                 Task::none()
@@ -2152,6 +2839,518 @@ impl Shell {
             }
             Msg::OpenFarm => {
                 self.panes.focused_model_mut().open_farm();
+                Task::none()
+            }
+            Msg::OpenAgentGraph => {
+                let workspace = self
+                    .active_workspace_dir()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_default();
+                if !self.agent_graphs.contains_key(&workspace) {
+                    let mut graph = agent_graph_store::AgentGraphStore::default();
+                    if let Some(saved) = agent_graph_store::load_workspace(&workspace) {
+                        graph.restore(&saved, &BTreeMap::new());
+                    }
+                    self.agent_graphs.insert(workspace.clone(), graph);
+                }
+                self.panes.focused_model_mut().open_agent_graph(&workspace);
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::Create) => {
+                let root = self
+                    .active_workspace_dir()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_default();
+                self.agent_graph_dialog = Some(agent_graph_dialog::Draft::new(
+                    &root,
+                    desktop_agent_apps::detect(),
+                ));
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::Move(id, x, y)) => {
+                if let Some(workspace) = self.active_workspace_dir().map(Path::to_path_buf) {
+                    self.agent_graphs
+                        .entry(workspace)
+                        .or_default()
+                        .set_position(&id, x, y);
+                    self.schedule_agent_graph_save(
+                        self.active_workspace_dir()
+                            .map(Path::to_path_buf)
+                            .unwrap_or_default(),
+                    );
+                }
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::Connect(a, b)) => {
+                if let Some(workspace) = self.active_workspace_dir().map(Path::to_path_buf) {
+                    let linked = self
+                        .agent_graphs
+                        .entry(workspace)
+                        .or_default()
+                        .add_link(&a, &b);
+                    if linked {
+                        let workspace = self
+                            .active_workspace_dir()
+                            .map(Path::to_path_buf)
+                            .unwrap_or_default();
+                        let a_intro = self.link_intro(&workspace, &a, &b);
+                        let b_intro = self.link_intro(&workspace, &b, &a);
+                        self.queue_agent_delivery(
+                            workspace.clone(),
+                            b.clone(),
+                            a.clone(),
+                            vec![a_intro],
+                        );
+                        self.queue_agent_delivery(workspace.clone(), a, b, vec![b_intro]);
+                        self.schedule_agent_graph_save(workspace);
+                    }
+                }
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::Select(id)) => {
+                self.graph_context = None;
+                if let Some(term_id) = agent_status::term_id_from_pane_id(&id) {
+                    self.reveal_terminal_by_pane_id(&id);
+                    if let Some(pane) = self.panes.pane_of(&PaneTab::Terminal(term_id)) {
+                        self.panes.focus(pane);
+                    }
+                } else if let Some(workspace) = self.active_workspace_dir().map(Path::to_path_buf) {
+                    if let Some(external) = self
+                        .agent_graphs
+                        .get(&workspace)
+                        .and_then(|graph| graph.externals().get(&id))
+                    {
+                        desktop_agent_apps::launch_app(external.app, Path::new(&external.cwd));
+                    }
+                }
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::RemoveLink(a, b)) => {
+                if let Some(workspace) = self.active_workspace_dir().map(Path::to_path_buf) {
+                    self.agent_graphs
+                        .entry(workspace)
+                        .or_default()
+                        .remove_link(&a, &b);
+                    self.schedule_agent_graph_save(
+                        self.active_workspace_dir()
+                            .map(Path::to_path_buf)
+                            .unwrap_or_default(),
+                    );
+                }
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::Context(id)) => {
+                self.graph_context = Some(id);
+                self.graph_rename = None;
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::Focus(id)) => {
+                Task::done(Msg::AgentGraph(agent_graph::Message::Select(id)))
+            }
+            Msg::AgentGraph(agent_graph::Message::ToggleMaestro(id)) => {
+                if let Some(workspace) = self.active_workspace_dir().map(Path::to_path_buf) {
+                    let agents = self.live_graph_agents(&workspace);
+                    let graph = self.agent_graphs.entry(workspace.clone()).or_default();
+                    if graph.maestro() == Some(id.as_str()) {
+                        graph.set_maestro(None, &[]);
+                    } else {
+                        let linked = graph.set_maestro(Some(&id), &agents);
+                        let intro = self.maestro_intro(&workspace, &id);
+                        self.queue_agent_delivery(
+                            workspace.clone(),
+                            id.clone(),
+                            id.clone(),
+                            vec![intro],
+                        );
+                        for peer in linked {
+                            let intro = self.link_intro(&workspace, &peer, &id);
+                            self.queue_agent_delivery(
+                                workspace.clone(),
+                                id.clone(),
+                                peer,
+                                vec![intro],
+                            );
+                        }
+                    }
+                    self.schedule_agent_graph_save(workspace);
+                }
+                self.graph_context = None;
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::CloseAgent(id)) => {
+                if id.starts_with("ext:") {
+                    if let Some(workspace) = self.active_workspace_dir().map(Path::to_path_buf) {
+                        if let Some(graph) = self.agent_graphs.get_mut(&workspace) {
+                            graph.remove_agent(&id);
+                        }
+                        self.schedule_agent_graph_save(workspace);
+                    }
+                    self.graph_context = None;
+                    Task::none()
+                } else if let Some(term_id) = agent_status::term_id_from_pane_id(&id) {
+                    let tab = PaneTab::Terminal(term_id);
+                    let close = self.panes.pane_of(&tab).and_then(|pane| {
+                        self.panes.model(pane).and_then(|model| {
+                            model
+                                .tabs()
+                                .iter()
+                                .position(|tab| tab == &PaneTab::Terminal(term_id))
+                                .map(|index| (pane, index))
+                        })
+                    });
+                    self.graph_context = None;
+                    close.map_or_else(Task::none, |(pane, index)| {
+                        Task::done(Msg::CloseTabIn(pane, index))
+                    })
+                } else {
+                    Task::none()
+                }
+            }
+            Msg::AgentGraph(agent_graph::Message::BeginRename(id)) => {
+                let name = agent_status::term_id_from_pane_id(&id)
+                    .and_then(|term| self.terminal_labels.get(&term).cloned())
+                    .or_else(|| {
+                        self.active_workspace_dir()
+                            .and_then(|workspace| self.agent_graphs.get(workspace))
+                            .and_then(|graph| graph.externals().get(&id))
+                            .map(|external| external.label.clone())
+                    })
+                    .unwrap_or_default();
+                self.graph_rename = Some((id, name));
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::RenameInput(value)) => {
+                if let Some((_, name)) = &mut self.graph_rename {
+                    *name = value;
+                }
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::RenameCommit) => {
+                if let Some((id, name)) = self.graph_rename.take() {
+                    let name = name.trim().to_owned();
+                    let taken = self
+                        .terminal_labels
+                        .values()
+                        .any(|label| label.eq_ignore_ascii_case(&name))
+                        && agent_status::term_id_from_pane_id(&id)
+                            .and_then(|term| self.terminal_labels.get(&term))
+                            .is_none_or(|label| !label.eq_ignore_ascii_case(&name));
+                    if !name.is_empty() && !taken {
+                        if let Some(term_id) = agent_status::term_id_from_pane_id(&id) {
+                            self.terminal_labels.insert(term_id, name.clone());
+                            if let Some(pane) = self.panes.pane_of(&PaneTab::Terminal(term_id)) {
+                                self.panes.focus(pane);
+                                self.panes
+                                    .focused_model_mut()
+                                    .set_terminal_label(term_id, name);
+                            }
+                        } else if let Some(workspace) =
+                            self.active_workspace_dir().map(Path::to_path_buf)
+                        {
+                            if let Some(graph) = self.agent_graphs.get_mut(&workspace) {
+                                graph.rename_external(&id, name);
+                            }
+                            self.schedule_agent_graph_save(workspace);
+                        }
+                    }
+                }
+                self.graph_context = None;
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::DismissContext) => {
+                self.graph_context = None;
+                self.graph_rename = None;
+                Task::none()
+            }
+            Msg::AgentGraphFolderPicked(path) => {
+                if let (Some(draft), Some(path)) = (&mut self.agent_graph_dialog, path) {
+                    draft.cwd = path;
+                }
+                Task::none()
+            }
+            Msg::AgentGraphDialog(message) => match message {
+                agent_graph_dialog::Message::Cancel => {
+                    self.agent_graph_dialog = None;
+                    Task::none()
+                }
+                agent_graph_dialog::Message::Browse => {
+                    let initial = self
+                        .agent_graph_dialog
+                        .as_ref()
+                        .map(|draft| PathBuf::from(draft.cwd.trim()));
+                    Task::perform(pick_agent_folder(initial), Msg::AgentGraphFolderPicked)
+                }
+                agent_graph_dialog::Message::FolderPicked(path) => {
+                    if let (Some(draft), Some(path)) = (&mut self.agent_graph_dialog, path) {
+                        draft.cwd = path;
+                    }
+                    Task::none()
+                }
+                agent_graph_dialog::Message::Create => {
+                    let taken = self.terminal_labels.values().cloned().collect::<Vec<_>>();
+                    let Some(draft) = self.agent_graph_dialog.take() else {
+                        return Task::none();
+                    };
+                    if !draft.valid(&taken) {
+                        self.agent_graph_dialog = Some(draft);
+                        return Task::none();
+                    }
+                    if let Some(integration) = draft.desktop.clone() {
+                        let cwd = PathBuf::from(draft.cwd.trim());
+                        self.agent_graph_dialog = Some(draft);
+                        return Task::perform(
+                            async move {
+                                desktop_agent_apps::install(&integration)
+                                    .map(|()| (integration, cwd))
+                            },
+                            Msg::AgentDesktopInstalled,
+                        );
+                    }
+                    let id = self.panes.alloc_term_id();
+                    let cwd = PathBuf::from(draft.cwd.trim());
+                    self.panes.focused_model_mut().open_terminal(id);
+                    self.panes
+                        .focused_model_mut()
+                        .set_terminal_label(id, draft.name.trim().to_owned());
+                    let mut term = self.spawn_terminal_for_dir(id, Some(cwd.as_path()));
+                    if !draft.command.trim().is_empty() {
+                        term.send_command(draft.command.trim());
+                    }
+                    self.terminals.insert(id, term);
+                    self.terminal_labels
+                        .insert(id, draft.name.trim().to_owned());
+                    let tab_id = agent_status::pane_id_for_term(id);
+                    let workspace = self
+                        .active_workspace_dir()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_default();
+                    let mut live = self.live_graph_agents(&workspace);
+                    live.push(tab_id.clone());
+                    let graph = self.agent_graphs.entry(workspace.clone()).or_default();
+                    if let Some(index) = draft.color {
+                        if let Some(color) = gsh_core::agent_color::AGENT_PALETTE.get(index) {
+                            let argb = 0xff00_0000
+                                | (u32::from(color.r) << 16)
+                                | (u32::from(color.g) << 8)
+                                | u32::from(color.b);
+                            graph.set_color(&tab_id, Some(argb));
+                        }
+                    }
+                    graph.set_monitored(&tab_id, draft.monitor);
+                    let linked = if draft.maestro {
+                        graph.set_maestro(Some(&tab_id), &live)
+                    } else {
+                        graph
+                            .maestro()
+                            .map(str::to_owned)
+                            .filter(|maestro| graph.add_link(&tab_id, maestro))
+                            .into_iter()
+                            .collect()
+                    };
+                    let mut greeting = Vec::new();
+                    if !draft.role.trim().is_empty() {
+                        greeting.push(draft.role.trim().to_owned());
+                    }
+                    if !draft.task.trim().is_empty() {
+                        greeting.push(draft.task.trim().to_owned());
+                    }
+                    if draft.maestro {
+                        greeting.push(self.maestro_intro(&workspace, &tab_id));
+                    } else {
+                        greeting.extend(
+                            linked
+                                .iter()
+                                .map(|peer| self.link_intro(&workspace, &tab_id, peer)),
+                        );
+                    }
+                    self.queue_agent_delivery(
+                        workspace.clone(),
+                        tab_id.clone(),
+                        tab_id.clone(),
+                        greeting,
+                    );
+                    for peer in linked {
+                        let intro = self.link_intro(&workspace, &peer, &tab_id);
+                        self.queue_agent_delivery(
+                            workspace.clone(),
+                            tab_id.clone(),
+                            peer,
+                            vec![intro],
+                        );
+                    }
+                    self.schedule_agent_graph_save(workspace);
+                    Task::none()
+                }
+                agent_graph_dialog::Message::NameChanged(value) => {
+                    if let Some(draft) = &mut self.agent_graph_dialog {
+                        if draft.auto_name.as_deref() != Some(value.as_str()) {
+                            draft.auto_name = None;
+                        }
+                        draft.name = value;
+                    }
+                    Task::none()
+                }
+                agent_graph_dialog::Message::CommandChanged(value) => {
+                    if let Some(draft) = &mut self.agent_graph_dialog {
+                        draft.command = value;
+                    }
+                    Task::none()
+                }
+                agent_graph_dialog::Message::CwdChanged(value) => {
+                    if let Some(draft) = &mut self.agent_graph_dialog {
+                        draft.cwd = value;
+                    }
+                    Task::none()
+                }
+                agent_graph_dialog::Message::RoleChanged(value) => {
+                    if let Some(draft) = &mut self.agent_graph_dialog {
+                        draft.role = value;
+                    }
+                    Task::none()
+                }
+                agent_graph_dialog::Message::TaskChanged(value) => {
+                    if let Some(draft) = &mut self.agent_graph_dialog {
+                        draft.task = value;
+                    }
+                    Task::none()
+                }
+                agent_graph_dialog::Message::SetTab(tab) => {
+                    if let Some(draft) = &mut self.agent_graph_dialog {
+                        draft.tab = tab.min(2);
+                    }
+                    Task::none()
+                }
+                agent_graph_dialog::Message::SetMonitor(monitor) => {
+                    if let Some(draft) = &mut self.agent_graph_dialog {
+                        draft.monitor = monitor;
+                    }
+                    Task::none()
+                }
+                agent_graph_dialog::Message::SetMaestro(maestro) => {
+                    if let Some(draft) = &mut self.agent_graph_dialog {
+                        draft.maestro = maestro;
+                    }
+                    Task::none()
+                }
+                agent_graph_dialog::Message::SetColor(color) => {
+                    if let Some(draft) = &mut self.agent_graph_dialog {
+                        draft.color = color;
+                    }
+                    Task::none()
+                }
+                agent_graph_dialog::Message::QuickStart(name, command) => {
+                    let taken = self.terminal_labels.values().cloned().collect::<Vec<_>>();
+                    if let Some(draft) = &mut self.agent_graph_dialog {
+                        draft.quick_start(name, command, &taken);
+                    }
+                    Task::none()
+                }
+                agent_graph_dialog::Message::PickDesktop(index) => {
+                    let taken = self.terminal_labels.values().cloned().collect::<Vec<_>>();
+                    if let Some(draft) = &mut self.agent_graph_dialog {
+                        draft.pick_desktop(index, &taken);
+                    }
+                    Task::none()
+                }
+                agent_graph_dialog::Message::SetConsent(consent) => {
+                    if let Some(draft) = &mut self.agent_graph_dialog {
+                        draft.consent = consent;
+                    }
+                    Task::none()
+                }
+            },
+            Msg::AgentDesktopInstalled(result) => {
+                match result {
+                    Ok((integration, cwd)) => {
+                        if let Some(draft) = self.agent_graph_dialog.take() {
+                            if let Some(workspace) =
+                                self.active_workspace_dir().map(Path::to_path_buf)
+                            {
+                                let mut peers = self.live_graph_agents(&workspace);
+                                let graph = self.agent_graphs.entry(workspace.clone()).or_default();
+                                let id = graph.add_external(
+                                    integration.app,
+                                    draft.name.trim().to_owned(),
+                                    cwd.to_string_lossy().into_owned(),
+                                );
+                                peers.push(id.clone());
+                                if let Some(index) = draft.color.and_then(|index| {
+                                    gsh_core::agent_color::AGENT_PALETTE.get(index)
+                                }) {
+                                    graph.set_color(
+                                        &id,
+                                        Some(
+                                            0xff00_0000
+                                                | (u32::from(index.r) << 16)
+                                                | (u32::from(index.g) << 8)
+                                                | u32::from(index.b),
+                                        ),
+                                    );
+                                }
+                                let linked = if draft.maestro {
+                                    graph.set_maestro(Some(&id), &peers)
+                                } else {
+                                    graph
+                                        .maestro()
+                                        .map(str::to_owned)
+                                        .filter(|maestro| graph.add_link(&id, maestro))
+                                        .into_iter()
+                                        .collect()
+                                };
+                                let mut greeting = Vec::new();
+                                if !draft.role.trim().is_empty() {
+                                    greeting.push(draft.role.trim().to_owned());
+                                }
+                                if !draft.task.trim().is_empty() {
+                                    greeting.push(draft.task.trim().to_owned());
+                                }
+                                if draft.maestro {
+                                    greeting.push(self.maestro_intro(&workspace, &id));
+                                } else {
+                                    greeting.extend(
+                                        linked
+                                            .iter()
+                                            .map(|peer| self.link_intro(&workspace, &id, peer)),
+                                    );
+                                }
+                                self.queue_agent_delivery(
+                                    workspace.clone(),
+                                    id.clone(),
+                                    id.clone(),
+                                    greeting,
+                                );
+                                for peer in linked {
+                                    let intro = self.link_intro(&workspace, &peer, &id);
+                                    self.queue_agent_delivery(
+                                        workspace.clone(),
+                                        id.clone(),
+                                        peer,
+                                        vec![intro],
+                                    );
+                                }
+                                self.schedule_agent_graph_save(workspace);
+                            }
+                        }
+                        desktop_agent_apps::launch(&integration, &cwd);
+                    }
+                    Err(error) => {
+                        if let Some(draft) = &mut self.agent_graph_dialog {
+                            draft.error = Some(match error {
+                                desktop_agent_apps::Error::InvalidConfig(path) => {
+                                    labels::agent_graph_integration_invalid(
+                                        &path.display().to_string(),
+                                    )
+                                }
+                                desktop_agent_apps::Error::CliMissing(path) => {
+                                    labels::agent_graph_cli_missing(&path.display().to_string())
+                                }
+                                desktop_agent_apps::Error::WriteFailed(detail) => {
+                                    labels::agent_graph_write_failed(&detail)
+                                }
+                            });
+                        }
+                    }
+                }
                 Task::none()
             }
             Msg::Farm(farm::Message::Focus(pane_id)) => {
@@ -2435,6 +3634,7 @@ impl Shell {
         let windows = iced::window::events().filter_map(|(id, event)| match event {
             iced::window::Event::CloseRequested => Some(Msg::WindowCloseRequested(id)),
             iced::window::Event::Unfocused => Some(Msg::WindowUnfocused),
+            iced::window::Event::Focused => Some(Msg::WindowFocused),
             _ => None,
         });
         let cancel_create = if self.files_open
@@ -2580,6 +3780,157 @@ impl Shell {
                 }
             }
             Some(PaneTab::Farm) => self.farm.view().map(Msg::Farm),
+            Some(PaneTab::AgentGraph(workspace)) => {
+                let mut nodes = Vec::new();
+                let mut positions = Vec::new();
+                let graph = self.agent_graphs.get(workspace);
+                for model in self.panes.models() {
+                    for tab in model.tabs() {
+                        let PaneTab::Terminal(id) = tab else { continue };
+                        let Some(term) = self.terminals.get(id) else {
+                            continue;
+                        };
+                        let tab_id = agent_status::pane_id_for_term(*id);
+                        if self
+                            .status_runtime
+                            .pane_record(&tab_id)
+                            .and_then(|record| record.harness())
+                            .is_none()
+                        {
+                            continue;
+                        }
+                        let status = self
+                            .status_runtime
+                            .pane_record(&tab_id)
+                            .map_or(gsh_core::status::TurnStatus::Idle, |record| record.status());
+                        let status = match status {
+                            gsh_core::status::TurnStatus::Working => {
+                                labels::AGENT_GRAPH_STATUS_WORKING
+                            }
+                            gsh_core::status::TurnStatus::Waiting => {
+                                labels::AGENT_GRAPH_STATUS_WAITING
+                            }
+                            gsh_core::status::TurnStatus::Idle => labels::AGENT_GRAPH_STATUS_IDLE,
+                        };
+                        let label = self
+                            .terminal_labels
+                            .get(id)
+                            .cloned()
+                            .unwrap_or_else(|| model.display_title(tab));
+                        let cwd = term
+                            .cwd()
+                            .and_then(Path::file_name)
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let color = graph.and_then(|store| store.color(&tab_id)).map_or_else(
+                            || {
+                                let rgb = gsh_core::agent_color::agent_color(&tab_id);
+                                iced::Color::from_rgb8(rgb.r, rgb.g, rgb.b)
+                            },
+                            |argb| {
+                                iced::Color::from_rgb8(
+                                    ((argb >> 16) & 0xff) as u8,
+                                    ((argb >> 8) & 0xff) as u8,
+                                    (argb & 0xff) as u8,
+                                )
+                            },
+                        );
+                        nodes.push(agent_graph::Node {
+                            id: tab_id.clone(),
+                            label,
+                            detail: cwd,
+                            status: status.to_owned(),
+                            color,
+                            maestro: graph.and_then(agent_graph_store::AgentGraphStore::maestro)
+                                == Some(tab_id.as_str()),
+                        });
+                        let at = graph
+                            .and_then(|store| store.position(&tab_id))
+                            .unwrap_or_else(|| {
+                                let slot = nodes.len() - 1;
+                                (
+                                    80.0 + (slot % 4) as f32 * 280.0,
+                                    80.0 + (slot / 4) as f32 * 170.0,
+                                )
+                            });
+                        positions.push((tab_id, at.0, at.1));
+                    }
+                }
+                if let Some(graph) = graph {
+                    for (id, external) in graph.externals() {
+                        let color = graph.color(id).map_or_else(
+                            || {
+                                let rgb = gsh_core::agent_color::agent_color(id);
+                                iced::Color::from_rgb8(rgb.r, rgb.g, rgb.b)
+                            },
+                            |argb| {
+                                iced::Color::from_rgb8(
+                                    ((argb >> 16) & 0xff) as u8,
+                                    ((argb >> 8) & 0xff) as u8,
+                                    (argb & 0xff) as u8,
+                                )
+                            },
+                        );
+                        nodes.push(agent_graph::Node {
+                            id: id.clone(),
+                            label: external.label.clone(),
+                            detail: external.app.label().to_owned(),
+                            status: if agent_status::now_epoch_ms()
+                                .saturating_sub(external.last_seen_ms)
+                                <= 15_000
+                            {
+                                labels::AGENT_GRAPH_STATUS_ONLINE
+                            } else {
+                                labels::AGENT_GRAPH_STATUS_OFFLINE
+                            }
+                            .to_owned(),
+                            color,
+                            maestro: graph.maestro() == Some(id.as_str()),
+                        });
+                        let at = graph.position(id).unwrap_or_else(|| {
+                            let slot = nodes.len() - 1;
+                            (
+                                80.0 + (slot % 4) as f32 * 280.0,
+                                80.0 + (slot / 4) as f32 * 170.0,
+                            )
+                        });
+                        positions.push((id.clone(), at.0, at.1));
+                    }
+                }
+                let mut links = graph.map_or_else(Vec::new, |store| {
+                    let observed = store.observed_edges();
+                    store
+                        .links()
+                        .iter()
+                        .map(|(a, b)| {
+                            let (count, last) = observed
+                                .get(&(a.clone(), b.clone()))
+                                .or_else(|| observed.get(&(b.clone(), a.clone())))
+                                .map_or((0, None), |(count, last)| {
+                                    (*count, Some(last.preview.clone()))
+                                });
+                            (a.clone(), b.clone(), true, count, last)
+                        })
+                        .collect()
+                });
+                if let Some(store) = graph {
+                    for (pair, (count, last)) in store.observed_edges() {
+                        if !links.iter().any(|(a, b, _, _, _)| {
+                            (a == &pair.0 && b == &pair.1) || (a == &pair.1 && b == &pair.0)
+                        }) {
+                            links.push((pair.0, pair.1, false, count, Some(last.preview.clone())));
+                        }
+                    }
+                }
+                agent_graph::view(
+                    nodes,
+                    positions,
+                    links,
+                    self.graph_context.clone(),
+                    self.graph_rename.clone(),
+                )
+                .map(Msg::AgentGraph)
+            }
             Some(&PaneTab::Query { id, .. }) => self
                 .queries
                 .get(&id)
@@ -2670,6 +4021,7 @@ impl Shell {
                 on_chat: Msg::NewChatTab,
                 on_farm: Msg::OpenFarm,
                 on_harness: self.shows_harness().then_some(Msg::OpenHarness),
+                on_agent_graph: Msg::OpenAgentGraph,
             },
         );
 
@@ -2957,7 +4309,7 @@ impl Shell {
             }
             None => layered,
         };
-        match &self.gallery_error {
+        let layered: Element<'_, Msg> = match &self.gallery_error {
             Some(error) => stack![
                 layered,
                 pane_close_dialog::notice(
@@ -2968,6 +4320,17 @@ impl Shell {
                 )
             ]
             .into(),
+            None => layered,
+        };
+        match self.agent_graph_dialog.as_ref() {
+            Some(draft) => {
+                let taken = self.terminal_labels.values().cloned().collect::<Vec<_>>();
+                stack![
+                    layered,
+                    agent_graph_dialog::view(draft, &taken, None).map(Msg::AgentGraphDialog)
+                ]
+                .into()
+            }
             None => layered,
         }
     }
@@ -3049,6 +4412,8 @@ mod tests {
     use gsh_core::status::{AgentHarness, HookEvent, StatusUpdate, TurnStatus};
     use gsh_term::{Cell, Cursor, TermSnapshot};
     use iced::keyboard;
+    use iced::Size;
+    use iced_test::simulator::Simulator;
 
     use crate::island::IslandAgentState;
 
@@ -3089,12 +4454,20 @@ mod tests {
             mongo_tabs: BTreeMap::new(),
             ssh_prompt: None,
             pending_close_query: None,
+            agent_graph_dialog: None,
             harness: harness_pane::HarnessState::default(),
             settings: settings::Settings::default(),
             panes: PaneTree::default(),
             pending_close_pane: None,
             hovered_tab: None,
             terminals,
+            terminal_labels: HashMap::new(),
+            agent_graphs: HashMap::new(),
+            agent_graph_save_due: HashMap::new(),
+            external_waiters: Vec::new(),
+            pending_agent_deliveries: Vec::new(),
+            graph_context: None,
+            graph_rename: None,
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
             editors: BTreeMap::new(),
@@ -3112,7 +4485,237 @@ mod tests {
             rail_open: true,
             files_open: true,
             static_test_mode: true,
+            window_focused: true,
         }
+    }
+
+    #[test]
+    fn topbar_graph_button_opens_and_renders_empty_agent_graph() {
+        std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
+        let mut shell = test_shell();
+        let settings = iced::Settings {
+            fonts: theme::EMBEDDED_FONTS
+                .iter()
+                .map(|font| (*font).into())
+                .collect(),
+            default_font: theme::FONT_BODY,
+            ..Default::default()
+        };
+        let mut ui = Simulator::with_size(settings.clone(), Size::new(1024.0, 700.0), shell.view());
+        assert!(ui.click(labels::ICON_HUB_OUTLINED).is_ok());
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, Msg::OpenAgentGraph)),
+            "{messages:?}"
+        );
+        for message in messages {
+            let _ = shell.update(message);
+        }
+        assert!(matches!(
+            shell.panes.focused_model().active_tab(),
+            Some(PaneTab::AgentGraph(_))
+        ));
+        let mut ui = Simulator::with_size(settings, Size::new(1024.0, 700.0), shell.view());
+        assert!(ui.find(labels::AGENT_GRAPH_TAB_TITLE).is_ok());
+        assert!(ui.find(labels::AGENT_GRAPH_EMPTY_TITLE).is_ok());
+    }
+
+    #[test]
+    #[ignore = "gera snapshots visuais do grafo para revisão manual"]
+    fn capture_agent_graph_shell_snapshots() {
+        use std::path::{Path, PathBuf};
+
+        std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
+        theme::set_active(theme::ThemeVariant::Dark);
+        let settings = iced::Settings {
+            fonts: theme::EMBEDDED_FONTS
+                .iter()
+                .map(|font| (*font).into())
+                .collect(),
+            default_font: theme::FONT_BODY,
+            ..Default::default()
+        };
+        let capture = |shell: &Shell, name: &str| {
+            let mut simulator =
+                Simulator::with_size(settings.clone(), Size::new(1280.0, 720.0), shell.view());
+            let directory = Path::new("/home/heliodev/projetos/GSH-wt/shots");
+            let target = directory.join(format!("{name}.png"));
+            let generated = directory.join(format!("{name}-tiny-skia.png"));
+            simulator
+                .snapshot(&iced::Theme::Dark)
+                .expect("snapshot render")
+                .matches_image(&target)
+                .expect("snapshot write");
+            std::fs::rename(generated, target).expect("rename snapshot to requested name");
+        };
+        let mut shell = test_shell();
+        shell.rail_open = false;
+        shell.files_open = false;
+        let mut topbar =
+            Simulator::with_size(settings.clone(), Size::new(1280.0, 720.0), shell.view());
+        assert!(topbar.click(labels::ICON_HUB_OUTLINED).is_ok());
+        for message in topbar.into_messages() {
+            let _ = shell.update(message);
+        }
+        assert!(matches!(
+            shell.panes.focused_model().active_tab(),
+            Some(PaneTab::AgentGraph(_))
+        ));
+        capture(&shell, "rust-graph-empty");
+
+        let root = shell
+            .active_workspace_dir()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let integrations = desktop_agent_apps::DesktopApp::ALL
+            .into_iter()
+            .map(|app| desktop_agent_apps::Integration {
+                app,
+                config_path: PathBuf::from(format!("/config/{}", app.id())),
+                cli_path: PathBuf::from("/usr/bin/gsh"),
+            })
+            .collect();
+        shell.agent_graph_dialog =
+            Some(agent_graph_dialog::Draft::new(Path::new(""), integrations));
+        capture(&shell, "rust-graph-dialog");
+        if let Some(draft) = shell.agent_graph_dialog.as_mut() {
+            draft.tab = 1;
+        }
+        capture(&shell, "rust-graph-dialog-aparencia");
+        if let Some(draft) = shell.agent_graph_dialog.as_mut() {
+            draft.tab = 2;
+        }
+        capture(&shell, "rust-graph-dialog-agente");
+        shell.agent_graph_dialog = None;
+
+        let workspace = shell
+            .active_workspace_dir()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let graph = shell.agent_graphs.entry(workspace).or_default();
+        let first = graph.add_external(
+            desktop_agent_apps::DesktopApp::ClaudeDesktop,
+            "Agente Revisor".into(),
+            root.display().to_string(),
+        );
+        let second = graph.add_external(
+            desktop_agent_apps::DesktopApp::Cursor,
+            "Agente Implementador".into(),
+            root.display().to_string(),
+        );
+        graph.set_position(&first, 100.0, 90.0);
+        graph.set_position(&second, 460.0, 90.0);
+        graph.add_link(&first, &second);
+        graph.record(agent_graph_store::AgentMessage {
+            from_tab_id: first,
+            to_tab_id: second,
+            sent_at_ms: 1_794_999_600_000,
+            preview: "Revise a implementação e me envie o resultado.".into(),
+            signed_by: "snapshot".into(),
+        });
+        let mut canvas = Simulator::with_size(settings, Size::new(1280.0, 720.0), shell.view());
+        let cursor = iced::Point::new(390.0, 220.0);
+        canvas.point_at(cursor);
+        let _ = canvas.simulate([iced::Event::Mouse(iced::mouse::Event::CursorMoved {
+            position: cursor,
+        })]);
+        let directory = Path::new("/home/heliodev/projetos/GSH-wt/shots");
+        let target = directory.join("rust-graph-canvas.png");
+        let generated = directory.join("rust-graph-canvas-tiny-skia.png");
+        canvas
+            .snapshot(&iced::Theme::Dark)
+            .expect("snapshot render")
+            .matches_image(&target)
+            .expect("snapshot write");
+        std::fs::rename(generated, target).expect("rename canvas snapshot");
+    }
+
+    #[test]
+    fn external_wait_holds_reply_until_a_message_arrives() {
+        let mut shell = test_shell();
+        let workspace = shell
+            .active_workspace_dir()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let graph = shell.agent_graphs.entry(workspace).or_default();
+        graph.add_external(
+            desktop_agent_apps::DesktopApp::Cursor,
+            "Cursor".into(),
+            String::new(),
+        );
+        let (reply, response) = std::sync::mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({
+                "cmd": "ext-wait",
+                "tabId": "ext:cursor",
+                "args": {"timeout": 5}
+            }),
+            reply,
+        });
+        assert!(matches!(
+            response.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        shell
+            .agent_graphs
+            .values_mut()
+            .next()
+            .expect("test graph")
+            .enqueue_external(
+                "ext:cursor",
+                agent_graph_store::AgentMessage {
+                    from_tab_id: "t1".into(),
+                    to_tab_id: "ext:cursor".into(),
+                    sent_at_ms: 42,
+                    preview: "hello".into(),
+                    signed_by: "Revisor".into(),
+                },
+            );
+        shell.poll_external_waiters();
+        assert_eq!(
+            response.recv().expect("long-poll response")["data"][0]["text"],
+            "hello"
+        );
+    }
+
+    #[test]
+    fn creating_terminal_agent_applies_monitor_maestro_and_greeting_options() {
+        let mut shell = test_shell();
+        let directory = tempfile::tempdir().expect("temporary working directory");
+        let workspace = shell
+            .active_workspace_dir()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let mut draft = agent_graph_dialog::Draft::new(directory.path(), Vec::new());
+        draft.name = "Revisor".into();
+        draft.command = "claude".into();
+        draft.monitor = false;
+        draft.maestro = true;
+        draft.role = "Review code".into();
+        draft.task = "Check edge cases".into();
+        shell.agent_graph_dialog = Some(draft);
+
+        let _ = shell.update(Msg::AgentGraphDialog(agent_graph_dialog::Message::Create));
+
+        assert!(shell
+            .panes
+            .focused_model()
+            .tabs()
+            .contains(&PaneTab::Terminal(2)));
+        assert_eq!(
+            shell.terminal_labels.get(&2).map(String::as_str),
+            Some("Revisor")
+        );
+        let graph = shell.agent_graphs.get(&workspace).expect("workspace graph");
+        assert!(!graph.is_monitored("t2"));
+        assert_eq!(graph.maestro(), Some("t2"));
+        assert_eq!(shell.pending_agent_deliveries.len(), 1);
+        assert_eq!(
+            shell.pending_agent_deliveries[0].messages[..2],
+            ["Review code", "Check edge cases"]
+        );
     }
 
     #[test]
@@ -3371,6 +4974,27 @@ mod tests {
         };
         let _ = shell.update(Msg::Terminal(TerminalMsg::Keyboard(esc_event)));
         assert!(shell.island.agents().is_empty());
+    }
+
+    #[test]
+    fn gsh_msg_local_escreve_no_terminal_alvo_e_registra_o_cabo_observado() {
+        let mut shell = test_shell();
+        shell.terminals.insert(2, TerminalPane::new());
+        shell.terminal_labels.insert(1, "Origem".into());
+        shell.terminal_labels.insert(2, "Destino".into());
+        let (reply, response) = std::sync::mpsc::sync_channel(1);
+        let command = gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"msg", "tabId":"t1", "args":{"to":"Destino", "text":"oi"}}),
+            reply,
+        };
+        let _ = shell.handle_team_cli(command);
+        let response = response.recv().expect("message response");
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["data"]["from"], "t1");
+        assert_eq!(response["data"]["to"], "t2");
+        let graph = shell.agent_graphs.values().next().expect("workspace graph");
+        assert_eq!(graph.messages().len(), 1);
+        assert_eq!(graph.messages()[0].preview, "oi");
     }
 
     #[test]

@@ -33,6 +33,8 @@ pub enum PaneTab {
     File(PathBuf),
     /// Cenário estático da fazenda ou escritório.
     Farm,
+    /// Grafo de agentes do workspace.
+    AgentGraph(PathBuf),
     /// Configurações do aplicativo.
     Settings,
     /// Aba de query SQL (`.dbq`, arquivo ou untitled). O título muda quando o untitled vira arquivo.
@@ -72,6 +74,7 @@ impl PaneTab {
             Self::Chat(_) => labels::CHAT_TAB_TITLE.to_string(),
             Self::File(path) => file_display_name(path),
             Self::Farm => labels::FARM_TAB_TITLE.to_string(),
+            Self::AgentGraph(_) => labels::AGENT_GRAPH_TAB_TITLE.to_string(),
             Self::Settings => labels::SETTINGS_TITLE.to_string(),
             Self::Query { title, .. } => title.clone(),
             Self::Redis { conn, .. } => conn.clone(),
@@ -88,6 +91,7 @@ impl PaneTab {
             Self::Terminal(_) => labels::ICON_TERMINAL,
             Self::Chat(_) => labels::ICON_CHAT,
             Self::Farm => labels::ICON_FARM,
+            Self::AgentGraph(_) => labels::ICON_HUB_OUTLINED,
             Self::Settings => labels::ICON_SETTINGS,
             Self::Query { .. } => labels::ICON_DATABASE,
             Self::Redis { .. } => labels::ICON_GRID_ON,
@@ -123,6 +127,7 @@ pub fn file_display_name(path: &Path) -> String {
 pub struct PaneModel {
     tabs: Vec<PaneTab>,
     active: Option<usize>,
+    terminal_labels: std::collections::BTreeMap<TermId, String>,
 }
 
 impl PaneModel {
@@ -132,6 +137,7 @@ impl PaneModel {
         Self {
             tabs: Vec::new(),
             active: None,
+            terminal_labels: std::collections::BTreeMap::new(),
         }
     }
 
@@ -148,6 +154,25 @@ impl PaneModel {
     /// Referência para a aba atualmente ativa.
     pub fn active_tab(&self) -> Option<&PaneTab> {
         self.active.and_then(|idx| self.tabs.get(idx))
+    }
+
+    pub fn display_title(&self, tab: &PaneTab) -> String {
+        match tab {
+            PaneTab::Terminal(id) => self
+                .terminal_labels
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| tab.title()),
+            _ => tab.title(),
+        }
+    }
+
+    pub fn set_terminal_label(&mut self, id: TermId, label: String) {
+        if label.trim().is_empty() {
+            self.terminal_labels.remove(&id);
+        } else {
+            self.terminal_labels.insert(id, label);
+        }
     }
 
     /// Abre uma aba de terminal `id` ao final da lista e a torna ativa.
@@ -186,6 +211,20 @@ impl PaneModel {
             self.active = Some(index);
         } else {
             self.tabs.push(PaneTab::Settings);
+            self.active = Some(self.tabs.len().saturating_sub(1));
+        }
+    }
+
+    /// Abre ou ativa o grafo de agentes do workspace.
+    pub fn open_agent_graph(&mut self, workspace: &Path) {
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab, PaneTab::AgentGraph(path) if path == workspace))
+        {
+            self.active = Some(index);
+        } else {
+            self.tabs.push(PaneTab::AgentGraph(workspace.to_path_buf()));
             self.active = Some(self.tabs.len().saturating_sub(1));
         }
     }
@@ -279,6 +318,9 @@ impl PaneModel {
             return None;
         }
         let removed = self.tabs.remove(index);
+        if let PaneTab::Terminal(id) = &removed {
+            self.terminal_labels.remove(id);
+        }
         self.active = if self.tabs.is_empty() {
             None
         } else if let Some(curr) = self.active {
