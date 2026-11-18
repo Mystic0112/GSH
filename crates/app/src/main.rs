@@ -71,6 +71,7 @@ pub mod harness_monitor;
 pub mod harness_pane;
 pub mod island;
 pub mod labels;
+pub mod layout_store;
 pub mod pane_chrome;
 pub mod pane_close_dialog;
 pub mod pane_focus;
@@ -385,6 +386,7 @@ enum Msg {
     WindowUnfocused,
     WindowFocused,
     StatusTick,
+    LayoutSaveTick,
     HarnessPoll,
     HarnessDetected(Vec<(TermId, String)>),
     TerminalActivityTick,
@@ -599,6 +601,8 @@ struct Shell {
     files_open: bool,
     static_test_mode: bool,
     window_focused: bool,
+    layout_path: Option<PathBuf>,
+    layout_save_due: Option<Instant>,
 }
 
 struct ExternalWaiter {
@@ -626,23 +630,67 @@ impl Default for Shell {
         let mut island = AgentIsland::default();
         island.set_server_error(status_runtime.server_error().cloned());
 
-        let workspaces = rail::default_workspace_list();
+        let mut workspaces = rail::default_workspace_list();
+        let layout_path = layout_store::LayoutDoc::default_path();
+        let restored = layout_path
+            .as_deref()
+            .and_then(layout_store::LayoutDoc::read);
+        if let Some(doc) = &restored {
+            workspaces = WorkspaceList::new(Vec::new());
+            for path in &doc.workspaces {
+                workspaces.open_folder(path.clone());
+            }
+            let _ = workspaces.select(doc.active_workspace);
+        }
         let active_path = workspaces.active().and_then(|ws| ws.path.clone());
-        let panes = PaneTree::default();
+        let panes = restored
+            .as_ref()
+            .map_or_else(PaneTree::default, PaneTree::from_doc);
 
         let initial_pane_id = pane_id_for_term(1);
         status_runtime.register_pane(initial_pane_id.clone());
-        let initial_env = status_runtime.hook_env_for_pane(&initial_pane_id);
         let mut terminals = BTreeMap::new();
-        terminals.insert(
-            1,
-            TerminalPane::new_with_config(
-                initial_pane_id,
-                active_path.as_deref(),
-                initial_env,
-                settings.current.clone(),
-            ),
-        );
+        for id in panes
+            .models()
+            .into_iter()
+            .flat_map(|m| m.tabs())
+            .filter_map(|t| {
+                if let PaneTab::Terminal(id) = t {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+        {
+            let pane_id = pane_id_for_term(id);
+            status_runtime.register_pane(pane_id.clone());
+            let env = status_runtime.hook_env_for_pane(&pane_id);
+            let cwd = restored
+                .as_ref()
+                .and_then(|doc| {
+                    doc.terminal_cwds
+                        .iter()
+                        .find(|(saved_id, _)| *saved_id == id)
+                        .map(|(_, cwd)| cwd.as_path())
+                })
+                .or(active_path.as_deref());
+            terminals.insert(
+                id,
+                TerminalPane::new_with_config(pane_id, cwd, env, settings.current.clone()),
+            );
+        }
+        if terminals.is_empty() {
+            let env = status_runtime.hook_env_for_pane(&initial_pane_id);
+            terminals.insert(
+                1,
+                TerminalPane::new_with_config(
+                    initial_pane_id,
+                    active_path.as_deref(),
+                    env,
+                    settings.current.clone(),
+                ),
+            );
+        }
 
         let mut file_tree = FileTree::new();
         file_tree.set_root(active_path.clone());
@@ -708,7 +756,36 @@ impl Default for Shell {
             files_open: true,
             static_test_mode: false,
             window_focused: true,
+            layout_path,
+            layout_save_due: None,
         };
+        let files: Vec<_> = shell
+            .panes
+            .models()
+            .into_iter()
+            .flat_map(|model| model.tabs())
+            .filter_map(|tab| {
+                if let PaneTab::File(path) = tab {
+                    Some(path.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for path in files {
+            match FileViewerState::load(&path) {
+                FileViewerState::Loaded(doc) => {
+                    shell.editors.insert(
+                        path.clone(),
+                        editor_pane::EditorPane::new(path, doc.into_source())
+                            .with_config(shell.settings.current.editor.clone()),
+                    );
+                }
+                state => {
+                    shell.file_viewers.insert(path, state);
+                }
+            }
+        }
         shell.configure_team();
         shell
     }
@@ -733,6 +810,32 @@ async fn pick_agent_folder(initial: Option<PathBuf>) -> Option<String> {
 }
 
 impl Shell {
+    fn save_layout(&mut self) {
+        self.layout_save_due = None;
+        let Some(path) = self.layout_path.as_deref() else {
+            return;
+        };
+        let paths: Vec<_> = self
+            .workspaces
+            .items()
+            .iter()
+            .filter_map(|workspace| workspace.path.clone())
+            .collect();
+        let active_workspace = self
+            .workspaces
+            .active()
+            .and_then(|workspace| workspace.path.as_ref())
+            .and_then(|active| paths.iter().position(|path| path == active))
+            .unwrap_or(0);
+        let mut doc = self.panes.snapshot_with_workspaces(paths, active_workspace);
+        doc.terminal_cwds = self
+            .terminals
+            .iter()
+            .filter_map(|(id, terminal)| terminal.cwd().map(|cwd| (*id, cwd.to_path_buf())))
+            .collect();
+        let _ = doc.write_atomic(path);
+    }
+
     fn team_config(&self) -> TeamConfig {
         let t = &self.settings.current.farm.team;
         TeamConfig {
@@ -2686,8 +2789,28 @@ impl Shell {
     /// O harness recarrega ao montar a aba e quando ela volta a ficar ativa (o usuário pode
     /// ter editado os arquivos), qualquer que seja o jeito de chegar nela.
     fn update(&mut self, msg: Msg) -> Task<Msg> {
+        let layout_before = self.panes.snapshot();
+        let workspaces_before = (
+            self.workspaces.selected_index(),
+            self.workspaces
+                .items()
+                .iter()
+                .filter_map(|workspace| workspace.path.clone())
+                .collect::<Vec<_>>(),
+        );
         let before = self.visible_harnesses();
         let task = self.update_inner(msg);
+        let workspaces_after = (
+            self.workspaces.selected_index(),
+            self.workspaces
+                .items()
+                .iter()
+                .filter_map(|workspace| workspace.path.clone())
+                .collect::<Vec<_>>(),
+        );
+        if self.panes.snapshot() != layout_before || workspaces_after != workspaces_before {
+            self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
+        }
         let loads: Vec<Task<Msg>> = self
             .visible_harnesses()
             .into_iter()
@@ -2791,11 +2914,13 @@ impl Shell {
                     self.pending_window_close = Some(id);
                     Task::none()
                 } else {
+                    self.save_layout();
                     gsh_db::ssh::SshTunnelManager::global().close_all();
                     iced::window::close(id)
                 }
             }
             Msg::ConfirmWindowClose => {
+                self.save_layout();
                 gsh_db::ssh::SshTunnelManager::global().close_all();
                 self.pending_window_close
                     .take()
@@ -2855,6 +2980,15 @@ impl Shell {
                     );
                 }
                 Task::batch(command_tasks)
+            }
+            Msg::LayoutSaveTick => {
+                if self
+                    .layout_save_due
+                    .is_some_and(|due| Instant::now() >= due)
+                {
+                    self.save_layout();
+                }
+                Task::none()
             }
             Msg::HarnessPoll => self.poll_harness_processes(),
             Msg::HarnessDetected(detected) => {
@@ -4201,6 +4335,11 @@ impl Shell {
     fn subscription(&self) -> Subscription<Msg> {
         let status_sub = iced::time::every(Duration::from_millis(STATUS_POLL_INTERVAL_MS))
             .map(|_| Msg::StatusTick);
+        let layout_sub = if self.layout_save_due.is_some() {
+            iced::time::every(Duration::from_millis(100)).map(|_| Msg::LayoutSaveTick)
+        } else {
+            Subscription::none()
+        };
 
         let pane_subs = self
             .panes
@@ -4342,6 +4481,7 @@ impl Shell {
         Subscription::batch(
             [
                 status_sub,
+                layout_sub,
                 harness_poll,
                 terminal_activity,
                 graph_pulse,
@@ -5225,7 +5365,28 @@ mod tests {
             files_open: true,
             static_test_mode: true,
             window_focused: true,
+            layout_path: None,
+            layout_save_due: None,
         }
+    }
+
+    #[test]
+    fn shell_persists_and_restores_reordered_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        let mut shell = test_shell();
+        shell.layout_path = Some(path.clone());
+        shell.panes.focused_model_mut().open_settings();
+        assert!(shell.panes.focused_model_mut().reorder_tab(0, 2));
+        shell.save_layout();
+
+        let doc = layout_store::LayoutDoc::read(&path).unwrap();
+        let mut restored = test_shell();
+        restored.panes = PaneTree::from_doc(&doc);
+        assert_eq!(
+            restored.panes.focused_model().tabs(),
+            &[PaneTab::Settings, PaneTab::Terminal(1)]
+        );
     }
 
     #[test]

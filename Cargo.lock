@@ -2503,6 +2503,7 @@ name = "gsh-app"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "dirs",
  "gsh-chat",
  "gsh-config",
  "gsh-core",
@@ -2523,6 +2524,7 @@ dependencies = [
  "reqwest",
  "rfd",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",

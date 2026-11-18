@@ -54,6 +54,58 @@ impl Default for PaneTree {
 }
 
 impl PaneTree {
+    pub(crate) fn from_restored_parts(
+        grid: pane_grid::State<PaneModel>,
+        focused: Pane,
+        next_term_id: TermId,
+    ) -> Self {
+        let next_chat_id = grid
+            .iter()
+            .flat_map(|(_, m)| m.tabs())
+            .filter_map(|t| {
+                if let PaneTab::Chat(id) = t {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let next_query_id = grid
+            .iter()
+            .flat_map(|(_, m)| m.tabs())
+            .filter_map(|t| {
+                if let PaneTab::Query { id, .. } = t {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let next_browser_id = grid
+            .iter()
+            .flat_map(|(_, m)| m.tabs())
+            .filter_map(|t| match t {
+                PaneTab::Redis { id, .. } | PaneTab::Mongo { id, .. } => Some(*id),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        Self {
+            grid,
+            focused,
+            fallback: PaneModel::empty(),
+            next_term_id,
+            next_chat_id,
+            next_query_id,
+            next_browser_id,
+        }
+    }
+
     pub fn grid(&self) -> &pane_grid::State<PaneModel> {
         &self.grid
     }

@@ -4,6 +4,7 @@
 //! Mantém a lista ordenada de abas tipadas (`Terminal(id)` | `File(path)`),
 //! o índice da aba ativa e as transições puras de abrir, ativar e fechar.
 
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use gsh_core::tabs::basename;
@@ -23,7 +24,7 @@ pub type QueryId = u64;
 pub type BrowserId = u64;
 
 /// Aba aberta no pane central.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PaneTab {
     /// Sessão de terminal identificada por [`TermId`].
     Terminal(TermId),
@@ -135,6 +136,22 @@ pub struct PaneModel {
 }
 
 impl PaneModel {
+    pub(crate) fn restore(
+        tabs: Vec<PaneTab>,
+        active: Option<usize>,
+        labels: Vec<(TermId, String)>,
+    ) -> Self {
+        let mut model = Self {
+            tabs,
+            active: None,
+            terminal_labels: labels.into_iter().collect(),
+        };
+        model.active = active
+            .filter(|index| *index < model.tabs.len())
+            .or_else(|| (!model.tabs.is_empty()).then_some(0));
+        model
+    }
+
     /// Cria um pane inicialmente sem abas. Os ids de terminal e chat vêm de
     /// `PaneTree`, que os aloca para a árvore inteira (sem colisão entre panes).
     pub fn empty() -> Self {
