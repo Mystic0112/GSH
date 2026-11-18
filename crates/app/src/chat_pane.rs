@@ -106,6 +106,7 @@ pub struct ChatQuestion {
 pub enum ChatMsg {
     /// Edição no texto do composer.
     InputChanged(String),
+    InputAction(iced::widget::text_editor::Action),
     /// Envio da mensagem atual (Enter ou botão Enviar).
     Send,
     /// Cancelamento da resposta em curso (mata o processo filho).
@@ -128,6 +129,8 @@ pub enum ChatMsg {
     SetMode(String),
     SetModel(String),
     SetEffort(String),
+    OpenComposerMenu(ComposerMenu),
+    CloseComposerMenu,
     Attach,
     PickFiles(Option<Vec<PathBuf>>),
     RemoveAttachment(usize),
@@ -181,6 +184,15 @@ pub enum ChatMsg {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposerMenu {
+    Mode,
+    Effort,
+    Model,
+    RefreshingEffort,
+    RefreshingModel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashKey {
     Up,
     Down,
@@ -196,6 +208,7 @@ pub struct ChatPane {
     binary: PathBuf,
     items: Vec<ChatItem>,
     input: String,
+    input_content: iced::widget::text_editor::Content,
     busy: bool,
     session_id: Option<String>,
     model: Option<String>,
@@ -214,6 +227,8 @@ pub struct ChatPane {
     history_open: bool,
     peer_picker_open: bool,
     usage_open: bool,
+    composer_menu: Option<ComposerMenu>,
+    spinner_rotation: f32,
     slash_index: usize,
     slash_dismissed_at: Option<String>,
     rename_open: bool,
@@ -242,6 +257,7 @@ impl ChatPane {
             binary: PathBuf::from(DEFAULT_CLAUDE_BINARY),
             items: Vec::new(),
             input: String::new(),
+            input_content: iced::widget::text_editor::Content::new(),
             busy: false,
             session_id: None,
             model: None,
@@ -260,6 +276,8 @@ impl ChatPane {
             history_open: false,
             peer_picker_open: false,
             usage_open: false,
+            composer_menu: None,
+            spinner_rotation: 0.0,
             slash_index: 0,
             slash_dismissed_at: None,
             rename_open: false,
@@ -285,6 +303,12 @@ impl ChatPane {
         self
     }
 
+    pub fn with_defaults(mut self, mode: impl Into<String>, effort: impl Into<String>) -> Self {
+        self.mode = mode.into();
+        self.effort = Some(effort.into());
+        self
+    }
+
     /// Atualiza o diretório e branch quando o workspace ativo muda.
     pub fn set_workspace(&mut self, cwd: Option<PathBuf>, branch: Option<String>) {
         self.cwd = cwd;
@@ -305,6 +329,14 @@ impl ChatPane {
 
     pub fn input(&self) -> &str {
         &self.input
+    }
+    pub fn input_content(&self) -> &iced::widget::text_editor::Content {
+        &self.input_content
+    }
+
+    fn set_input(&mut self, value: String) {
+        self.input_content = iced::widget::text_editor::Content::with_text(&value);
+        self.input = value;
     }
 
     pub fn working_directory(&self) -> Option<&Path> {
@@ -332,6 +364,29 @@ impl ChatPane {
     }
     pub fn effort(&self) -> Option<&str> {
         self.effort.as_deref()
+    }
+    pub fn composer_menu(&self) -> Option<ComposerMenu> {
+        self.composer_menu
+    }
+    pub fn spinner_rotation(&self) -> f32 {
+        self.spinner_rotation
+    }
+    pub fn efforts(&self) -> Vec<String> {
+        if self.models.is_empty() {
+            return ["low", "medium", "high", "xhigh", "max"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+        }
+        self.models
+            .iter()
+            .find(|model| {
+                model.value == self.model.as_deref().unwrap_or_default()
+                    || model.resolved.as_deref() == self.model.as_deref()
+            })
+            .map(|model| model.efforts.clone())
+            .filter(|efforts| !efforts.is_empty())
+            .unwrap_or_default()
     }
 
     pub fn cost_usd(&self) -> f64 {
@@ -495,7 +550,14 @@ impl ChatPane {
     pub fn update(&mut self, msg: ChatMsg) -> Task<ChatMsg> {
         match msg {
             ChatMsg::InputChanged(val) => {
-                self.input = val;
+                self.set_input(val);
+                self.slash_index = 0;
+                self.slash_dismissed_at = None;
+                Task::none()
+            }
+            ChatMsg::InputAction(action) => {
+                self.input_content.perform(action);
+                self.input = self.input_content.text();
                 self.slash_index = 0;
                 self.slash_dismissed_at = None;
                 Task::none()
@@ -505,7 +567,7 @@ impl ChatPane {
                 if (text.is_empty() && self.attachments.is_empty()) || self.busy {
                     return Task::none();
                 }
-                self.input.clear();
+                self.set_input(String::new());
                 self.items.push(ChatItem::User { text: text.clone() });
                 self.busy = true;
 
@@ -560,6 +622,7 @@ impl ChatPane {
                 Task::none()
             }
             ChatMsg::Tick => {
+                self.spinner_rotation = (self.spinner_rotation + 0.1) % std::f32::consts::TAU;
                 self.poll_events();
                 self.download_remote_images()
             }
@@ -582,6 +645,7 @@ impl ChatPane {
                 Task::none()
             }
             ChatMsg::SetMode(mode) => {
+                self.composer_menu = None;
                 self.mode = mode.clone();
                 if let Some(engine) = &self.engine {
                     engine.set_permission_mode(&mode);
@@ -589,6 +653,7 @@ impl ChatPane {
                 Task::none()
             }
             ChatMsg::SetModel(model) => {
+                self.composer_menu = None;
                 self.model = Some(model.clone());
                 if let Some(engine) = &self.engine {
                     engine.set_model(&model);
@@ -596,10 +661,27 @@ impl ChatPane {
                 Task::none()
             }
             ChatMsg::SetEffort(effort) => {
+                self.composer_menu = None;
                 self.effort = Some(effort.clone());
                 if let Some(engine) = &self.engine {
                     engine.set_effort(&effort);
                 }
+                Task::none()
+            }
+            ChatMsg::OpenComposerMenu(menu) => {
+                self.composer_menu = Some(match menu {
+                    ComposerMenu::Model => ComposerMenu::RefreshingModel,
+                    ComposerMenu::Effort => ComposerMenu::RefreshingEffort,
+                    other => other,
+                });
+                if matches!(menu, ComposerMenu::Model | ComposerMenu::Effort) {
+                    self.update(ChatMsg::UsageRefresh)
+                } else {
+                    Task::none()
+                }
+            }
+            ChatMsg::CloseComposerMenu => {
+                self.composer_menu = None;
                 Task::none()
             }
             ChatMsg::Attach => Task::perform(
@@ -653,7 +735,7 @@ impl ChatPane {
                 }
             }
             ChatMsg::SelectCommand(command) => {
-                self.input = command;
+                self.set_input(command);
                 self.slash_dismissed_at = None;
                 self.slash_index = 0;
                 Task::none()
@@ -674,7 +756,7 @@ impl ChatPane {
                     SlashKey::Down => self.slash_index = (self.slash_index + 1) % matches.len(),
                     SlashKey::Enter | SlashKey::Tab => {
                         if let Some(command) = matches.get(self.slash_index) {
-                            self.input = format!("/{} ", command.name);
+                            self.set_input(format!("/{} ", command.name));
                         }
                         self.slash_index = 0;
                         self.slash_dismissed_at = None;
@@ -745,10 +827,33 @@ impl ChatPane {
                 self.models = probe.models;
                 self.commands = probe.commands;
                 self.usage = probe.usage;
+                self.composer_menu = match self.composer_menu {
+                    Some(ComposerMenu::RefreshingModel) if !self.models.is_empty() => {
+                        Some(ComposerMenu::Model)
+                    }
+                    Some(ComposerMenu::RefreshingEffort) if !self.efforts().is_empty() => {
+                        Some(ComposerMenu::Effort)
+                    }
+                    Some(ComposerMenu::RefreshingModel | ComposerMenu::RefreshingEffort) => None,
+                    other => other,
+                };
                 Task::none()
             }
-            ChatMsg::RefreshAccountResult(Ok(None)) => Task::none(),
+            ChatMsg::RefreshAccountResult(Ok(None)) => {
+                self.composer_menu = match self.composer_menu {
+                    Some(ComposerMenu::RefreshingModel) if !self.models.is_empty() => {
+                        Some(ComposerMenu::Model)
+                    }
+                    Some(ComposerMenu::RefreshingEffort) if !self.efforts().is_empty() => {
+                        Some(ComposerMenu::Effort)
+                    }
+                    Some(ComposerMenu::RefreshingModel | ComposerMenu::RefreshingEffort) => None,
+                    other => other,
+                };
+                Task::none()
+            }
             ChatMsg::RefreshAccountResult(Err(error)) => {
+                self.composer_menu = None;
                 self.items.push(ChatItem::Error {
                     message: labels::format_chat_account_failed(&error),
                 });
@@ -799,14 +904,14 @@ impl ChatPane {
             }
             ChatMsg::PickPeerSession(id) => {
                 if let Some(session) = self.peer_sessions().into_iter().find(|s| s.id == id) {
-                    self.input = format!(
+                    self.set_input(format!(
                         "{}{}{}",
                         labels::CHAT_SEND_TO_SESSION_PREFIX,
                         session.title,
                         labels::CHAT_SEND_TO_SESSION_SUFFIX
-                    );
+                    ));
                 } else {
-                    self.input = labels::CHAT_ASK_LIST_SESSIONS.to_string();
+                    self.set_input(labels::CHAT_ASK_LIST_SESSIONS.to_string());
                 }
                 self.peer_picker_open = false;
                 Task::none()
@@ -1270,11 +1375,7 @@ impl ChatPane {
         } else {
             Subscription::none()
         };
-        Subscription::batch([
-            tick,
-            iced::event::listen_with(file_drop),
-            iced::event::listen_with(chat_shortcuts),
-        ])
+        Subscription::batch([tick, iced::event::listen_with(file_drop)])
     }
 
     /// Renderiza o pane de chat.
@@ -1500,37 +1601,6 @@ fn file_drop(
     }
 }
 
-fn chat_shortcuts(
-    event: iced::Event,
-    status: iced::event::Status,
-    _window: iced::window::Id,
-) -> Option<ChatMsg> {
-    if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) = event {
-        if (modifiers.control() || modifiers.command())
-            && key == iced::keyboard::Key::Character("v".into())
-        {
-            return Some(ChatMsg::PasteImage);
-        }
-        if status == iced::event::Status::Ignored {
-            return None;
-        }
-        let slash = match key {
-            iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowUp) => Some(SlashKey::Up),
-            iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowDown) => {
-                Some(SlashKey::Down)
-            }
-            iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter) => Some(SlashKey::Enter),
-            iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab) => Some(SlashKey::Tab),
-            iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape) => {
-                Some(SlashKey::Escape)
-            }
-            _ => None,
-        };
-        return slash.map(ChatMsg::SlashKey);
-    }
-    None
-}
-
 /// Auxiliar para exibir o nome base de um caminho quando necessário.
 pub fn basename_or_gsh(path: Option<&Path>) -> String {
     path.map(|p| basename(&p.to_string_lossy()))
@@ -1631,6 +1701,20 @@ mod tests {
                 streaming: false,
             })
         );
+    }
+
+    #[test]
+    fn composer_editor_preserves_multiline_input() {
+        let mut pane = ChatPane::default();
+        for action in [
+            iced::widget::text_editor::Action::Edit(iced::widget::text_editor::Edit::Insert('a')),
+            iced::widget::text_editor::Action::Edit(iced::widget::text_editor::Edit::Enter),
+            iced::widget::text_editor::Action::Edit(iced::widget::text_editor::Edit::Insert('b')),
+        ] {
+            let _ = pane.update(ChatMsg::InputAction(action));
+        }
+        assert_eq!(pane.input(), "a\nb");
+        assert_eq!(pane.input_content().line_count(), 2);
     }
 
     #[test]

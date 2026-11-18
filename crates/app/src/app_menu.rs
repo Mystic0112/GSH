@@ -20,6 +20,7 @@ pub enum Leading {
 /// Entrada do menu.
 pub struct Entry<M> {
     pub label: String,
+    pub description: Option<String>,
     pub leading: Option<Leading>,
     pub selected: bool,
     pub danger: bool,
@@ -36,6 +37,7 @@ impl<M> Entry<M> {
     pub fn new(label: impl Into<String>, on_press: M) -> Self {
         Self {
             label: label.into(),
+            description: None,
             leading: None,
             selected: false,
             danger: false,
@@ -45,6 +47,11 @@ impl<M> Entry<M> {
 
     pub fn leading(mut self, leading: Leading) -> Self {
         self.leading = Some(leading);
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
         self
     }
 
@@ -64,6 +71,7 @@ impl<M> Entry<M> {
     {
         Self {
             label: String::new(),
+            description: None,
             leading: None,
             selected: false,
             danger: false,
@@ -85,7 +93,13 @@ pub fn menu<'a, M: Clone + 'a>(items: Vec<Item<M>>, min_width: f32) -> Element<'
     let longest = items
         .iter()
         .filter_map(|item| match item {
-            Item::Entry(entry) => Some(entry.label.chars().count()),
+            Item::Entry(entry) => Some(
+                entry
+                    .description
+                    .as_deref()
+                    .map_or(0, |description| description.chars().count())
+                    .max(entry.label.chars().count()),
+            ),
             Item::Divider => None,
         })
         .max()
@@ -150,13 +164,29 @@ fn entry_view<'a, M: Clone + 'a>(entry: Entry<M>) -> Element<'a, M> {
         };
         content = content.push(container(icon).width(theme::AGENT_MENU_LEADING_WIDTH));
     }
-    content = content.push(
+    let label: Element<'a, M> = if let Some(description) = entry.description {
+        column![
+            text(entry.label)
+                .font(theme::FONT_BODY)
+                .size(theme::CHAT_MENU_MODEL_NAME_SIZE)
+                .color(label_color)
+                .wrapping(text::Wrapping::None),
+            text(description)
+                .font(theme::FONT_BODY)
+                .size(theme::CHAT_MENU_MODEL_DESCRIPTION_SIZE)
+                .color(palette.text3)
+                .wrapping(text::Wrapping::None),
+        ]
+        .into()
+    } else {
         text(entry.label)
             .font(theme::FONT_BODY)
             .size(theme::AGENT_MENU_TEXT_SIZE)
             .color(label_color)
-            .wrapping(text::Wrapping::None),
-    );
+            .wrapping(text::Wrapping::None)
+            .into()
+    };
+    content = content.push(label);
     if entry.selected {
         content = content.push(Space::new().width(Fill)).push(
             text(labels::ICON_CHECK)

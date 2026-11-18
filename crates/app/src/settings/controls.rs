@@ -101,6 +101,46 @@ pub fn save(path: &Path, settings: &Settings) -> Result<gsh_config::Config, Erro
     super::write_atomic(path, &contents)?;
     Ok(config)
 }
+
+pub fn save_chat_preference(
+    path: &Path,
+    key: &str,
+    value: &str,
+) -> Result<gsh_config::Config, Error> {
+    let field = match key {
+        "permissionMode"
+            if matches!(
+                value,
+                "default" | "acceptEdits" | "plan" | "bypassPermissions"
+            ) =>
+        {
+            key
+        }
+        "effort"
+            if !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control) =>
+        {
+            key
+        }
+        _ => return Err(Error::InvalidSection),
+    };
+    let _ = gsh_config::load(path).map_err(Error::Config)?;
+    let original = match std::fs::read_to_string(path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(Error::Io(error)),
+    };
+    let mut doc = original
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(Error::Document)?;
+    table(&mut doc, "chat")?.insert(field, toml_edit::value(value));
+    let contents = doc.to_string();
+    let config = gsh_config::load::parse(path, &contents).map_err(Error::Config)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(Error::Io)?;
+    }
+    super::write_atomic(path, &contents)?;
+    Ok(config)
+}
 fn number(value: &str, min: f64, max: f64, error: Error) -> Result<f64, Error> {
     match value.trim().parse::<f64>() {
         Ok(value) if value.is_finite() && (min..=max).contains(&value) => Ok(value),
@@ -165,6 +205,28 @@ pub fn save_team(path: &Path, team: &FarmTeam) -> Result<gsh_config::Config, Err
 mod tests {
     use super::*;
     use gsh_config::schema::AppThemeMode;
+
+    #[test]
+    fn chat_preferences_preserve_config_and_validate_values() {
+        let dir = std::env::temp_dir().join(format!("gsh-chat-preferences-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "future = 'keep'\n").unwrap();
+        let config = save_chat_preference(&path, "permissionMode", "acceptEdits").unwrap();
+        assert_eq!(config.chat.permission_mode, "acceptEdits");
+        let config = save_chat_preference(&path, "effort", "xhigh").unwrap();
+        assert_eq!(config.chat.effort, "xhigh");
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("future = 'keep'"));
+        assert!(matches!(
+            save_chat_preference(&path, "permissionMode", "unknown"),
+            Err(Error::InvalidSection)
+        ));
+        assert!(matches!(
+            save_chat_preference(&path, "effort", "high\n[terminal]"),
+            Err(Error::InvalidSection)
+        ));
+    }
 
     #[test]
     fn sections_round_trip_and_invalid_values_do_not_write() {

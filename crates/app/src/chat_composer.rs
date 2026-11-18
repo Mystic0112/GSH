@@ -3,14 +3,19 @@
 //! Exibe a faixa de contexto (pasta + branch), a caixa de texto com atalho
 //! `Enter` para envio e botão de Enviar/Parar, e a barra inferior de status.
 
-use iced::widget::canvas::{self, Path, Stroke};
-use iced::widget::{button, column, container, pick_list, row, text, text_input, tooltip, Space};
-use iced::{mouse, Point, Radians, Rectangle, Renderer};
+use iced::widget::{button, column, container, row, text, text_editor, tooltip, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
 
+mod bar;
+mod details;
+
+#[cfg(test)]
+use crate::chat_pane::ComposerMenu;
 use crate::chat_pane::{ChatMsg, ChatPane};
 use crate::labels;
 use crate::theme;
+use bar::view_bottom_bar;
+use details::{view_peer_picker, view_usage_details};
 
 /// Renderiza o composer completo na parte inferior do [`ChatPane`].
 pub fn view(pane: &ChatPane) -> Element<'_, ChatMsg> {
@@ -99,23 +104,27 @@ fn view_context_strip(pane: &ChatPane) -> Element<'_, ChatMsg> {
 }
 
 fn view_input_box(pane: &ChatPane) -> Element<'_, ChatMsg> {
-    let mut input = text_input(labels::CHAT_PLACEHOLDER, pane.input())
-        .on_input(ChatMsg::InputChanged)
+    let lines = pane.input_content().line_count().clamp(1, 8);
+    let input = text_editor(pane.input_content())
+        .placeholder(labels::CHAT_PLACEHOLDER)
+        .on_action(ChatMsg::InputAction)
+        .key_binding(move |press| chat_editor_key_binding(pane, press))
         .font(theme::FONT_BODY)
         .size(theme::SIZE_BODY)
+        .line_height(iced::widget::text::LineHeight::Relative(
+            theme::LINE_HEIGHT_DISPLAY,
+        ))
         .padding([6, 8])
-        .style(|_: &Theme, _status| text_input::Style {
-            background: Background::Color(theme::palette().panel2),
+        .height(Length::Fixed(
+            lines as f32 * theme::SIZE_BODY * theme::LINE_HEIGHT_DISPLAY + 12.0,
+        ))
+        .style(|_: &Theme, _status| text_editor::Style {
+            background: Background::Color(iced::Color::TRANSPARENT),
             border: Border::default(),
-            icon: theme::palette().text3,
             placeholder: theme::palette().text4,
             value: theme::palette().text,
             selection: theme::palette().accent_soft,
         });
-
-    if !pane.is_busy() && pane.slash_matches().is_empty() {
-        input = input.on_submit(ChatMsg::Send);
-    }
 
     let action_btn = if pane.is_busy() {
         view_stop_button()
@@ -125,7 +134,7 @@ fn view_input_box(pane: &ChatPane) -> Element<'_, ChatMsg> {
 
     let mut controls = row![input, Space::new().width(4.0), action_btn]
         .width(Fill)
-        .align_y(Alignment::Center);
+        .align_y(Alignment::End);
     if !pane.attachments().is_empty() {
         let names =
             pane.attachments()
@@ -155,452 +164,151 @@ fn view_input_box(pane: &ChatPane) -> Element<'_, ChatMsg> {
         .into()
 }
 
+fn chat_editor_key_binding(
+    pane: &ChatPane,
+    press: text_editor::KeyPress,
+) -> Option<text_editor::Binding<ChatMsg>> {
+    use iced::keyboard::{key::Named, Key};
+    use text_editor::Binding;
+
+    if (press.modifiers.control() || press.modifiers.command())
+        && matches!(&press.key, Key::Character(value) if value.as_str().eq_ignore_ascii_case("v"))
+    {
+        return Some(Binding::Custom(ChatMsg::PasteImage));
+    }
+    let slash_open = !pane.slash_matches().is_empty();
+    match &press.key {
+        Key::Named(Named::Enter) if press.modifiers.shift() => Binding::from_key_press(press),
+        Key::Named(Named::Enter) if slash_open => Some(Binding::Custom(ChatMsg::SlashKey(
+            crate::chat_pane::SlashKey::Enter,
+        ))),
+        Key::Named(Named::Enter) => Some(Binding::Custom(ChatMsg::Send)),
+        Key::Named(Named::Tab) if slash_open => Some(Binding::Custom(ChatMsg::SlashKey(
+            crate::chat_pane::SlashKey::Tab,
+        ))),
+        Key::Named(Named::Escape) if slash_open => Some(Binding::Custom(ChatMsg::SlashKey(
+            crate::chat_pane::SlashKey::Escape,
+        ))),
+        Key::Named(Named::ArrowUp) if slash_open => Some(Binding::Custom(ChatMsg::SlashKey(
+            crate::chat_pane::SlashKey::Up,
+        ))),
+        Key::Named(Named::ArrowDown) if slash_open => Some(Binding::Custom(ChatMsg::SlashKey(
+            crate::chat_pane::SlashKey::Down,
+        ))),
+        _ => Binding::from_key_press(press),
+    }
+}
+
 fn view_send_button<'a>(enabled: bool) -> Element<'a, ChatMsg> {
     let mut send = button(
         text(labels::ICON_KEYBOARD_RETURN)
             .font(theme::FONT_ICON)
-            .size(theme::SIZE_ICON)
+            .size(theme::CHAT_ICON_ACTION_SIZE)
             .color(theme::palette().text2),
     )
-    .padding(5)
+    .padding(theme::CHAT_ICON_ACTION_PADDING)
     .style(theme::ghost_button);
     if enabled {
         send = send.on_press(ChatMsg::Send);
     }
-    send.into()
-}
-
-fn view_stop_button<'a>() -> Element<'a, ChatMsg> {
-    button(
-        text(labels::ICON_STOP)
-            .font(theme::FONT_ICON)
-            .size(theme::SIZE_ICON)
-            .color(theme::palette().text2),
+    tooltip(
+        send,
+        crate::pane_chrome::tip_bubble(labels::CHAT_SEND),
+        tooltip::Position::Top,
     )
-    .padding(5)
-    .on_press(ChatMsg::Cancel)
-    .style(theme::ghost_button)
     .into()
 }
 
-fn view_bottom_bar(pane: &ChatPane) -> Element<'_, ChatMsg> {
-    let modes = vec![
-        labels::CHAT_MODE_ASK.to_string(),
-        labels::CHAT_MODE_EDITS.to_string(),
-        labels::CHAT_MODE_PLAN.to_string(),
-        labels::CHAT_MODE_IGNORE.to_string(),
-    ];
-    let selected = Some(
-        match pane.mode() {
-            "acceptEdits" => labels::CHAT_MODE_EDITS,
-            "plan" => labels::CHAT_MODE_PLAN,
-            "bypassPermissions" => labels::CHAT_MODE_IGNORE,
-            _ => labels::CHAT_MODE_ASK,
-        }
-        .to_string(),
-    );
-    let mode_picker = iced::widget::pick_list(modes, selected, |mode| {
-        ChatMsg::SetMode(
-            match mode.as_str() {
-                "Aceitar edições" => "acceptEdits",
-                "Planejar" => "plan",
-                "Ignorar permissões" => "bypassPermissions",
-                _ => "default",
-            }
-            .to_string(),
-        )
-    })
-    .width(Length::Shrink)
-    .padding([0, 2])
-    .text_size(theme::SIZE_LABEL)
-    .style(|_: &Theme, status| {
-        chat_pick_list_style(status, pane.mode() == "bypassPermissions", true)
-    });
-    let attach = tooltip(
-        button(
-            text(labels::ICON_PLUS)
-                .font(theme::FONT_ICON)
-                .size(theme::SIZE_ICON),
-        )
-        .padding(5)
-        .on_press(ChatMsg::Attach)
-        .style(theme::ghost_button),
-        crate::pane_chrome::tip_bubble(labels::CHAT_ATTACH),
-        tooltip::Position::Top,
-    );
-    let peers = tooltip(
-        button(
-            text(labels::ICON_FORUM)
-                .font(theme::FONT_ICON)
-                .size(theme::SIZE_ICON),
-        )
-        .padding(5)
-        .on_press(ChatMsg::TogglePeerPicker)
-        .style(theme::ghost_button),
-        crate::pane_chrome::tip_bubble(labels::CHAT_PEER_PICKER),
-        tooltip::Position::Top,
-    );
-    let mut bar = row![
-        attach,
-        Space::new().width(2.0),
-        peers,
-        Space::new().width(2.0),
-        mode_picker,
-        Space::new().width(Fill),
-    ]
-    .height(Length::Fixed(22.0))
-    .align_y(Alignment::Center);
-    let model_choices = if pane.models().is_empty() {
-        vec!["Claude".to_string()]
-    } else {
-        pane.models()
-            .iter()
-            .map(|model| model.display_name.clone())
-            .collect()
-    };
-    let model_value = pane.model().unwrap_or_default();
-    let selected_model = pane
-        .models()
-        .iter()
-        .find(|model| model.value == model_value || model.resolved.as_deref() == Some(model_value))
-        .map(|model| model.display_name.clone())
-        .unwrap_or_else(|| short_model_name(pane.model()));
-    let efforts = pane
-        .models()
-        .iter()
-        .find(|m| {
-            m.value == pane.model().unwrap_or_default() || m.resolved.as_deref() == pane.model()
-        })
-        .map(|m| m.efforts.clone())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| {
-            vec![
-                "low".into(),
-                "medium".into(),
-                "high".into(),
-                "xhigh".into(),
-                "max".into(),
-            ]
-        });
-    let selected_effort = Some(effort_label(pane.effort().unwrap_or("high")).to_string());
-    let effort_choices = efforts
-        .iter()
-        .map(|effort| effort_label(effort).to_string())
-        .collect::<Vec<_>>();
-    {
-        let fraction = pane.usage_fraction().unwrap_or(0.0).clamp(0.0, 1.0);
-        let warning = fraction >= 0.8
-            || pane
-                .usage()
-                .is_some_and(|u| u.limits.iter().any(|l| l.warning));
-        let ring = button(
-            canvas::Canvas::new(UsageRing {
-                fraction: fraction.clamp(0.0, 1.0),
-                warning,
-            })
-            .width(Length::Fixed(15.0))
-            .height(Length::Fixed(15.0)),
-        )
-        .padding(5)
-        .on_press(ChatMsg::ToggleUsage)
-        .style(theme::ghost_button);
-        bar = bar.push(tooltip(
-            ring,
-            crate::pane_chrome::tip_bubble(labels::CHAT_USAGE),
-            tooltip::Position::Top,
-        ));
-    }
-    bar = bar.push(
-        text(labels::ICON_SPEED)
+fn view_stop_button<'a>() -> Element<'a, ChatMsg> {
+    let stop = button(
+        text(labels::ICON_STOP)
             .font(theme::FONT_ICON)
-            .size(theme::SIZE_LABEL)
-            .color(theme::palette().text3),
-    );
-    bar = bar.push(
-        iced::widget::pick_list(effort_choices, selected_effort, move |label| {
-            efforts
-                .iter()
-                .find(|effort| effort_label(effort) == label)
-                .cloned()
-                .map(ChatMsg::SetEffort)
-                .unwrap_or(ChatMsg::RefreshUsage)
-        })
-        .width(Length::Shrink)
-        .padding([0, 2])
-        .text_size(theme::SIZE_LABEL)
-        .style(|_: &Theme, status| chat_pick_list_style(status, false, false)),
-    );
-    bar = bar.push(
-        iced::widget::pick_list(model_choices, Some(selected_model), |name| {
-            pane.models()
-                .iter()
-                .find(|model| model.display_name == name)
-                .map(|model| ChatMsg::SetModel(model.value.clone()))
-                .unwrap_or(ChatMsg::UsageRefresh)
-        })
-        .width(Length::Shrink)
-        .padding([0, 2])
-        .text_size(theme::SIZE_LABEL)
-        .style(|_: &Theme, status| chat_pick_list_style(status, false, true)),
-    );
-
-    if pane.is_busy() {
-        bar = bar.push(Space::new().width(10.0)).push(
-            text(labels::CHAT_WORKING)
-                .font(theme::FONT_BODY_MEDIUM)
-                .size(theme::SIZE_LABEL)
-                .color(theme::palette().accent_text),
-        );
-    }
-
-    container(bar).padding([0, 6]).width(Fill).into()
+            .size(theme::CHAT_ICON_ACTION_SIZE)
+            .color(theme::palette().text2),
+    )
+    .padding(theme::CHAT_ICON_ACTION_PADDING)
+    .on_press(ChatMsg::Cancel)
+    .style(theme::ghost_button);
+    tooltip(
+        stop,
+        crate::pane_chrome::tip_bubble(labels::CHAT_STOP),
+        tooltip::Position::Top,
+    )
+    .into()
 }
 
-fn chat_pick_list_style(
-    status: pick_list::Status,
-    warning: bool,
-    show_handle: bool,
-) -> pick_list::Style {
-    let p = theme::palette();
-    pick_list::Style {
-        text_color: if warning { p.warn } else { p.text2 },
-        placeholder_color: p.text3,
-        handle_color: if show_handle {
-            p.text3
-        } else {
-            iced::Color::TRANSPARENT
-        },
-        background: (if matches!(status, pick_list::Status::Hovered) {
-            p.panel3
-        } else {
-            iced::Color::TRANSPARENT
-        })
-        .into(),
-        border: Border {
-            color: p.bg,
-            width: 0.0,
-            radius: 0.0.into(),
-        },
-    }
-}
+#[cfg(test)]
+#[test]
+fn permission_menu_opens_and_applies_selection() {
+    use iced::{Settings, Size};
+    use iced_test::simulator::Simulator;
 
-fn effort_label(value: &str) -> &str {
-    match value {
-        "low" => "Baixo",
-        "medium" => "Médio",
-        "high" => "Alto",
-        "xhigh" => "Muito alto",
-        "max" => "Máximo",
-        _ => "Padrão",
-    }
-}
-
-fn short_model_name(id: Option<&str>) -> String {
-    let Some(id) = id.filter(|id| !id.is_empty()) else {
-        return "Claude".into();
+    std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
+    let settings = Settings {
+        fonts: theme::EMBEDDED_FONTS
+            .iter()
+            .map(|font| (*font).into())
+            .collect(),
+        default_font: theme::FONT_BODY,
+        ..Default::default()
     };
-    let parts = id.split('-').collect::<Vec<_>>();
-    if parts.len() >= 3 && parts.first() == Some(&"claude") {
-        let family = parts.get(1).copied().unwrap_or_default();
-        let version = parts.get(2).copied().unwrap_or_default();
-        if ["opus", "sonnet", "haiku", "fable"].contains(&family)
-            && version.chars().all(|c| c.is_ascii_digit())
-        {
-            let minor = parts
-                .get(3)
-                .copied()
-                .filter(|minor| minor.chars().all(|c| c.is_ascii_digit()));
-            let family = family
-                .chars()
-                .next()
-                .map(|first| first.to_ascii_uppercase().to_string() + family.get(1..).unwrap_or(""))
-                .unwrap_or_default();
-            return minor
-                .map(|minor| format!("{family} {version}.{minor}"))
-                .unwrap_or_else(|| format!("{family} {version}"));
-        }
+    let mut pane = ChatPane::default();
+    let mut ui = Simulator::with_size(settings.clone(), Size::new(800.0, 120.0), view(&pane));
+    assert!(ui.click(labels::CHAT_MODE_DEFAULT).is_ok());
+    for message in ui.into_messages() {
+        let _ = pane.update(message);
     }
-    id.to_string()
+    assert_eq!(pane.composer_menu(), Some(ComposerMenu::Mode));
+    let _ = pane.update(ChatMsg::SetMode("plan".into()));
+    assert_eq!(pane.mode(), "plan");
+    assert_eq!(pane.composer_menu(), None);
 }
 
-struct UsageRing {
-    fraction: f32,
-    warning: bool,
-}
+#[cfg(test)]
+#[test]
+#[ignore = "gera o snapshot do composer para revisão visual"]
+fn capture_chat_composer_snapshot() {
+    use iced::widget::{column, container};
+    use iced::{Settings, Size};
+    use iced_test::simulator::Simulator;
+    use std::path::{Path, PathBuf};
 
-impl canvas::Program<ChatMsg> for UsageRing {
-    type State = ();
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<canvas::Geometry> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let center = Point::new(bounds.width / 2.0, bounds.height / 2.0);
-        let radius = 6.0;
-        frame.stroke(
-            &Path::circle(center, radius),
-            Stroke::default()
-                .with_width(2.0)
-                .with_color(theme::palette().border2),
-        );
-        let arc = Path::new(|builder| {
-            builder.arc(canvas::path::Arc {
-                center,
-                radius,
-                start_angle: Radians(-std::f32::consts::FRAC_PI_2),
-                end_angle: Radians(
-                    -std::f32::consts::FRAC_PI_2 + self.fraction * std::f32::consts::TAU,
-                ),
-            })
-        });
-        frame.stroke(
-            &arc,
-            Stroke::default()
-                .with_width(2.2)
-                .with_color(if self.warning {
-                    theme::palette().warn
-                } else {
-                    theme::palette().accent_text
-                }),
-        );
-        vec![frame.into_geometry()]
-    }
-}
-
-fn view_peer_picker(pane: &ChatPane) -> Element<'_, ChatMsg> {
-    let mut list = column![text(labels::CHAT_PEER_PICKER).size(theme::SIZE_LABEL)];
-    let sessions = pane.peer_sessions();
-    if sessions.is_empty() {
-        list = list.push(text(labels::CHAT_NO_PEER_SESSIONS).size(theme::SIZE_TAB));
-    }
-    for session in sessions {
-        list = list.push(
-            button(
-                text(format!(
-                    "{} · {} · {}",
-                    session.title,
-                    gsh_core::tabs::basename(&session.project),
-                    time_ago(session.last_seen_ms)
-                ))
-                .size(theme::SIZE_TAB),
-            )
-            .on_press(ChatMsg::PickPeerSession(session.id))
-            .style(theme::ghost_button),
-        );
-    }
-    list = list.push(
-        button(text(labels::CHAT_LIST_ALL_SESSIONS).size(theme::SIZE_TAB))
-            .on_press(ChatMsg::PickPeerSession(String::new()))
-            .style(theme::ghost_button),
-    );
-    container(list.spacing(3)).padding(8).width(Fill).into()
-}
-
-fn time_ago(at_ms: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let seconds = now.saturating_sub(at_ms) / 1000;
-    if seconds < 60 {
-        "agora".into()
-    } else if seconds < 3600 {
-        format!("há {} min", seconds / 60)
-    } else {
-        format!("há {} h", seconds / 3600)
-    }
-}
-
-fn view_usage_details(pane: &ChatPane) -> Element<'_, ChatMsg> {
-    let (tokens, window) = pane.context();
-    let context = if window > 0 {
-        format!(
-            "{} · {}%",
-            labels::format_chat_context(tokens, window),
-            (tokens.saturating_mul(100) / window).min(100)
-        )
-    } else {
-        labels::CHAT_CONTEXT_UNAVAILABLE.to_string()
+    std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
+    theme::set_active(theme::ThemeVariant::Dark);
+    let pane = ChatPane::new(Some(PathBuf::from("style")), Some("main".into()));
+    let content = container(column![
+        Space::new().height(70.0),
+        row![
+            Space::new().width(75.0),
+            container(view(&pane)).width(760.0),
+            Space::new().width(Fill),
+        ]
+        .width(Fill),
+    ])
+    .width(Fill)
+    .height(Fill)
+    .style(|_: &Theme| container::Style {
+        background: Some(Background::Color(theme::palette().panel)),
+        ..Default::default()
+    });
+    let settings = Settings {
+        fonts: theme::EMBEDDED_FONTS
+            .iter()
+            .map(|font| (*font).into())
+            .collect(),
+        default_font: theme::FONT_BODY,
+        ..Default::default()
     };
-    let mut rows = column![
-        text(
-            pane.usage()
-                .and_then(|u| u.plan.as_deref())
-                .unwrap_or(labels::CHAT_USAGE)
-        )
-        .font(theme::FONT_BODY_MEDIUM)
-        .size(theme::SIZE_LABEL),
-        text(context)
-            .font(theme::FONT_BODY)
-            .size(theme::SIZE_TAB)
-            .color(theme::palette().text2)
-    ];
-    if pane.usage().is_none() {
-        rows = rows.push(
-            text(labels::CHAT_USAGE_UNAVAILABLE)
-                .size(theme::SIZE_TAB)
-                .color(theme::palette().text3),
-        );
-    }
-    for limit in pane.usage().into_iter().flat_map(|u| &u.limits) {
-        let label = match limit.kind {
-            gsh_chat::LimitKind::Session => labels::CHAT_USAGE_SESSION,
-            gsh_chat::LimitKind::Weekly => labels::CHAT_USAGE_WEEKLY,
-            gsh_chat::LimitKind::WeeklyModel => {
-                limit.model.as_deref().unwrap_or(labels::CHAT_USAGE_WEEKLY)
-            }
-            gsh_chat::LimitKind::Other => continue,
-        };
-        let reset = limit
-            .resets_at_ms
-            .map(|ms| format!(" · {}", reset_relative(ms)))
-            .unwrap_or_default();
-        rows = rows.push(
-            text(format!("{label}: {}%{}", limit.percent, reset))
-                .font(theme::FONT_BODY)
-                .size(theme::SIZE_TAB)
-                .color(if limit.warning || limit.percent >= 80 {
-                    theme::palette().warn
-                } else {
-                    theme::palette().text2
-                }),
-        );
-    }
-    container(rows.spacing(4))
-        .padding(12)
-        .width(Length::Fixed(300.0))
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::palette().panel2)),
-            border: Border {
-                color: theme::palette().border2,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..Default::default()
-        })
-        .into()
-}
-
-fn reset_relative(at_ms: u64) -> String {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let at = crate::clock::local_time(at_ms);
-    let now = crate::clock::local_time(now_ms);
-    let time = format!("{:02}:{:02}", at.hour, at.minute);
-    if at.year == now.year && at.month == now.month && at.day == now.day {
-        format!("{}{time}", labels::CHAT_USAGE_RESET_TODAY)
-    } else {
-        format!(
-            "{}{:02}/{:02} às {time}",
-            labels::CHAT_USAGE_RESET_ON,
-            at.day,
-            at.month
-        )
-    }
+    let mut simulator = Simulator::with_size(settings, Size::new(862.0, 198.0), content);
+    let directory = Path::new("/tmp");
+    let target = directory.join("rust-chat-composer-fixed-2x.png");
+    let generated = directory.join("rust-chat-composer-fixed-2x-tiny-skia.png");
+    let _ = std::fs::remove_file(&target);
+    let _ = std::fs::remove_file(&generated);
+    simulator
+        .snapshot(&Theme::Dark)
+        .expect("snapshot render")
+        .matches_image(&target)
+        .expect("snapshot write");
+    std::fs::rename(generated, target).expect("rename snapshot");
 }

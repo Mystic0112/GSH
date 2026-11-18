@@ -121,6 +121,20 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn persist_chat_preference(&mut self, key: &str, value: &str) {
+        let result = match &self.path {
+            Ok(path) => controls::save_chat_preference(path, key, value),
+            Err(_) => Err(Error::Config(gsh_config::ConfigError::NoHome)),
+        };
+        match result {
+            Ok(config) => {
+                self.current = config;
+                self.error = None;
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
     pub fn reload(&mut self) {
         self.saved = false;
         self.claude.reset();

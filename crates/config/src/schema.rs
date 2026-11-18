@@ -385,6 +385,23 @@ pub struct Chat {
     pub font: Option<String>,
     #[serde(deserialize_with = "named::or_default")]
     pub transcript_width: TranscriptWidth,
+    #[serde(deserialize_with = "chat_permission_mode")]
+    pub permission_mode: String,
+    pub effort: String,
+}
+
+fn chat_permission_mode<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(
+        if matches!(
+            value.as_str(),
+            "default" | "acceptEdits" | "plan" | "bypassPermissions"
+        ) {
+            value
+        } else {
+            String::from("default")
+        },
+    )
 }
 
 impl Default for Chat {
@@ -395,6 +412,8 @@ impl Default for Chat {
             transcript_view: TranscriptView::default(),
             font: None,
             transcript_width: TranscriptWidth::default(),
+            permission_mode: String::from("default"),
+            effort: String::from("high"),
         }
     }
 }

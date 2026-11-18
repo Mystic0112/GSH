@@ -3014,6 +3014,16 @@ impl Shell {
                 }
             }
             Msg::Chat(id, chat_msg) => {
+                let preference = match &chat_msg {
+                    ChatMsg::SetMode(mode) if mode != "plan" => {
+                        Some(("permissionMode", mode.as_str()))
+                    }
+                    ChatMsg::SetEffort(effort) => Some(("effort", effort.as_str())),
+                    _ => None,
+                };
+                if let Some((key, value)) = preference {
+                    self.settings.persist_chat_preference(key, value);
+                }
                 if let Some(chat) = self.chats.get_mut(&id) {
                     let task = chat.update(chat_msg).map(move |m| Msg::Chat(id, m));
                     let handoff = chat.take_handoff_requested().then(|| {
@@ -4132,7 +4142,12 @@ impl Shell {
                     .and_then(|ws| ws.git_branch.clone());
                 let id = self.panes.alloc_chat_id();
                 self.panes.focused_model_mut().open_chat(id);
-                let chat = ChatPane::new(cwd, branch).with_static_test_mode(self.static_test_mode);
+                let chat = ChatPane::new(cwd, branch)
+                    .with_defaults(
+                        self.settings.current.chat.permission_mode.clone(),
+                        self.settings.current.chat.effort.clone(),
+                    )
+                    .with_static_test_mode(self.static_test_mode);
                 self.chats.insert(id, chat);
                 Task::none()
             }

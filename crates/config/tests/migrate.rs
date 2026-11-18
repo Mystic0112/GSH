@@ -204,6 +204,8 @@ fn expected_full_config() -> Config {
             transcript_view: TranscriptView::Verbose,
             font: Some("IBM Plex Sans".to_owned()),
             transcript_width: TranscriptWidth::Wide,
+            permission_mode: "acceptEdits".to_owned(),
+            effort: "low".to_owned(),
         },
         code: Code {
             theme_light: Some("github-light".to_owned()),
