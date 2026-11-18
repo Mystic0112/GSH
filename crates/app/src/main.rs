@@ -77,6 +77,9 @@ pub mod rail;
 pub mod right_tabs;
 pub mod settings;
 pub mod ssh_prompts;
+pub mod telemetry_case_view;
+pub mod telemetry_panel;
+pub mod telemetry_state;
 pub mod terminal_canvas;
 pub mod terminal_grid;
 pub mod terminal_input;
@@ -120,6 +123,7 @@ use crate::pane_model::{BrowserId, ChatId, PaneModel, PaneTab, QueryId, TermId};
 use crate::pane_tree::PaneTree;
 use crate::right_tabs::RightTab;
 use crate::ssh_prompts::{HostKeyPrompt, PassphrasePrompt};
+use crate::telemetry_state::{TelemetryEffect, TelemetryMsg, TelemetryState};
 use crate::terminal_input::{classify_key_press, KeyAction};
 use crate::terminal_pane::{TerminalMsg, TerminalPane};
 use crate::topbar::TopbarProps;
@@ -397,6 +401,7 @@ enum Msg {
     ),
     OpenHarness,
     Harness(harness_pane::Msg),
+    Telemetry(TelemetryMsg),
     SelectWorkspace(usize),
     PickWorkspaceFolder,
     WorkspaceFolderPicked(Option<PathBuf>),
@@ -446,6 +451,9 @@ struct PendingSsh {
 /// Intervalo da conferência de mudança externa nos `.dbq` abertos.
 const QUERY_DISK_CHECK_MS: u64 = 1000;
 
+/// Intervalo de atualização da aba Telemetria quando visível (`telemetry_viewmodel.dart`).
+const TELEMETRY_POLL_MS: u64 = 2000;
+
 struct Shell {
     status_runtime: StatusRuntime,
     team: Node,
@@ -461,6 +469,7 @@ struct Shell {
     /// Query com alterações não salvas que o usuário mandou fechar (aguarda a escolha).
     pending_close_query: Option<QueryId>,
     harness: harness_pane::HarnessState,
+    telemetry: TelemetryState,
     settings: settings::Settings,
     panes: PaneTree,
     /// Pane aguardando a resposta do diálogo "Fechar painel?".
@@ -522,6 +531,8 @@ impl Default for Shell {
         file_tree.set_root(active_path.clone());
         let mut git = git_state::GitState::default();
         git.set_repo(active_path);
+        let mut telemetry = TelemetryState::new();
+        telemetry.developer_mode = settings.current.developer_mode;
         let mut shell = Self {
             status_runtime,
             team: Node::default(),
@@ -536,6 +547,7 @@ impl Default for Shell {
             ssh_prompt: None,
             pending_close_query: None,
             harness: harness_pane::HarnessState::default(),
+            telemetry,
             settings,
             panes,
             pending_close_pane: None,
@@ -753,6 +765,43 @@ impl Shell {
             .get("cmd")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
+        if gsh_telemetry::TelemetryCliHandler::handles(cmd) {
+            let handler = std::sync::Arc::clone(&self.telemetry.cli_handler);
+            let cmd_owned = cmd.to_string();
+            let tab_id = request
+                .get("tabId")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let args = request
+                .get("args")
+                .and_then(serde_json::Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let ws_id = self.telemetry.workspace_id.clone();
+            let ws_root = self
+                .telemetry
+                .workspace_root
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let reply = command.reply;
+            return Task::perform(
+                async move {
+                    let resp = handler
+                        .handle(
+                            &cmd_owned,
+                            (!tab_id.is_empty()).then_some(tab_id.as_str()),
+                            &args,
+                            ws_id.as_deref(),
+                            &ws_root,
+                        )
+                        .await;
+                    let _ = reply.send(resp);
+                },
+                |()| Msg::Noop,
+            );
+        }
         let tab_id = request
             .get("tabId")
             .and_then(serde_json::Value::as_str)
@@ -985,6 +1034,10 @@ impl Shell {
             search: self.workspaces.active().is_some(),
             git: self.git.root.is_some(),
             database: self.workspaces.active().is_some(),
+            telemetry: self
+                .workspaces
+                .active()
+                .is_some_and(|ws| ws.path.as_ref().is_some_and(|p| !p.as_os_str().is_empty())),
             gallery: self.workspaces.active().is_some(),
         }
     }
@@ -1168,7 +1221,8 @@ impl Shell {
                 | PaneTab::Query { .. }
                 | PaneTab::Redis { .. }
                 | PaneTab::Mongo { .. }
-                | PaneTab::Harness(_) => None,
+                | PaneTab::Harness(_)
+                | PaneTab::TelemetryCase { .. } => None,
             })
             .collect()
     }
@@ -1274,6 +1328,72 @@ impl Shell {
         self.sync_island_from_status();
     }
 
+    fn sync_telemetry_workspace(&mut self) -> Task<Msg> {
+        let active = self.workspaces.active();
+        let (id, name, path, roots) = match active {
+            Some(ws) if ws.path.as_ref().is_some_and(|p| !p.as_os_str().is_empty()) => {
+                let p = ws.path.clone();
+                let roots = p.iter().cloned().collect();
+                (Some(ws.id.clone()), Some(ws.name.clone()), p, roots)
+            }
+            _ => (None, None, None, Vec::new()),
+        };
+        self.telemetry
+            .set_workspace(id, name, path, roots)
+            .map(Msg::Telemetry)
+    }
+
+    fn boot() -> (Self, Task<Msg>) {
+        let mut shell = Self::default();
+        let boot_task = shell.telemetry.boot_task().map(Msg::Telemetry);
+        let ws_task = shell.sync_telemetry_workspace();
+        (shell, Task::batch([boot_task, ws_task]))
+    }
+
+    fn handle_telemetry(&mut self, msg: TelemetryMsg) -> Task<Msg> {
+        let (task, effect) = self.telemetry.update(msg);
+        let task = task.map(Msg::Telemetry);
+        match effect {
+            Some(TelemetryEffect::OpenCaseTab { fingerprint, title }) => {
+                if let Some((pane, idx)) = self.panes.find_telemetry_case(&fingerprint) {
+                    self.panes.focus(pane);
+                    let _ = self.panes.focused_model_mut().activate(idx);
+                } else {
+                    self.panes
+                        .focused_model_mut()
+                        .open_telemetry_case(fingerprint, title);
+                }
+                task
+            }
+            Some(TelemetryEffect::OpenFile { path, line }) => {
+                let target = self.open_in_editor(path);
+                if let Some(line) = line {
+                    if let Some(editor) = self.editors.get_mut(&target) {
+                        return Task::batch([
+                            task,
+                            editor
+                                .reveal_line(line as usize)
+                                .map(move |message| Msg::Editor(target.clone(), message)),
+                        ]);
+                    }
+                }
+                task
+            }
+            Some(TelemetryEffect::CopyText(cmd)) => {
+                Task::batch([task, iced::clipboard::write(cmd)])
+            }
+            Some(TelemetryEffect::FocusTerminalPane(pane_id)) => {
+                self.reveal_terminal_by_pane_id(&pane_id);
+                task
+            }
+            Some(TelemetryEffect::RetitleCaseTab { fingerprint, title }) => {
+                self.panes.retitle_telemetry_case(&fingerprint, &title);
+                task
+            }
+            None => task,
+        }
+    }
+
     fn active_terminal_mut(&mut self) -> Option<&mut TerminalPane> {
         let Some(PaneTab::Terminal(id)) = self.panes.focused_model().active_tab().cloned() else {
             return None;
@@ -1317,7 +1437,7 @@ impl Shell {
             PaneTab::Settings => {
                 let _ = self.settings.update(settings::Message::Back);
             }
-            PaneTab::Farm | PaneTab::Harness(_) => {}
+            PaneTab::Farm | PaneTab::Harness(_) | PaneTab::TelemetryCase { .. } => {}
         }
     }
 
@@ -1859,10 +1979,19 @@ impl Shell {
                 }
             }
             Msg::Editor(path, msg) => {
+                let saved_check = matches!(
+                    msg,
+                    editor_pane::EditorMsg::Save | editor_pane::EditorMsg::Overwrite
+                );
                 if let Some(editor) = self.editors.get_mut(&path) {
-                    editor
+                    let closure_path = path.clone();
+                    let task = editor
                         .update(msg)
-                        .map(move |message| Msg::Editor(path.clone(), message))
+                        .map(move |message| Msg::Editor(closure_path.clone(), message));
+                    if saved_check && !editor.state.buffer.is_dirty() {
+                        self.telemetry.record_file_edit(&path);
+                    }
+                    task
                 } else {
                     Task::none()
                 }
@@ -1957,6 +2086,9 @@ impl Shell {
                 if tab == RightTab::Database {
                     // o painel recarrega ao montar (`setWorkspace(force: true)`)
                     return self.reload_db();
+                }
+                if tab == RightTab::Telemetry {
+                    return self.telemetry.refresh_task().map(Msg::Telemetry);
                 }
                 if tab == RightTab::Git && !self.git.busy {
                     return self
@@ -2066,6 +2198,12 @@ impl Shell {
                             let root = self.queries.get(&id).map(|q| q.root().to_path_buf());
                             return self.db.ensure_workspace(root).map(Msg::Db);
                         }
+                        PaneTab::TelemetryCase { fingerprint, .. } => {
+                            return self
+                                .telemetry
+                                .load_case_detail_task(fingerprint)
+                                .map(Msg::Telemetry);
+                        }
                         PaneTab::Farm
                         | PaneTab::Settings
                         | PaneTab::Redis { .. }
@@ -2121,6 +2259,10 @@ impl Shell {
             Msg::Settings(message) => {
                 self.settings.claude.workspace = self.active_workspace_dir().map(Path::to_path_buf);
                 let task = self.settings.update(message);
+                let dev_task = self
+                    .telemetry
+                    .set_developer_mode(self.settings.current.developer_mode)
+                    .map(Msg::Telemetry);
                 if self.settings.saved {
                     self.configure_team();
                     for editor in self.editors.values_mut() {
@@ -2148,7 +2290,7 @@ impl Shell {
                 if self.settings.claude.take_quit_request() {
                     return iced::exit();
                 }
-                task.map(Msg::Settings)
+                Task::batch([task.map(Msg::Settings), dev_task])
             }
             Msg::OpenFarm => {
                 self.panes.focused_model_mut().open_farm();
@@ -2187,6 +2329,7 @@ impl Shell {
                 }
                 task.map(Msg::Harness)
             }
+            Msg::Telemetry(message) => self.handle_telemetry(message),
             Msg::Db(message) => {
                 let (task, effect) = self.db.update(message);
                 self.sync_browser_contexts();
@@ -2379,7 +2522,7 @@ impl Shell {
                 if idx != self.workspaces.selected_index() {
                     if let Some(ws) = self.workspaces.select(idx).cloned() {
                         self.activate_workspace_path(ws.path);
-                        return self.reload_db();
+                        return Task::batch([self.reload_db(), self.sync_telemetry_workspace()]);
                     }
                 }
                 Task::none()
@@ -2391,7 +2534,7 @@ impl Shell {
                 let _ = self.workspaces.open_folder(folder.clone());
                 self.files_open = true;
                 self.activate_workspace_path(Some(folder));
-                self.reload_db()
+                Task::batch([self.reload_db(), self.sync_telemetry_workspace()])
             }
             Msg::WorkspaceFolderPicked(None) => Task::none(),
             Msg::ToggleRail => {
@@ -2516,11 +2659,20 @@ impl Shell {
         } else {
             Subscription::none()
         };
+        let telemetry_poll = if (self.files_open && self.right_tab() == RightTab::Telemetry)
+            || self.panes.has_telemetry_case()
+        {
+            iced::time::every(Duration::from_millis(TELEMETRY_POLL_MS))
+                .map(|_| Msg::Telemetry(TelemetryMsg::PollTick))
+        } else {
+            Subscription::none()
+        };
         Subscription::batch(
             [
                 status_sub,
                 query_shortcuts,
                 query_disk,
+                telemetry_poll,
                 harness_spinner,
                 windows,
                 cancel_create,
@@ -2600,6 +2752,9 @@ impl Shell {
                 .unwrap_or_else(pane_chrome::view_empty_body),
             Some(PaneTab::Harness(workspace)) => {
                 harness_pane::view(&self.harness, workspace).map(Msg::Harness)
+            }
+            Some(PaneTab::TelemetryCase { fingerprint, .. }) => {
+                telemetry_case_view::view(&self.telemetry, fingerprint).map(Msg::Telemetry)
             }
             Some(PaneTab::Settings) => {
                 let index = model.active_index().unwrap_or(0);
@@ -2757,6 +2912,16 @@ impl Shell {
                 }
                 RightTab::Git => git_panel::view(&self.git).map(Msg::Git),
                 RightTab::Database => db_panel::view(&self.db).map(Msg::Db),
+                RightTab::Telemetry => {
+                    let active_fp = match self.panes.focused_model().active_tab() {
+                        Some(PaneTab::TelemetryCase { fingerprint, .. }) => {
+                            Some(fingerprint.as_str())
+                        }
+                        _ => None,
+                    };
+                    telemetry_panel::view_with_active(&self.telemetry, active_fp)
+                        .map(Msg::Telemetry)
+                }
                 RightTab::Gallery => {
                     gallery_panel::view(self.file_tree.root().is_some()).map(Msg::Gallery)
                 }
@@ -3022,7 +3187,7 @@ fn window_button<'a>(glyph: &'static str, msg: Msg) -> Element<'a, Msg> {
 }
 
 fn main() -> iced::Result {
-    let mut app = iced::application(Shell::default, Shell::update, Shell::view)
+    let mut app = iced::application(Shell::boot, Shell::update, Shell::view)
         .window(iced::window::Settings {
             exit_on_close_request: false,
             decorations: false,
@@ -3042,6 +3207,8 @@ fn main() -> iced::Result {
 
 #[cfg(test)]
 mod db_interaction_tests;
+#[cfg(test)]
+mod telemetry_interaction_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3052,7 +3219,7 @@ mod tests {
 
     use crate::island::IslandAgentState;
 
-    fn test_shell() -> Shell {
+    pub(super) fn test_shell() -> Shell {
         let snap = TermSnapshot {
             cols: 80,
             rows: 24,
@@ -3090,6 +3257,7 @@ mod tests {
             ssh_prompt: None,
             pending_close_query: None,
             harness: harness_pane::HarnessState::default(),
+            telemetry: TelemetryState::in_memory(),
             settings: settings::Settings::default(),
             panes: PaneTree::default(),
             pending_close_pane: None,

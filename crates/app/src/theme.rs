@@ -1487,3 +1487,105 @@ pub const HARNESS_GHOST_HOVER_ALPHA: f32 = 0.8;
 // `AlertDialog` do nome do item novo (`_RealmNameDialog`).
 pub const HARNESS_NAME_DIALOG_WIDTH: f32 = 360.0;
 pub const HARNESS_NAME_ERROR_GAP: f32 = 8.0;
+
+/// Devolve `color` com transparência `alpha` (espelha `Color.withValues(alpha:)` do Flutter).
+pub const fn with_alpha(color: Color, alpha: f32) -> Color {
+    Color { a: alpha, ..color }
+}
+
+// Medidas da aba e da visão de caso da Telemetria (`telemetry_panel.dart`, `telemetry_case_view.dart`)
+pub const TELEMETRY_HEADER_PADDING: Padding = Padding {
+    top: 10.0,
+    right: 12.0,
+    bottom: 8.0,
+    left: 12.0,
+};
+pub const TELEMETRY_HEADER_TITLE_SIZE: f32 = 13.0;
+pub const TELEMETRY_LIVE_DOT: f32 = 6.0;
+pub const TELEMETRY_LIVE_GAP: f32 = 5.0;
+pub const TELEMETRY_LIVE_TEXT: f32 = 11.0;
+pub const TELEMETRY_DB_SIZE_TEXT: f32 = 11.0;
+pub const TELEMETRY_SEARCH_RADIUS: f32 = 6.0;
+pub const TELEMETRY_SEARCH_TEXT: f32 = 12.5;
+pub const TELEMETRY_CHIPS_GAP: f32 = 6.0;
+pub const TELEMETRY_CHIP_PADDING: [f32; 2] = [3.0, 9.0];
+pub const TELEMETRY_CHIP_RADIUS: f32 = 6.0;
+pub const TELEMETRY_CHIP_TEXT: f32 = 11.5;
+pub const TELEMETRY_CHIP_COUNT_TEXT: f32 = 11.0;
+pub const TELEMETRY_EMPTY_PADDING: f32 = 20.0;
+pub const TELEMETRY_EMPTY_TEXT: f32 = 12.0;
+pub const TELEMETRY_GROUP_INDENT: f32 = 10.0;
+pub const TELEMETRY_GROUP_HEADER_PADDING_V: [f32; 2] = [6.0, 5.0];
+pub const TELEMETRY_GROUP_CHEVRON_ICON: f32 = 14.0;
+pub const TELEMETRY_GROUP_TITLE_SIZE: f32 = 11.5;
+pub const TELEMETRY_RUN_INDENT_FLAT: f32 = 10.0;
+pub const TELEMETRY_RUN_INDENT_NESTED: f32 = 22.0;
+pub const TELEMETRY_RUN_HEADER_PADDING_V: f32 = 4.0;
+pub const TELEMETRY_RUN_CHEVRON_ICON: f32 = 13.0;
+pub const TELEMETRY_RUN_TITLE_SIZE: f32 = 12.0;
+pub const TELEMETRY_SOURCE_PILL_PADDING: [f32; 2] = [1.0, 5.0];
+pub const TELEMETRY_SOURCE_PILL_RADIUS: f32 = 4.0;
+pub const TELEMETRY_SOURCE_PILL_TEXT: f32 = 9.5;
+pub const TELEMETRY_CASE_INDENT_FLAT: f32 = 24.0;
+pub const TELEMETRY_CASE_INDENT_NESTED: f32 = 36.0;
+pub const TELEMETRY_CASE_ROW_PADDING_V: f32 = 6.0;
+pub const TELEMETRY_CASE_ROW_PADDING_RIGHT: f32 = 8.0;
+pub const TELEMETRY_CASE_DOT_SIZE: f32 = 8.0;
+pub const TELEMETRY_CASE_ROW_GAP: f32 = 8.0;
+pub const TELEMETRY_CASE_MSG_SIZE: f32 = 12.5;
+pub const TELEMETRY_CASE_META_SIZE: f32 = 11.0;
+pub const TELEMETRY_TAG_PILL_PADDING: [f32; 2] = [1.0, 5.0];
+pub const TELEMETRY_TAG_PILL_RADIUS: f32 = 4.0;
+pub const TELEMETRY_TAG_PILL_TEXT: f32 = 9.5;
+pub const TELEMETRY_QUICK_ACTION_PADDING: f32 = 4.0;
+pub const TELEMETRY_QUICK_ACTION_ICON: f32 = 12.0;
+pub const TELEMETRY_QUICK_ACTION_RADIUS: f32 = 5.0;
+
+// Medidas da aba de caso (`telemetry_case_view.dart`)
+pub const TELEMETRY_VIEW_PADDING: Padding = Padding {
+    top: 22.0,
+    right: 26.0,
+    bottom: 40.0,
+    left: 26.0,
+};
+pub const TELEMETRY_VIEW_MAX_WIDTH: f32 = 980.0;
+pub const TELEMETRY_VIEW_SECTION_GAP: f32 = 22.0;
+pub const TELEMETRY_VIEW_HEADER_GAP: f32 = 8.0;
+pub const TELEMETRY_BREADCRUMB_SIZE: f32 = 12.0;
+pub const TELEMETRY_KIND_PILL_PADDING: [f32; 2] = [2.0, 8.0];
+pub const TELEMETRY_KIND_PILL_RADIUS: f32 = 5.0;
+pub const TELEMETRY_KIND_PILL_TEXT: f32 = 11.0;
+pub const TELEMETRY_CASE_HEADLINE_SIZE: f32 = 17.0;
+pub const TELEMETRY_CASE_HEADLINE_LINE_HEIGHT: f32 = 1.35;
+pub const TELEMETRY_CODE_PILL_PADDING: [f32; 2] = [1.0, 7.0];
+pub const TELEMETRY_CODE_PILL_RADIUS: f32 = 5.0;
+pub const TELEMETRY_CODE_PILL_TEXT: f32 = 12.0;
+pub const TELEMETRY_STATUS_DOT: f32 = 7.0;
+pub const TELEMETRY_STATUS_TEXT: f32 = 12.0;
+pub const TELEMETRY_FINGERPRINT_HINT_SIZE: f32 = 12.0;
+pub const TELEMETRY_BLAME_PADDING: [f32; 2] = [3.0, 9.0];
+pub const TELEMETRY_BLAME_RADIUS: f32 = 6.0;
+pub const TELEMETRY_BLAME_ICON: f32 = 11.0;
+pub const TELEMETRY_BLAME_TEXT: f32 = 12.0;
+pub const TELEMETRY_ACTION_BTN_PADDING: [f32; 2] = [6.0, 11.0];
+pub const TELEMETRY_ACTION_BTN_RADIUS: f32 = 7.0;
+pub const TELEMETRY_ACTION_BTN_ICON: f32 = 13.0;
+pub const TELEMETRY_ACTION_BTN_TEXT: f32 = 12.5;
+pub const TELEMETRY_ACTION_BTN_MONO_TEXT: f32 = 11.5;
+pub const TELEMETRY_STATS_CELL_PADDING: [f32; 2] = [10.0, 14.0];
+pub const TELEMETRY_STATS_LABEL_SIZE: f32 = 10.5;
+pub const TELEMETRY_STATS_BIG_SIZE: f32 = 15.0;
+pub const TELEMETRY_STATS_SUB_SIZE: f32 = 12.0;
+pub const TELEMETRY_CARD_RADIUS: f32 = 9.0;
+pub const TELEMETRY_CARD_PADDING_V: f32 = 10.0;
+pub const TELEMETRY_CARD_PADDING_H: f32 = 14.0;
+pub const TELEMETRY_SECTION_TITLE_SIZE: f32 = 11.0;
+pub const TELEMETRY_FRAME_LINE_SIZE: f32 = 12.0;
+pub const TELEMETRY_FRAME_LINE_HEIGHT: f32 = 1.65;
+pub const TELEMETRY_LOG_ROW_SIZE: f32 = 12.0;
+pub const TELEMETRY_RUN_BAR_LABEL_WIDTH: f32 = 150.0;
+pub const TELEMETRY_RUN_BAR_HEIGHT: f32 = 6.0;
+pub const TELEMETRY_RUN_BAR_RADIUS: f32 = 3.0;
+pub const TELEMETRY_CONTEXT_LINE_NUM_WIDTH: f32 = 40.0;
+pub const TELEMETRY_CONTEXT_LINE_SIZE: f32 = 12.0;
+pub const TELEMETRY_CONTEXT_LINE_HEIGHT: f32 = 1.6;

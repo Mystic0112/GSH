@@ -239,6 +239,7 @@ pub enum Command {
         target: Target,
         json: bool,
     },
+    Telemetry(Vec<String>),
 }
 
 pub fn parse(argv: &[String]) -> Result<Command, CliError> {
@@ -269,6 +270,7 @@ pub fn parse(argv: &[String]) -> Result<Command, CliError> {
                 json: f.json,
             })
         }
+        "telemetry" => Ok(Command::Telemetry(args.to_vec())),
         other => Err(CliError::usage(format!("gsh: unknown verb: {other}"))),
     }
 }

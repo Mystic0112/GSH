@@ -9,6 +9,19 @@ pub fn hhmm(epoch_ms: u64) -> String {
     hhmm_with_offset(secs, local_offset_secs(secs))
 }
 
+/// `hh:mm:ss` na hora local de `epoch_ms`.
+pub fn hhmmss(epoch_ms: u64) -> String {
+    let secs = i64::try_from(epoch_ms / 1000).unwrap_or(i64::MAX);
+    let offset = local_offset_secs(secs);
+    let day_secs = secs.saturating_add(offset).rem_euclid(86_400);
+    format!(
+        "{:02}:{:02}:{:02}",
+        day_secs / 3600,
+        day_secs % 3600 / 60,
+        day_secs % 60
+    )
+}
+
 /// `hh:mm` de `epoch_secs` deslocado de `offset_secs` em relação a UTC.
 fn hhmm_with_offset(epoch_secs: i64, offset_secs: i64) -> String {
     let day_secs = epoch_secs.saturating_add(offset_secs).rem_euclid(86_400);
