@@ -1,0 +1,32 @@
+[package]
+name = "gsh-telemetry"
+description = "GSH telemetry: line parser, SQLite store, OTLP receiver, HTTP proxy, Dart VM Service ingest, and CLI handler (no UI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+dirs = "6"
+fancy-regex = "0.16"
+flate2 = "1"
+getrandom = { version = "0.3", features = ["std"] }
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json.workspace = true
+sha1 = "0.10"
+thiserror.workspace = true
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "io-util", "sync"] }
+url = "2"
+
+[dev-dependencies]
+tempfile = "3.27.0"

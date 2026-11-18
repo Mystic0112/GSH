@@ -16,6 +16,7 @@ USAGE:
                                                open a new terminal tab (prints its id)
   gsh close-tab [<label|tab-id>]           close a tab (default: the current
                                                one) — prints the closed tab id
+  gsh telemetry <cmd…> | errors | show …   run observed / query the error store (see `gsh telemetry --help`)
   gsh hook [--harness <name>]              lifecycle hook helper (reads the
                                                harness event JSON on stdin)
   gsh --help | --version

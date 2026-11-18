@@ -18,6 +18,7 @@ pub enum RightTab {
     Search,
     Git,
     Database,
+    Telemetry,
     Gallery,
 }
 
@@ -30,17 +31,20 @@ pub struct Available {
     pub git: bool,
     /// Há um workspace selecionado.
     pub database: bool,
+    /// Há um workspace local selecionado (`!isRemoteTerminal && path.isNotEmpty`).
+    pub telemetry: bool,
     /// Há um workspace selecionado.
     pub gallery: bool,
 }
 
 impl RightTab {
-    /// Ordem dos ícones: arquivos, busca, git, banco, (telemetria), galeria.
-    pub const ORDER: [Self; 5] = [
+    /// Ordem dos ícones: arquivos, busca, git, banco, telemetria, galeria (`file_tree_panel.dart:1199-1262`).
+    pub const ORDER: [Self; 6] = [
         Self::Files,
         Self::Search,
         Self::Git,
         Self::Database,
+        Self::Telemetry,
         Self::Gallery,
     ];
 
@@ -50,6 +54,7 @@ impl RightTab {
             Self::Search => available.search,
             Self::Git => available.git,
             Self::Database => available.database,
+            Self::Telemetry => available.telemetry,
             Self::Gallery => available.gallery,
         }
     }
@@ -69,6 +74,7 @@ impl RightTab {
             Self::Search => labels::ICON_SEARCH_TAB,
             Self::Git => labels::ICON_ACCOUNT_TREE,
             Self::Database => labels::ICON_STORAGE,
+            Self::Telemetry => labels::ICON_MONITOR_HEART,
             Self::Gallery => labels::ICON_GALLERY,
         }
     }
@@ -79,6 +85,7 @@ impl RightTab {
             Self::Search => labels::SEARCH_TOOLTIP,
             Self::Git => labels::SOURCE_CONTROL_TOOLTIP,
             Self::Database => labels::DB_TOOLTIP,
+            Self::Telemetry => labels::TELEMETRY_TOOLTIP,
             Self::Gallery => labels::GALLERY_TOOLTIP,
         }
     }
@@ -152,12 +159,14 @@ mod tests {
         search: false,
         git: false,
         database: false,
+        telemetry: false,
         gallery: false,
     };
     const ALL: Available = Available {
         search: true,
         git: true,
         database: true,
+        telemetry: true,
         gallery: true,
     };
 
@@ -171,10 +180,13 @@ mod tests {
         assert_eq!(RightTab::Gallery.effective(ALL), RightTab::Gallery);
         assert_eq!(RightTab::Database.effective(NOTHING), RightTab::Files);
         assert_eq!(RightTab::Database.effective(ALL), RightTab::Database);
+        assert_eq!(RightTab::Telemetry.effective(NOTHING), RightTab::Files);
+        assert_eq!(RightTab::Telemetry.effective(ALL), RightTab::Telemetry);
         let only_gallery = Available {
             search: false,
             git: false,
             database: false,
+            telemetry: false,
             gallery: true,
         };
         assert_eq!(RightTab::Git.effective(only_gallery), RightTab::Files);
@@ -189,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn order_is_files_search_git_database_gallery_like_flutter() {
+    fn order_is_files_search_git_database_telemetry_gallery_like_flutter() {
         assert_eq!(
             RightTab::ORDER,
             [
@@ -197,6 +209,7 @@ mod tests {
                 RightTab::Search,
                 RightTab::Git,
                 RightTab::Database,
+                RightTab::Telemetry,
                 RightTab::Gallery
             ]
         );

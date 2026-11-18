@@ -122,6 +122,32 @@ impl PaneTree {
         }
     }
 
+    /// Pane e índice da aba de caso de telemetria com `fingerprint`.
+    pub fn find_telemetry_case(&self, fingerprint: &str) -> Option<(Pane, usize)> {
+        self.grid.iter().find_map(|(&pane, model)| {
+            model.tabs().iter().position(|tab| {
+                matches!(tab, PaneTab::TelemetryCase { fingerprint: fp, .. } if fp == fingerprint)
+            }).map(|index| (pane, index))
+        })
+    }
+
+    /// Indica se algum pane tem uma aba de caso de telemetria aberta.
+    pub fn has_telemetry_case(&self) -> bool {
+        self.grid.iter().any(|(_, model)| {
+            model
+                .tabs()
+                .iter()
+                .any(|tab| matches!(tab, PaneTab::TelemetryCase { .. }))
+        })
+    }
+
+    /// Atualiza o título da aba de caso de telemetria em todos os panes.
+    pub fn retitle_telemetry_case(&mut self, fingerprint: &str, title: &str) {
+        for (_, model) in self.grid.iter_mut() {
+            model.retitle_telemetry_case(fingerprint, title);
+        }
+    }
+
     /// Foca `pane` (`focus()` do Flutter); ignora ids que não existem mais.
     pub fn focus(&mut self, pane: Pane) {
         if self.grid.get(pane).is_some() {

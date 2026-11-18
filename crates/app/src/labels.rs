@@ -1185,6 +1185,9 @@ pub const ICON_KEY: &str = "\u{e73c}";
 pub const ICON_PAUSE: &str = "\u{e034}";
 pub const ICON_HELP_OUTLINE: &str = "\u{e8fd}";
 pub const ICON_DELETE_OUTLINE: &str = "\u{e92e}";
+pub const ICON_MONITOR_HEART: &str = "\u{eaa2}";
+pub const ICON_VISIBILITY_OFF: &str = "\u{e8f5}";
+pub const ICON_OPEN_IN_NEW: &str = "\u{e89e}";
 
 // Fontes (`generalClaude` + `appearance.fontPicker*`)
 pub const SETTINGS_GC_UI_FONT: &str = "Fonte da interface";
@@ -1432,3 +1435,90 @@ pub fn claude_info_error(error: &crate::settings::claude::cli::InfoError) -> Str
 pub fn settings_save_failed(detail: &str) -> String {
     format!("Não consegui salvar: {detail}")
 }
+
+// Telemetria (`pt_BR.i18n.json` -> `gsh.telemetry`)
+pub const TELEMETRY_TOOLTIP: &str = "Telemetria";
+pub const TELEMETRY_TITLE: &str = "Telemetria";
+pub fn telemetry_live_runs(n: usize) -> String {
+    format!("{n} ativos")
+}
+pub const TELEMETRY_NO_WORKSPACE: &str = "Abra um workspace para ver a telemetria dele.";
+pub const TELEMETRY_EMPTY: &str = "Nada aqui ainda.";
+pub const TELEMETRY_EMPTY_FILTERED: &str = "Nada aqui ainda.";
+pub const TELEMETRY_SEARCH_HINT: &str = "Filtrar casos";
+pub const TELEMETRY_CHIP_OPEN: &str = "Abertos";
+pub const TELEMETRY_CHIP_NEW: &str = "Novos";
+pub const TELEMETRY_CHIP_RESOLVED: &str = "Resolvidos";
+pub const TELEMETRY_CHIP_IGNORED: &str = "Ignorados";
+pub const TELEMETRY_CHIP_WARNINGS: &str = "Avisos";
+pub const TELEMETRY_CHIP_WARNINGS_WITH_ICON: &str = "⚠ Avisos";
+pub const TELEMETRY_CHIP_APP: &str = "GSH Desktop";
+pub const TELEMETRY_TAG_NEW: &str = "novo";
+pub const TELEMETRY_TAG_REGRESSION: &str = "regressão";
+pub const TELEMETRY_TAG_RESOLVED: &str = "resolvido";
+pub const TELEMETRY_TAG_IGNORED: &str = "ignorado";
+pub const TELEMETRY_SRC_TASK: &str = "task";
+pub const TELEMETRY_SRC_WRAPPER: &str = "gsh telemetry";
+pub const TELEMETRY_SRC_APP: &str = "App";
+pub fn telemetry_run(id: &str) -> String {
+    format!("run {id}")
+}
+pub const TELEMETRY_RESOLVE: &str = "Marcar resolvido";
+pub const TELEMETRY_IGNORE: &str = "Ignorar (some para os agentes também)";
+pub const TELEMETRY_REOPEN: &str = "Reabrir";
+pub const TELEMETRY_CLEAR: &str = "Limpar ocorrências";
+pub const TELEMETRY_CLEAR_RUN: &str = "Limpar este run";
+pub const TELEMETRY_CLEAR_PROJECT: &str = "Limpar projeto";
+pub fn telemetry_open_file(location: &str) -> String {
+    format!("Abrir {location}")
+}
+pub const TELEMETRY_SHOW_IN_TERMINAL: &str = "Ver no terminal";
+pub const TELEMETRY_COPY_COMMAND: &str = "Copiar comando da CLI";
+pub const TELEMETRY_COPIED: &str = "Copiado";
+pub const TELEMETRY_STATUS_OPEN: &str = "Aberto";
+pub const TELEMETRY_STATUS_RESOLVED: &str = "Resolvido";
+pub const TELEMETRY_STATUS_IGNORED: &str = "Ignorado";
+pub const TELEMETRY_OCCURRENCES: &str = "Ocorrências";
+pub fn telemetry_in_runs(n: usize) -> String {
+    format!("em {n} runs")
+}
+pub const TELEMETRY_FIRST: &str = "Primeira";
+pub const TELEMETRY_LAST: &str = "Última";
+pub const TELEMETRY_ORIGIN: &str = "Origem";
+pub const TELEMETRY_SECTION_STACK: &str = "Stack";
+pub const TELEMETRY_STACK_HINT: &str = "frames do projeto em destaque · clique abre o arquivo";
+pub const TELEMETRY_SECTION_CORRELATED: &str = "Log correlacionado";
+pub const TELEMETRY_CORRELATED_HINT: &str = "o JSON mais próximo antes do erro, no mesmo run";
+pub const TELEMETRY_NONE: &str = "nenhum";
+pub const TELEMETRY_SECTION_RUNS: &str = "Ocorrências por run";
+pub const TELEMETRY_RUNS_HINT: &str =
+    "mesma chave (cwd, comando): é assim que novo e regressão são calculados";
+pub const TELEMETRY_SECTION_CONTEXT: &str = "Contexto cru";
+pub const TELEMETRY_CONTEXT_HINT: &str = "linhas do terminal ao redor da última ocorrência";
+pub const TELEMETRY_CURRENT: &str = "atual";
+pub fn telemetry_fingerprint_hint(location: &str) -> String {
+    format!("fingerprint = tipo + mensagem normalizada + {location}")
+}
+pub const TELEMETRY_BLAME_UNCOMMITTED: &str = "alterado no working tree";
+pub fn telemetry_blame_commit(ago: &str, sha: &str) -> String {
+    format!("alterado {ago} ({sha})")
+}
+pub const TELEMETRY_JUST_NOW: &str = "agora";
+pub fn telemetry_minutes_ago(n: i64) -> String {
+    format!("há {n} min")
+}
+pub fn telemetry_hours_ago(n: i64) -> String {
+    format!("há {n} h")
+}
+pub fn telemetry_days_ago(n: i64) -> String {
+    format!("há {n} d")
+}
+pub fn telemetry_case_tab_title(err_type: &str, file: &str) -> String {
+    format!("{err_type} · {file}")
+}
+pub const TELEMETRY_PTY: &str = "PTY";
+pub const TELEMETRY_STDOUT: &str = "stdout";
+pub const TELEMETRY_DASH: &str = "—";
+pub const TELEMETRY_EMPTY_SET: &str = "∅";
+pub const TELEMETRY_CRUMB_SEP: &str = " › ";
+pub const TELEMETRY_CRUMB_DOT: &str = "  ·  ";

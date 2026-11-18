@@ -47,6 +47,8 @@ pub enum PaneTab {
     },
     /// Harness do workspace de `PathBuf`: o que o Claude Code carrega ali. Uma por workspace.
     Harness(PathBuf),
+    /// Aba de detalhe de um caso de Telemetria identificada pelo fingerprint.
+    TelemetryCase { fingerprint: String, title: String },
 }
 
 impl PaneTab {
@@ -79,6 +81,7 @@ impl PaneTab {
                 conn, collection, ..
             } => format!("{collection} ({conn})"),
             Self::Harness(_) => labels::HARNESS_TAB_TITLE.to_string(),
+            Self::TelemetryCase { title, .. } => title.clone(),
         }
     }
 
@@ -93,6 +96,7 @@ impl PaneTab {
             Self::Redis { .. } => labels::ICON_GRID_ON,
             Self::Mongo { .. } => labels::ICON_DATA_OBJECT,
             Self::Harness(_) => labels::ICON_TUNE,
+            Self::TelemetryCase { .. } => labels::ICON_MONITOR_HEART,
             Self::File(path) => {
                 let name = file_display_name(path);
                 labels::file_icon_for_name(&name)
@@ -241,6 +245,39 @@ impl PaneModel {
         } else {
             self.tabs.push(PaneTab::Harness(workspace.to_path_buf()));
             self.active = Some(self.tabs.len().saturating_sub(1));
+        }
+    }
+
+    /// Abre ou ativa a aba de detalhe de um caso de Telemetria (`fingerprint`).
+    pub fn open_telemetry_case(&mut self, fingerprint: String, title: String) -> usize {
+        if let Some(index) = self.tabs.iter().position(
+            |tab| matches!(tab, PaneTab::TelemetryCase { fingerprint: fp, .. } if fp == &fingerprint),
+        ) {
+            if let Some(PaneTab::TelemetryCase { title: existing, .. }) = self.tabs.get_mut(index) {
+                *existing = title;
+            }
+            self.active = Some(index);
+            return index;
+        }
+        self.tabs
+            .push(PaneTab::TelemetryCase { fingerprint, title });
+        let idx = self.tabs.len().saturating_sub(1);
+        self.active = Some(idx);
+        idx
+    }
+
+    /// Atualiza o título da aba de caso para `fingerprint`, caso aberta neste pane.
+    pub fn retitle_telemetry_case(&mut self, fingerprint: &str, new_title: &str) {
+        for tab in &mut self.tabs {
+            if let PaneTab::TelemetryCase {
+                fingerprint: open,
+                title,
+            } = tab
+            {
+                if open == fingerprint && title != new_title {
+                    new_title.clone_into(title);
+                }
+            }
         }
     }
 

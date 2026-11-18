@@ -43,6 +43,7 @@ pub fn run(cmd: Command) -> Result<Option<String>, CliError> {
             json,
         } => close_tab(label, &target, json).map(Some),
         Command::ListTabs { target, json } => list_tabs(&target, json),
+        Command::Telemetry(_) => Ok(None),
     }
 }
 

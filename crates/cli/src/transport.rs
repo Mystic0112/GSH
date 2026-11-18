@@ -138,7 +138,7 @@ fn connect() -> Result<Conn, TransportError> {
 
 /// `true` quando há algum caminho possível até o app (env de socket, porta, ou
 /// um socket bem conhecido no disco).
-fn transport_configured() -> bool {
+pub(crate) fn transport_configured() -> bool {
     if env_non_empty(ENV_STATUS_SOCK).is_some() || env_port().is_some() {
         return true;
     }

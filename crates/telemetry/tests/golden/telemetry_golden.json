@@ -1,0 +1,899 @@
+{
+  "fingerprints": [
+    {
+      "type": "RangeError",
+      "message": "Index out of range: index 3, length 2",
+      "loc": "lib/cart/cart_service.dart:87",
+      "normalized": "index out of range: index *, length *",
+      "fingerprint": "e71302860072f6e1083350964d14f7d0d5c9d091"
+    },
+    {
+      "type": "RangeError",
+      "message": "order 91c0 failed for /Users/j/x/y.dart \"abc\" at 12:30 uuid 550e8400-e29b-41d4-a716-446655440000 ulid 01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "loc": "lib/a.dart:1",
+      "normalized": "order * failed for * * at *:* uuid * ulid *",
+      "fingerprint": "6f20dc99c7e436b70a68d6c74149bcad911d2c67"
+    },
+    {
+      "type": "RangeError",
+      "message": "order 7f2e failed for /tmp/z/w.dart \"xyz\" at 09:01 uuid 11111111-2222-3333-4444-555555555555 ulid 01BX5ZZKBKACTAV9WEVGEMMVRY",
+      "loc": "lib/a.dart:1",
+      "normalized": "order * failed for * * at *:* uuid * ulid *",
+      "fingerprint": "6f20dc99c7e436b70a68d6c74149bcad911d2c67"
+    },
+    {
+      "type": "Error",
+      "message": "connect ECONNREFUSED 127.0.0.1:5432",
+      "loc": null,
+      "normalized": "connect econnrefused *.*.*.*:*",
+      "fingerprint": "0a5807269e2790d4004f42afb51e0d29db54ed7a"
+    },
+    {
+      "type": "Panic",
+      "message": "index out of bounds: the len is 2 but the index is 3",
+      "loc": "src/main.rs:12",
+      "normalized": "index out of bounds: the len is * but the index is *",
+      "fingerprint": "10c8fdbae4c3fe1f9e1d7d03b97cb1315bf8cc83"
+    }
+  ],
+  "redaction": {
+    "input": {
+      "Authorization": "Bearer abcdefghijklmno",
+      "X-Api-Key": "secret-123",
+      "nested": {
+        "password": "x",
+        "ok": "y",
+        "refresh_token": "rt-999"
+      },
+      "text": "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijklmnop fim",
+      "url": "https://h/?api_key=SECRET123&x=1",
+      "aws": "key AKIAIOSFODNN7EXAMPLE and sk-1234567890abcdef",
+      "basic": "Authorization: Basic dXNlcjpwYXNzd29yZA== ok"
+    },
+    "output": {
+      "Authorization": "[redacted]",
+      "X-Api-Key": "[redacted]",
+      "nested": {
+        "password": "[redacted]",
+        "ok": "y",
+        "refresh_token": "[redacted]"
+      },
+      "text": "token [redacted] fim",
+      "url": "https://h/?api_key=[redacted]&x=1",
+      "aws": "key [redacted] and [redacted]",
+      "basic": "Authorization: Basic [redacted] ok"
+    }
+  },
+  "parser": {
+    "ansi_and_alt": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "error",
+        "body": "ERROR boom",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "info",
+        "body": "de volta",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 4,
+        "repeat": 1
+      }
+    ],
+    "stacked_prefixes": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "warn",
+        "body": "slow",
+        "attrs": {
+          "service": "api-1"
+        },
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "debug",
+        "body": "cart add",
+        "attrs": {
+          "itemId": "sku-88"
+        },
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 1,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "info",
+        "body": "android",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 2,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "info",
+        "body": "listening on :3000",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 3,
+        "repeat": 1
+      }
+    ],
+    "pino_json": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758632475810,
+        "stream": "out",
+        "severity": "error",
+        "body": "db connect failed",
+        "attrs": {
+          "service": "api"
+        },
+        "error": {
+          "type": "Error",
+          "message": "connect ECONNREFUSED 127.0.0.1:5432",
+          "stack": "Error: connect ECONNREFUSED 127.0.0.1:5432\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)\n    at pool.connect (/Users/j/shop/backend/src/db.ts:12:9)",
+          "frames": [
+            {
+              "raw": "    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)",
+              "file": "node:net",
+              "line": 1555,
+              "column": 16,
+              "function": "TCPConnectWrap.afterConnect [as oncomplete]",
+              "inProject": false
+            },
+            {
+              "raw": "    at pool.connect (/Users/j/shop/backend/src/db.ts:12:9)",
+              "file": "src/db.ts",
+              "line": 12,
+              "column": 9,
+              "function": "pool.connect",
+              "inProject": true
+            }
+          ]
+        },
+        "fingerprint": "0c7174308ed4c85f7a3a125cc6c91d6489a65879",
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      }
+    ],
+    "flutter_exception_and_another": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "error",
+        "body": "Index out of range: index 3, length 2",
+        "attrs": {},
+        "error": {
+          "type": "RangeError",
+          "message": "Index out of range: index 3, length 2",
+          "stack": "#0      List.[] (dart:core-patch/growable_array.dart:264:36)\n#1      CartService.add (package:app/cart/cart_service.dart:87:22)\n#2      CartBadge._onTap (package:app/cart/cart_badge.dart:41:9)\n#3      _InkResponseState.handleTap (package:flutter/src/material/ink_well.dart:1176:21)",
+          "frames": [
+            {
+              "raw": "#0      List.[] (dart:core-patch/growable_array.dart:264:36)",
+              "file": "dart:core-patch/growable_array.dart",
+              "line": 264,
+              "column": 36,
+              "function": "List.[]",
+              "inProject": false
+            },
+            {
+              "raw": "#1      CartService.add (package:app/cart/cart_service.dart:87:22)",
+              "file": "lib/cart/cart_service.dart",
+              "line": 87,
+              "column": 22,
+              "function": "CartService.add",
+              "inProject": true
+            },
+            {
+              "raw": "#2      CartBadge._onTap (package:app/cart/cart_badge.dart:41:9)",
+              "file": "lib/cart/cart_badge.dart",
+              "line": 41,
+              "column": 9,
+              "function": "CartBadge._onTap",
+              "inProject": true
+            },
+            {
+              "raw": "#3      _InkResponseState.handleTap (package:flutter/src/material/ink_well.dart:1176:21)",
+              "file": "package:flutter/src/material/ink_well.dart",
+              "line": 1176,
+              "column": 21,
+              "function": "_InkResponseState.handleTap",
+              "inProject": false
+            }
+          ]
+        },
+        "fingerprint": "e71302860072f6e1083350964d14f7d0d5c9d091",
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "error",
+        "body": "Index out of range: index 3, length 2",
+        "attrs": {},
+        "error": {
+          "type": "RangeError",
+          "message": "Index out of range: index 3, length 2",
+          "frames": [
+            {
+              "raw": "#0      List.[] (dart:core-patch/growable_array.dart:264:36)",
+              "file": "dart:core-patch/growable_array.dart",
+              "line": 264,
+              "column": 36,
+              "function": "List.[]",
+              "inProject": false
+            },
+            {
+              "raw": "#1      CartService.add (package:app/cart/cart_service.dart:87:22)",
+              "file": "lib/cart/cart_service.dart",
+              "line": 87,
+              "column": 22,
+              "function": "CartService.add",
+              "inProject": true
+            },
+            {
+              "raw": "#2      CartBadge._onTap (package:app/cart/cart_badge.dart:41:9)",
+              "file": "lib/cart/cart_badge.dart",
+              "line": 41,
+              "column": 9,
+              "function": "CartBadge._onTap",
+              "inProject": true
+            },
+            {
+              "raw": "#3      _InkResponseState.handleTap (package:flutter/src/material/ink_well.dart:1176:21)",
+              "file": "package:flutter/src/material/ink_well.dart",
+              "line": 1176,
+              "column": 21,
+              "function": "_InkResponseState.handleTap",
+              "inProject": false
+            }
+          ]
+        },
+        "fingerprint": "e71302860072f6e1083350964d14f7d0d5c9d091",
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 10,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "info",
+        "body": "depois",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 11,
+        "repeat": 1
+      }
+    ],
+    "dart_unhandled": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "error",
+        "body": "Null check operator used on a null value",
+        "attrs": {},
+        "error": {
+          "type": "Error",
+          "message": "Null check operator used on a null value",
+          "stack": "#0      _CheckoutPageState.build (package:app/checkout/checkout_page.dart:120:41)\n#1      StatefulElement.build (package:flutter/src/widgets/framework.dart:5592:27)\n<asynchronous suspension>",
+          "frames": [
+            {
+              "raw": "#0      _CheckoutPageState.build (package:app/checkout/checkout_page.dart:120:41)",
+              "file": "lib/checkout/checkout_page.dart",
+              "line": 120,
+              "column": 41,
+              "function": "_CheckoutPageState.build",
+              "inProject": true
+            },
+            {
+              "raw": "#1      StatefulElement.build (package:flutter/src/widgets/framework.dart:5592:27)",
+              "file": "package:flutter/src/widgets/framework.dart",
+              "line": 5592,
+              "column": 27,
+              "function": "StatefulElement.build",
+              "inProject": false
+            }
+          ]
+        },
+        "fingerprint": "fff7be87fb82c29fad1b03b7382250a8304a68b3",
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "info",
+        "body": "next line",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 5,
+        "repeat": 1
+      }
+    ],
+    "node_error_block": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "error",
+        "body": "connect ECONNREFUSED 127.0.0.1:5432",
+        "attrs": {},
+        "error": {
+          "type": "Error",
+          "message": "connect ECONNREFUSED 127.0.0.1:5432",
+          "stack": "    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)\n    at pool.connect (/app/src/db.ts:12:9) {",
+          "frames": [
+            {
+              "raw": "    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)",
+              "file": "node:net",
+              "line": 1555,
+              "column": 16,
+              "function": "TCPConnectWrap.afterConnect [as oncomplete]",
+              "inProject": false
+            },
+            {
+              "raw": "    at pool.connect (/app/src/db.ts:12:9) {",
+              "file": "src/db.ts",
+              "line": 12,
+              "column": 9,
+              "function": "pool.connect",
+              "inProject": true
+            }
+          ]
+        },
+        "fingerprint": "0c7174308ed4c85f7a3a125cc6c91d6489a65879",
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "error",
+        "body": "[nodemon] app crashed",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 6,
+        "repeat": 1
+      }
+    ],
+    "python_traceback": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "error",
+        "body": "invalid literal for int() with base 10: 'abc'",
+        "attrs": {},
+        "error": {
+          "type": "ValueError",
+          "message": "invalid literal for int() with base 10: 'abc'",
+          "stack": "  File \"app.py\", line 12, in <module>\n  File \"/usr/lib/python3.12/site-packages/flask/app.py\", line 100, in run\n  File \"shop/orders.py\", line 41, in create",
+          "frames": [
+            {
+              "raw": "  File \"shop/orders.py\", line 41, in create",
+              "file": "shop/orders.py",
+              "line": 41,
+              "function": "create",
+              "inProject": true
+            },
+            {
+              "raw": "  File \"/usr/lib/python3.12/site-packages/flask/app.py\", line 100, in run",
+              "file": "/usr/lib/python3.12/site-packages/flask/app.py",
+              "line": 100,
+              "function": "run",
+              "inProject": false
+            },
+            {
+              "raw": "  File \"app.py\", line 12, in <module>",
+              "file": "app.py",
+              "line": 12,
+              "function": "<module>",
+              "inProject": true
+            }
+          ]
+        },
+        "fingerprint": "8dd46052eac37aff820d2c9cfaa9c914aadf9a20",
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "info",
+        "body": "ok",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 8,
+        "repeat": 1
+      }
+    ],
+    "rust_panic": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "fatal",
+        "body": "index out of bounds: the len is 2 but the index is 3",
+        "attrs": {},
+        "error": {
+          "type": "Panic",
+          "message": "index out of bounds: the len is 2 but the index is 3",
+          "frames": [
+            {
+              "raw": "src/main.rs:12:5",
+              "file": "src/main.rs",
+              "line": 12,
+              "column": 5,
+              "inProject": true
+            }
+          ]
+        },
+        "fingerprint": "10c8fdbae4c3fe1f9e1d7d03b97cb1315bf8cc83",
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "info",
+        "body": "fim",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 3,
+        "repeat": 1
+      }
+    ],
+    "go_panic": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "fatal",
+        "body": "runtime error: index out of range [3] with length 2",
+        "attrs": {},
+        "error": {
+          "type": "Panic",
+          "message": "runtime error: index out of range [3] with length 2",
+          "stack": "        /app/main.go:12 +0x1d\n        /app/main.go:8 +0x15",
+          "frames": [
+            {
+              "raw": "        /app/main.go:12 +0x1d",
+              "file": "main.go",
+              "line": 12,
+              "inProject": true
+            },
+            {
+              "raw": "        /app/main.go:8 +0x15",
+              "file": "main.go",
+              "line": 8,
+              "inProject": true
+            }
+          ]
+        },
+        "fingerprint": "8018ae171d7811eaa49187ad6327ab8df0647312",
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "info",
+        "body": "exit status 2",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 7,
+        "repeat": 1
+      }
+    ],
+    "dart_test_fail": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "error",
+        "body": "CartServiceTest adds item beyond capacity: RangeError (index): Index out of range: index 3, length 2",
+        "attrs": {},
+        "error": {
+          "type": "Test failed",
+          "message": "CartServiceTest adds item beyond capacity: RangeError (index): Index out of range: index 3, length 2",
+          "stack": "  package:app/cart/cart_service.dart 87:22  CartService.add\n  test/cart/cart_service_test.dart 33:5     main.<fn>.<fn>",
+          "frames": [
+            {
+              "raw": "  package:app/cart/cart_service.dart 87:22  CartService.add",
+              "file": "lib/cart/cart_service.dart",
+              "line": 87,
+              "column": 22,
+              "function": "CartService.add",
+              "inProject": true
+            },
+            {
+              "raw": "  test/cart/cart_service_test.dart 33:5     main.<fn>.<fn>",
+              "file": "test/cart/cart_service_test.dart",
+              "line": 33,
+              "column": 5,
+              "function": "main.<fn>.<fn>",
+              "inProject": true
+            }
+          ]
+        },
+        "fingerprint": "995f56b0df5f0eb597cfae0a43248b720558552a",
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "error",
+        "body": "00:08 +11 -1: Some tests failed.",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 5,
+        "repeat": 1
+      }
+    ],
+    "pytest_fail": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "error",
+        "body": "tests/test_x.py::test_y: AssertionError: 1 != 2",
+        "attrs": {},
+        "error": {
+          "type": "Test failed",
+          "message": "tests/test_x.py::test_y: AssertionError: 1 != 2",
+          "frames": []
+        },
+        "fingerprint": "8302a2c279d7cb9b364ba556ccd35da462c6e4bd",
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      }
+    ],
+    "raw_severities": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "info",
+        "body": "Compiled successfully with 0 errors",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "warn",
+        "body": "webpack compiled with 1 warning",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 1,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "error",
+        "body": "[nodemon] app crashed - waiting for file changes",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 2,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "debug",
+        "body": "DEBUG something",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 3,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "fatal",
+        "body": "FATAL out of memory",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 4,
+        "repeat": 1
+      },
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "out",
+        "severity": "info",
+        "body": "plain line",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 5,
+        "repeat": 1
+      }
+    ],
+    "warn_stderr": [
+      {
+        "runId": "r_1",
+        "tsMs": 1758628800000,
+        "stream": "err",
+        "severity": "warn",
+        "body": "WARN [cache] slow miss",
+        "attrs": {},
+        "error": null,
+        "fingerprint": null,
+        "traceId": null,
+        "spanId": null,
+        "requestId": null,
+        "rawLineOffset": 0,
+        "repeat": 1
+      }
+    ]
+  },
+  "runKeys": [
+    "cmd:/ws/app::flutter run --debug",
+    "name:api",
+    "cmd:/ws/app::npm run dev"
+  ],
+  "severities": [
+    {
+      "raw": null,
+      "parsed": "info"
+    },
+    {
+      "raw": 10,
+      "parsed": "trace"
+    },
+    {
+      "raw": 20,
+      "parsed": "debug"
+    },
+    {
+      "raw": 30,
+      "parsed": "info"
+    },
+    {
+      "raw": 40,
+      "parsed": "warn"
+    },
+    {
+      "raw": 50,
+      "parsed": "error"
+    },
+    {
+      "raw": 60,
+      "parsed": "fatal"
+    },
+    {
+      "raw": "TRACE",
+      "parsed": "trace"
+    },
+    {
+      "raw": "verbose",
+      "parsed": "trace"
+    },
+    {
+      "raw": "dbg",
+      "parsed": "debug"
+    },
+    {
+      "raw": "notice",
+      "parsed": "info"
+    },
+    {
+      "raw": "warning",
+      "parsed": "warn"
+    },
+    {
+      "raw": "severe",
+      "parsed": "error"
+    },
+    {
+      "raw": "panic",
+      "parsed": "fatal"
+    },
+    {
+      "raw": "unknown",
+      "parsed": "info"
+    },
+    {
+      "raw": "45",
+      "parsed": "warn"
+    }
+  ],
+  "ftsQueries": [
+    {
+      "input": "slow query",
+      "fts": "\"slow\"* \"query\"*"
+    },
+    {
+      "input": "foo \"bar\" baz",
+      "fts": "\"foo\"* \"\"\"bar\"\"\"* \"baz\"*"
+    },
+    {
+      "input": "  multiple   spaces  ",
+      "fts": "\"multiple\"* \"spaces\"*"
+    }
+  ],
+  "b36": [
+    {
+      "n": 0,
+      "b36": "0"
+    },
+    {
+      "n": 1,
+      "b36": "1"
+    },
+    {
+      "n": 9,
+      "b36": "9"
+    },
+    {
+      "n": 10,
+      "b36": "a"
+    },
+    {
+      "n": 35,
+      "b36": "z"
+    },
+    {
+      "n": 36,
+      "b36": "10"
+    },
+    {
+      "n": 42,
+      "b36": "16"
+    },
+    {
+      "n": 1000,
+      "b36": "rs"
+    },
+    {
+      "n": 1296,
+      "b36": "100"
+    }
+  ],
+  "jsoncStripped": "{\n  \n  \"unwrap\": [\"^api-1\\\\s*\\\\| \"],\n  \n  \"proxy\": { \"listen\": 3100, \"upstream\": \"http://127.0.0.1:3000\" }\n}"
+}

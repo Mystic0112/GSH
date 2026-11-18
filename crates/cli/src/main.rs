@@ -26,6 +26,7 @@ mod commands;
 mod env;
 mod error;
 mod hook;
+mod telemetry;
 mod transport;
 
 use std::io::Write;
@@ -38,14 +39,21 @@ fn main() -> ExitCode {
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
 
-    match args::parse(&argv).and_then(commands::run) {
-        Ok(out) => {
-            if let Some(out) = out {
-                // Pipe fechado pelo leitor não é erro nosso.
-                let _ = std::io::stdout().write_all(out.as_bytes());
+    match args::parse(&argv) {
+        Ok(args::Command::Telemetry(targs)) => ExitCode::from(telemetry::run(&targs)),
+        Ok(cmd) => match commands::run(cmd) {
+            Ok(out) => {
+                if let Some(out) = out {
+                    // Pipe fechado pelo leitor não é erro nosso.
+                    let _ = std::io::stdout().write_all(out.as_bytes());
+                }
+                ExitCode::SUCCESS
             }
-            ExitCode::SUCCESS
-        }
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::from(e.exit_code())
+            }
+        },
         Err(e) => {
             eprintln!("{e}");
             ExitCode::from(e.exit_code())
