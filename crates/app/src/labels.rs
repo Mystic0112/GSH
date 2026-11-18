@@ -25,6 +25,7 @@ pub const DEFAULT_TAB_TITLE: &str = "Terminal";
 pub const CHAT_TAB_TITLE: &str = "Chat";
 pub const PANES_PLACEHOLDER: &str = "Terminal (spike de PTY ainda não ligado)";
 pub const PANE_EMPTY_STATE: &str = "Nenhuma aba aberta — clique em + para abrir um terminal.";
+pub const PANE_VIEW_DROP_HERE_TO_MOVE: &str = "Solte aqui para mover a aba";
 pub const TERMINAL_SPAWN_ERROR: &str = "Não foi possível iniciar a sessão do terminal.";
 
 // Chat com o agente (`pt_BR.i18n.json` -> `gsh.chat`)
@@ -511,12 +512,17 @@ pub const AGENT_GRAPH_STATUS_WAITING: &str = "Aguardando";
 pub const AGENT_GRAPH_STATUS_IDLE: &str = "Ocioso";
 pub const AGENT_GRAPH_STATUS_OFFLINE: &str = "Offline";
 pub const AGENT_GRAPH_STATUS_ONLINE: &str = "Online";
+pub const AGENT_GRAPH_DESKTOP_BADGE: &str = "desktop";
+pub const PANE_VIEW_DOCK_AS_TAB: &str = "Encaixar como aba";
 pub const NOTIFICATION_AGENT_FINISHED: &str = "Agente terminou";
 pub const NOTIFICATION_AGENT_NEEDS_YOU: &str = "Agente precisa de você";
 pub const AGENT_GRAPH_LINKED: &str = "Conectado";
 pub const AGENT_GRAPH_REMOVE_LINK_HINT: &str = "Clique direito para remover a conexão";
 pub fn agent_graph_message_count(count: usize) -> String {
     format!("Mensagens: {count}")
+}
+pub fn agent_graph_queued(count: usize) -> String {
+    format!("{count} na fila")
 }
 pub fn agent_graph_last_message(preview: &str) -> String {
     format!("Última: {preview}")

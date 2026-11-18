@@ -67,16 +67,24 @@ fn dragging_from_agent_port_to_another_agent_connects_them() {
             label: "Um".into(),
             detail: "projeto".into(),
             status: "Ocioso".into(),
+            status_pulsing: false,
             color: iced::Color::from_rgb8(1, 2, 3),
             maestro: false,
+            queued: 0,
+            harness_icon: None,
+            harness_icon_monochrome: false,
         },
         agent_graph::Node {
             id: "t2".into(),
             label: "Dois".into(),
             detail: "projeto".into(),
             status: "Ocioso".into(),
+            status_pulsing: false,
             color: iced::Color::from_rgb8(4, 5, 6),
             maestro: false,
+            queued: 0,
+            harness_icon: None,
+            harness_icon_monochrome: false,
         },
     ];
     let view = agent_graph::view(
@@ -103,6 +111,110 @@ fn dragging_from_agent_port_to_another_agent_connects_them() {
     let messages: Vec<_> = ui.into_messages().collect();
     assert!(
         messages.contains(&agent_graph::Message::Connect("t1".into(), "t2".into())),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn dragging_agent_node_moves_it_without_selecting_away_from_the_graph() {
+    std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
+    let settings = iced::Settings {
+        fonts: theme::EMBEDDED_FONTS
+            .iter()
+            .map(|font| (*font).into())
+            .collect(),
+        default_font: theme::FONT_BODY,
+        ..Default::default()
+    };
+    let nodes = vec![agent_graph::Node {
+        id: "t1".into(),
+        label: "Um".into(),
+        detail: "projeto".into(),
+        status: "Ocioso".into(),
+        status_pulsing: false,
+        color: iced::Color::from_rgb8(1, 2, 3),
+        maestro: false,
+        queued: 0,
+        harness_icon: None,
+        harness_icon_monochrome: false,
+    }];
+    let view = agent_graph::view(
+        nodes,
+        vec![("t1".into(), 80.0, 80.0)],
+        Vec::new(),
+        None,
+        None,
+    );
+    let mut ui = Simulator::with_size(settings, Size::new(800.0, 500.0), view);
+    ui.point_at(Point::new(100.0, 100.0));
+    let _ = ui.simulate([iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+        iced::mouse::Button::Left,
+    ))]);
+    ui.point_at(Point::new(140.0, 130.0));
+    let _ = ui.simulate([
+        iced::Event::Mouse(iced::mouse::Event::CursorMoved {
+            position: Point::new(140.0, 130.0),
+        }),
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+            iced::mouse::Button::Left,
+        )),
+    ]);
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(
+        messages.contains(&agent_graph::Message::Move("t1".into(), 120.0, 110.0)),
+        "{messages:?}"
+    );
+    assert!(
+        !messages.contains(&agent_graph::Message::Select("t1".into())),
+        "dragging must leave the graph active: {messages:?}"
+    );
+    let mut store = crate::agent_graph_store::AgentGraphStore::default();
+    for message in messages {
+        if let agent_graph::Message::Move(id, x, y) = message {
+            store.set_position(&id, x, y);
+        }
+    }
+    assert_eq!(store.position("t1"), Some((120.0, 110.0)));
+}
+
+#[test]
+fn right_clicking_empty_graph_publishes_creation_at_the_scene_point() {
+    std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
+    let settings = iced::Settings {
+        fonts: theme::EMBEDDED_FONTS
+            .iter()
+            .map(|font| (*font).into())
+            .collect(),
+        default_font: theme::FONT_BODY,
+        ..Default::default()
+    };
+    let nodes = vec![agent_graph::Node {
+        id: "t1".into(),
+        label: "Um".into(),
+        detail: "projeto".into(),
+        status: "Ocioso".into(),
+        status_pulsing: false,
+        queued: 0,
+        color: iced::Color::from_rgb8(1, 2, 3),
+        maestro: false,
+        harness_icon: None,
+        harness_icon_monochrome: false,
+    }];
+    let view = agent_graph::view(
+        nodes,
+        vec![("t1".into(), 80.0, 80.0)],
+        Vec::new(),
+        None,
+        None,
+    );
+    let mut ui = Simulator::with_size(settings, Size::new(800.0, 500.0), view);
+    ui.point_at(Point::new(600.0, 300.0));
+    let _ = ui.simulate([iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+        iced::mouse::Button::Right,
+    ))]);
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(
+        messages.contains(&agent_graph::Message::CreateAt(600.0, 300.0)),
         "{messages:?}"
     );
 }

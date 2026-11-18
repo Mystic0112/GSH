@@ -238,6 +238,29 @@ impl TerminalPane {
         &self.pane_id
     }
 
+    /// PID da raiz da árvore do PTY, usado para associar harnesses iniciados à mão.
+    pub fn child_pid(&self) -> Option<u32> {
+        self.session.as_ref().and_then(TermSession::child_pid)
+    }
+
+    /// Título curto OSC 0/2, como `_shortTitle` do Flutter.
+    pub fn title(&self) -> Option<String> {
+        let title = self.session.as_ref()?.title()?;
+        let title = title.trim();
+        if title.is_empty() {
+            return None;
+        }
+        Some(if title.contains('/') {
+            title
+                .rsplit('/')
+                .find(|segment| !segment.is_empty())
+                .unwrap_or(title)
+                .to_owned()
+        } else {
+            title.to_owned()
+        })
+    }
+
     /// Variáveis de ambiente injetadas no processo filho desta sessão.
     pub fn spawn_env(&self) -> &[(String, String)] {
         &self.spawn_env

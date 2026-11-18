@@ -47,6 +47,39 @@ pub struct AgentGraphStore {
 }
 
 impl AgentGraphStore {
+    /// Posiciona nós vistos pela primeira vez na primeira célula da grade sem sobrepor nós.
+    pub fn place_missing(&mut self, ids: &[String]) -> Vec<String> {
+        const ORIGIN: f32 = 80.0;
+        const COLUMNS: usize = 4;
+        const CELL_WIDTH: f32 = 280.0;
+        const CELL_HEIGHT: f32 = 170.0;
+        let mut placed = Vec::new();
+        let missing = ids
+            .iter()
+            .filter(|id| !self.positions.contains_key(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in missing {
+            let mut slot = 0;
+            loop {
+                let at = (
+                    ORIGIN + (slot % COLUMNS) as f32 * CELL_WIDTH,
+                    ORIGIN + (slot / COLUMNS) as f32 * CELL_HEIGHT,
+                );
+                slot += 1;
+                if self.positions.values().all(|position| {
+                    (position.0 - at.0).abs() >= CELL_WIDTH / 2.0
+                        || (position.1 - at.1).abs() >= CELL_HEIGHT / 2.0
+                }) {
+                    self.set_position(&id, at.0, at.1);
+                    placed.push(id);
+                    break;
+                }
+            }
+        }
+        placed
+    }
+
     pub fn positions(&self) -> &BTreeMap<String, (f32, f32)> {
         &self.positions
     }

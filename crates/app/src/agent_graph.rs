@@ -10,19 +10,27 @@ pub const NODE_WIDTH: f32 = 220.0;
 pub const NODE_HEIGHT: f32 = 88.0;
 pub const PORT_RADIUS: f32 = 7.0;
 
+// Flutter's MaterialIcons workspace_premium glyph is not in the embedded Symbols font.
+const WORKSPACE_PREMIUM_ICON: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path transform="translate(0 512) scale(1 -1)" fill="#000" d="M207 220 256 257 305 220 287 281 336 320H275L256 380L237 320H176L225 281L207 220ZM427 299C427 393 350 469 256 469C162 469 85 393 85 299C85 255 102 216 128 186V21L256 64L384 21V186C410 216 427 255 427 299ZM256 427C327 427 384 369 384 299C384 228 327 171 256 171C185 171 128 228 128 299C128 369 185 427 256 427Z"/></svg>"##;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub id: String,
     pub label: String,
     pub detail: String,
     pub status: String,
+    pub status_pulsing: bool,
+    pub queued: usize,
     pub color: iced::Color,
     pub maestro: bool,
+    pub harness_icon: Option<&'static [u8]>,
+    pub harness_icon_monochrome: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     Create,
+    CreateAt(f32, f32),
     Move(String, f32, f32),
     Connect(String, String),
     Select(String),
@@ -41,7 +49,7 @@ pub type Edge = (String, String, bool, usize, Option<String>);
 
 #[derive(Debug, Clone, Copy)]
 enum Drag {
-    Node(usize, Point),
+    Node(usize, Point, bool),
     Link(usize),
     Pan(Point),
 }
@@ -337,7 +345,14 @@ impl canvas::Program<Message> for Program {
                 if let Some((a, b)) = link_at(self, point, state.offset, state.scale.max(0.05)) {
                     return Some(Action::publish(Message::RemoveLink(a, b)).and_capture());
                 }
-                Some(Action::publish(Message::Create).and_capture())
+                let scale = state.scale.max(0.05);
+                Some(
+                    Action::publish(Message::CreateAt(
+                        (point.x - state.offset.x) / scale,
+                        (point.y - state.offset.y) / scale,
+                    ))
+                    .and_capture(),
+                )
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let point = cursor.position_in(bounds)?;
@@ -348,14 +363,8 @@ impl canvas::Program<Message> for Program {
                     state.drag = Some(if port {
                         Drag::Link(index)
                     } else {
-                        Drag::Node(index, point)
+                        Drag::Node(index, point, false)
                     });
-                    if !port {
-                        let node = self.nodes.get(index)?;
-                        return Some(
-                            Action::publish(Message::Select(node.id.clone())).and_capture(),
-                        );
-                    }
                 } else {
                     state.drag = Some(Drag::Pan(point));
                 }
@@ -364,8 +373,12 @@ impl canvas::Program<Message> for Program {
             Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 let point = Point::new(position.x - bounds.x, position.y - bounds.y);
                 match state.drag {
-                    Some(Drag::Node(index, previous)) => {
+                    Some(Drag::Node(index, previous, moved)) => {
                         let node = self.nodes.get(index)?;
+                        let moved = moved || point != previous;
+                        if !moved {
+                            return Some(Action::request_redraw().and_capture());
+                        }
                         let at = self.at(&node.id);
                         let next = Point::new(
                             (at.x + (point.x - previous.x) / state.scale.max(0.05))
@@ -373,7 +386,7 @@ impl canvas::Program<Message> for Program {
                             (at.y + (point.y - previous.y) / state.scale.max(0.05))
                                 .clamp(0.0, 2912.0),
                         );
-                        state.drag = Some(Drag::Node(index, point));
+                        state.drag = Some(Drag::Node(index, point, true));
                         Some(
                             Action::publish(Message::Move(node.id.clone(), next.x, next.y))
                                 .and_capture(),
@@ -393,8 +406,14 @@ impl canvas::Program<Message> for Program {
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                let Some(Drag::Link(from)) = state.drag.take() else {
-                    state.drag = None;
+                let drag = state.drag.take();
+                if let Some(Drag::Node(index, _, false)) = drag {
+                    return self
+                        .nodes
+                        .get(index)
+                        .map(|node| Action::publish(Message::Select(node.id.clone())));
+                }
+                let Some(Drag::Link(from)) = drag else {
                     return None;
                 };
                 let point = cursor.position_in(bounds)?;
@@ -524,10 +543,44 @@ impl canvas::Program<Message> for Program {
                             },
                         ),
                     );
+                    if let Some(bytes) = node.harness_icon {
+                        let icon = iced::advanced::graphics::geometry::Svg::new(
+                            iced::widget::svg::Handle::from_memory(bytes),
+                        );
+                        let icon = if node.harness_icon_monochrome {
+                            icon.color(theme::palette().text)
+                        } else {
+                            icon
+                        };
+                        frame.draw_svg(
+                            Rectangle::new(
+                                Point::new(at.x + 14.0, at.y + 10.0),
+                                iced::Size::new(16.0, 16.0),
+                            ),
+                            icon,
+                        );
+                    }
                     frame.fill_text(canvas::Text {
                         content: node.label.clone(),
-                        position: Point::new(at.x + 14.0, at.y + 22.0),
-                        max_width: 178.0,
+                        position: Point::new(
+                            at.x + if node.harness_icon.is_some() {
+                                38.0
+                            } else {
+                                14.0
+                            },
+                            at.y + 22.0,
+                        ),
+                        max_width: if node.harness_icon.is_some() {
+                            if node.maestro {
+                                154.0
+                            } else {
+                                170.0
+                            }
+                        } else if node.maestro {
+                            162.0
+                        } else {
+                            190.0
+                        },
                         color: theme::palette().text,
                         size: 13.0.into(),
                         font: theme::FONT_BODY_SEMIBOLD,
@@ -535,18 +588,86 @@ impl canvas::Program<Message> for Program {
                     });
                     frame.fill_text(canvas::Text {
                         content: node.detail.clone(),
-                        position: Point::new(at.x + 14.0, at.y + 48.0),
-                        max_width: 190.0,
+                        position: Point::new(
+                            at.x + if node.id.starts_with("ext:") {
+                                66.0
+                            } else {
+                                14.0
+                            },
+                            at.y + 48.0,
+                        ),
+                        max_width: if node.id.starts_with("ext:") {
+                            142.0
+                        } else {
+                            190.0
+                        },
                         color: theme::palette().text3,
                         size: 11.0.into(),
-                        font: theme::FONT_MONO,
+                        font: if node.id.starts_with("ext:") {
+                            theme::FONT_BODY
+                        } else {
+                            theme::FONT_MONO
+                        },
                         ..Default::default()
                     });
+                    if node.id.starts_with("ext:") {
+                        let badge = canvas::Path::rounded_rectangle(
+                            Point::new(at.x + 14.0, at.y + 38.0),
+                            iced::Size::new(46.0, 14.0),
+                            4.0.into(),
+                        );
+                        frame.fill(&badge, theme::palette().panel3);
+                        frame.stroke(
+                            &badge,
+                            canvas::Stroke::default()
+                                .with_color(theme::palette().border2)
+                                .with_width(1.0),
+                        );
+                        frame.fill_text(canvas::Text {
+                            content: labels::AGENT_GRAPH_DESKTOP_BADGE.to_owned(),
+                            position: Point::new(at.x + 19.0, at.y + 48.0),
+                            max_width: 36.0,
+                            color: theme::palette().text2,
+                            size: 10.0.into(),
+                            font: theme::FONT_BODY,
+                            ..Default::default()
+                        });
+                    }
+                    if node.maestro {
+                        frame.draw_svg(
+                            Rectangle::new(
+                                Point::new(at.x + NODE_WIDTH - 28.0, at.y + 14.0),
+                                iced::Size::new(16.0, 16.0),
+                            ),
+                            iced::advanced::graphics::geometry::Svg::new(
+                                iced::widget::svg::Handle::from_memory(WORKSPACE_PREMIUM_ICON),
+                            )
+                            .color(node.color),
+                        );
+                    }
+                    let status_color = match node.status.as_str() {
+                        labels::AGENT_GRAPH_STATUS_WORKING => theme::palette().accent,
+                        labels::AGENT_GRAPH_STATUS_WAITING => theme::palette().warn,
+                        labels::AGENT_GRAPH_STATUS_IDLE => theme::palette().text3,
+                        labels::AGENT_GRAPH_STATUS_ONLINE => theme::palette().online,
+                        labels::AGENT_GRAPH_STATUS_OFFLINE => theme::palette().text4,
+                        _ => node.color,
+                    };
+                    let dot = canvas::Path::circle(Point::new(at.x + 17.5, at.y + 69.5), 3.5);
+                    frame.fill(
+                        &dot,
+                        status_color.scale_alpha(if node.status_pulsing { 0.35 } else { 1.0 }),
+                    );
+                    let queued = if node.queued > 0 {
+                        format!(" · {}", labels::agent_graph_queued(node.queued))
+                    } else {
+                        String::new()
+                    };
                     frame.fill_text(canvas::Text {
-                        content: node.status.clone(),
-                        position: Point::new(at.x + 14.0, at.y + 74.0),
-                        max_width: 190.0,
-                        color: node.color,
+                        content: format!("{}{queued}", node.status),
+                        position: Point::new(at.x + 27.0, at.y + 74.0),
+                        max_width: 177.0,
+                        color: status_color,
                         size: 11.0.into(),
                         font: theme::FONT_BODY,
                         ..Default::default()

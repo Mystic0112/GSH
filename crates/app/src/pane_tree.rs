@@ -76,6 +76,10 @@ impl PaneTree {
         self.grid.get(pane)
     }
 
+    pub fn model_mut(&mut self, pane: Pane) -> Option<&mut PaneModel> {
+        self.grid.get_mut(pane)
+    }
+
     /// Panes na ordem do layout (esquerda para direita, cima para baixo), como `leaves()`.
     pub fn leaves(&self) -> Vec<Pane> {
         fn walk(node: &Node, out: &mut Vec<Pane>) {
@@ -106,6 +110,78 @@ impl PaneTree {
             .iter()
             .find(|(_, model)| model.tabs().contains(tab))
             .map(|(pane, _)| *pane)
+    }
+
+    /// Move an existing tab to another position or pane. `target` is the
+    /// insertion slot before removal, matching the Flutter pane reorder flow.
+    pub fn move_tab(&mut self, from: Pane, index: usize, to: Pane, target: usize) -> bool {
+        if from == to {
+            return self
+                .grid
+                .get_mut(from)
+                .is_some_and(|model| model.reorder_tab(index, target));
+        }
+        if self.grid.get(from).is_none() || self.grid.get(to).is_none() {
+            return false;
+        }
+        let Some(source) = self.grid.get(from) else {
+            return false;
+        };
+        let label = source.tabs().get(index).and_then(|tab| match tab {
+            PaneTab::Terminal(id) => source.terminal_label(*id).map(str::to_owned),
+            _ => None,
+        });
+        let Some(tab) = self.grid.get_mut(from).and_then(|model| model.close(index)) else {
+            return false;
+        };
+        let Some(target_model) = self.grid.get_mut(to) else {
+            return false;
+        };
+        target_model.insert_transferred(target, tab, label);
+        self.close_if_empty(from);
+        true
+    }
+
+    /// Move a tab into a newly split pane beside `target`, keeping the tab's
+    /// session and OSC title alive. Splitting a pane against itself when it has
+    /// only that tab is the same no-op as Flutter's `moveTabToNewSplit`.
+    pub fn move_tab_to_split(
+        &mut self,
+        from: Pane,
+        index: usize,
+        target: Pane,
+        axis: Axis,
+        before: bool,
+    ) -> Option<Pane> {
+        let source = self.grid.get(from)?;
+        if from == target && source.tabs().len() == 1 {
+            return None;
+        }
+        let tab = source.tabs().get(index)?.clone();
+        let label = match &tab {
+            PaneTab::Terminal(id) => source.terminal_label(*id).map(str::to_owned),
+            _ => None,
+        };
+        let mut new_model = PaneModel::empty();
+        new_model.insert_transferred(0, tab, label);
+        let (new_pane, _) = self.grid.split(axis, target, new_model)?;
+        if before {
+            self.grid.swap(new_pane, target);
+        }
+        if self
+            .grid
+            .get_mut(from)
+            .and_then(|model| model.close(index))
+            .is_none()
+        {
+            let _ = self.grid.close(new_pane);
+            return None;
+        }
+        if from != target {
+            self.close_if_empty(from);
+        }
+        self.focused = new_pane;
+        Some(new_pane)
     }
 
     /// Pane que contém a aba da query `id` e o índice dela.
@@ -447,5 +523,63 @@ mod tests {
         assert_eq!(tree.pane_of(&PaneTab::Terminal(1)), Some(first));
         assert_eq!(tree.pane_of(&PaneTab::Terminal(2)), Some(tree.focused()));
         assert_eq!(tree.pane_of(&PaneTab::Settings), None);
+    }
+
+    #[test]
+    fn mover_aba_entre_panes_preserva_label_de_terminal_osc() {
+        let mut tree = PaneTree::default();
+        let first = tree.focused();
+        tree.focused_model_mut().open_terminal(9);
+        tree.focused_model_mut()
+            .set_terminal_label(9, "Agente".to_owned());
+        tree.split_with_terminal(first, Axis::Vertical);
+        let second = tree.focused();
+        assert!(tree.move_tab(first, 1, second, 0));
+        assert_eq!(
+            tree.model(first).map(PaneModel::tabs),
+            Some(&[PaneTab::Terminal(1)][..])
+        );
+        let target = tree.model(second).expect("pane destino existe");
+        assert_eq!(target.tabs(), &[PaneTab::Terminal(9), PaneTab::Terminal(2)]);
+        assert_eq!(target.display_title(&PaneTab::Terminal(9)), "Agente");
+    }
+
+    #[test]
+    fn mover_aba_para_split_novo_respeita_lado_e_preserva_title_osc() {
+        let mut tree = PaneTree::default();
+        let source = tree.focused();
+        tree.focused_model_mut().open_terminal(9);
+        tree.focused_model_mut()
+            .set_terminal_label(9, "Agente".to_owned());
+        tree.split_with_terminal(source, Axis::Vertical);
+        let target = tree.focused();
+        let new_pane = tree
+            .move_tab_to_split(source, 1, target, Axis::Horizontal, true)
+            .expect("pane dividido");
+        assert_eq!(tree.leaves(), vec![source, new_pane, target]);
+        assert_eq!(
+            tree.model(new_pane).map(PaneModel::tabs),
+            Some(&[PaneTab::Terminal(9)][..])
+        );
+        assert_eq!(
+            tree.model(new_pane)
+                .map(|model| model.display_title(&PaneTab::Terminal(9))),
+            Some("Agente".to_owned())
+        );
+    }
+
+    #[test]
+    fn split_do_unico_tab_no_proprio_pane_nao_altera_o_layout() {
+        let mut tree = PaneTree::default();
+        let only = tree.focused();
+        assert_eq!(
+            tree.move_tab_to_split(only, 0, only, Axis::Vertical, false),
+            None
+        );
+        assert_eq!(tree.leaves(), vec![only]);
+        assert_eq!(
+            tree.model(only).map(PaneModel::tabs),
+            Some(&[PaneTab::Terminal(1)][..])
+        );
     }
 }

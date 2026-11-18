@@ -6,8 +6,8 @@
 //! novo terminal e controles de split/fechar) e corpo em `PANEL` com borda `BORDER`.
 
 use iced::widget::pane_grid;
-use iced::widget::{button, canvas, column, container, mouse_area, row, text, tooltip};
-use iced::{Background, Border, Element, Fill, Theme};
+use iced::widget::{button, canvas, column, container, mouse_area, row, text, tooltip, Space};
+use iced::{Background, Border, Element, Fill, Length, Point, Size, Theme};
 
 use crate::labels;
 use crate::pane_model::PaneModel;
@@ -16,9 +16,16 @@ use crate::pane_tool_icon::PaneToolIcon;
 use crate::theme;
 
 /// Callbacks de interação da barra de abas do pane central.
-pub struct ChromeCallbacks<M, FSelect, FClose> {
+pub struct ChromeCallbacks<M, FSelect, FClose, FDrag, FIcon, FTitle, FPaneDrag> {
     pub on_select_tab: FSelect,
     pub on_close_tab: FClose,
+    pub on_tab_drag: FDrag,
+    pub drop_target: Option<(usize, bool)>,
+    pub drag_source: Option<usize>,
+    pub on_pane_drag: FPaneDrag,
+    pub pane_drop_zone: Option<PaneDropZone>,
+    pub terminal_icon: FIcon,
+    pub terminal_title: FTitle,
     pub on_new_terminal: M,
     pub noop_msg: M,
     pub on_split_right: M,
@@ -32,11 +39,60 @@ pub struct ChromeCallbacks<M, FSelect, FClose> {
     pub on_focus: Option<M>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneDropZone {
+    Strip,
+    Center,
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PaneDragEvent {
+    Hover { zone: PaneDropZone, cursor: Point },
+    Drop { zone: PaneDropZone, cursor: Point },
+}
+
+impl PaneDropZone {
+    pub fn at(point: Point, size: Size) -> Self {
+        const EDGE: f32 = 0.25;
+        if size.width <= 0.0 || size.height <= 0.0 {
+            return Self::Center;
+        }
+        let strip_height = theme::TAB_STRIP_HEIGHT;
+        if point.y <= strip_height {
+            return Self::Strip;
+        }
+        let body_height = (size.height - strip_height).max(0.0);
+        if body_height == 0.0 {
+            return Self::Center;
+        }
+        let fx = (point.x / size.width).clamp(0.0, 1.0);
+        let fy = ((point.y - strip_height) / body_height).clamp(0.0, 1.0);
+        let mut zone = Self::Center;
+        let mut depth = EDGE;
+        for (candidate, distance) in [
+            (Self::Left, fx),
+            (Self::Right, 1.0 - fx),
+            (Self::Top, fy),
+            (Self::Bottom, 1.0 - fy),
+        ] {
+            if distance < depth {
+                zone = candidate;
+                depth = distance;
+            }
+        }
+        zone
+    }
+}
+
 /// Envolve o conteúdo ativo do pane (terminal ou viewer) com a barra de abas.
-pub fn view<'a, M, FSelect, FClose, FHover>(
+pub fn view<'a, M, FSelect, FClose, FHover, FDrag, FIcon, FTitle, FPaneDrag>(
     model: &'a PaneModel,
     active_content: Element<'a, M>,
-    callbacks: ChromeCallbacks<M, FSelect, FClose>,
+    callbacks: ChromeCallbacks<M, FSelect, FClose, FDrag, FIcon, FTitle, FPaneDrag>,
     dirty: &dyn Fn(&crate::pane_model::PaneTab) -> bool,
     hovered: Option<usize>,
     on_hover: FHover,
@@ -46,6 +102,10 @@ where
     FSelect: Fn(usize) -> M + 'a,
     FClose: Fn(usize) -> M + 'a,
     FHover: Fn(Option<usize>) -> M,
+    FDrag: Fn(usize, crate::pane_strip::TabDragEvent) -> M + 'a,
+    FIcon: Fn(crate::pane_model::TermId) -> Option<(&'static [u8], bool)>,
+    FTitle: Fn(crate::pane_model::TermId) -> Option<String>,
+    FPaneDrag: Fn(PaneDragEvent) -> M + Clone + 'a,
 {
     let split_controls = split_controls(
         callbacks.on_split_right.clone(),
@@ -55,6 +115,8 @@ where
     );
     // as ferramentas ficam dentro da barra (mesmo fundo e borda de baixo), como em pane_view.dart
     let on_focus = callbacks.on_focus.clone();
+    let on_pane_drag = std::rc::Rc::new(callbacks.on_pane_drag.clone());
+    let pane_drop_zone = callbacks.pane_drop_zone;
     let tab_strip = view_tab_strip(model, callbacks, dirty, hovered, on_hover, split_controls);
     // o vazio da barra foca o pane; os botões capturam o próprio clique e já focam o pane
     let tab_strip: Element<'a, M> = match on_focus {
@@ -62,7 +124,8 @@ where
         None => tab_strip,
     };
 
-    let body = container(active_content)
+    let body_content: Element<'a, M> = active_content;
+    let body = container(body_content)
         .width(Fill)
         .height(Fill)
         .padding(1)
@@ -76,7 +139,124 @@ where
             ..Default::default()
         });
 
-    column![tab_strip, body].width(Fill).height(Fill).into()
+    let hover_callback = on_pane_drag;
+    let pane = column![tab_strip, body].width(Fill).height(Fill);
+    let pane: Element<'a, M> = match pane_drop_zone {
+        Some(PaneDropZone::Strip) => {
+            iced::widget::stack![pane, pane_drop_preview(PaneDropZone::Strip)].into()
+        }
+        Some(zone) => iced::widget::stack![
+            pane,
+            column![
+                Space::new()
+                    .width(Fill)
+                    .height(Length::Fixed(theme::TAB_STRIP_HEIGHT)),
+                pane_drop_preview(zone)
+            ]
+            .width(Fill)
+            .height(Fill)
+        ]
+        .into(),
+        None => pane.into(),
+    };
+    crate::pane_focus::FocusOnPress::new(pane, None)
+        .on_pointer_event(move |point, size, cursor, phase| {
+            let zone = PaneDropZone::at(point, size);
+            let event = match phase {
+                crate::pane_focus::PointerPhase::Press | crate::pane_focus::PointerPhase::Move => {
+                    PaneDragEvent::Hover { zone, cursor }
+                }
+                crate::pane_focus::PointerPhase::Release => PaneDragEvent::Drop { zone, cursor },
+            };
+            hover_callback(event)
+        })
+        .into()
+}
+
+fn pane_drop_preview<'a, M: 'a>(zone: PaneDropZone) -> Element<'a, M> {
+    if zone == PaneDropZone::Strip {
+        return column![
+            container(
+                text(labels::PANE_VIEW_DROP_HERE_TO_MOVE)
+                    .size(theme::SIZE_TAB)
+                    .color(theme::palette().accent_text),
+            )
+            .width(Fill)
+            .height(Length::Fixed(theme::TAB_STRIP_HEIGHT))
+            .center_x(Fill)
+            .center_y(Fill)
+            .style(|_: &Theme| container::Style {
+                background: Some(Background::Color(theme::palette().accent_soft)),
+                border: Border {
+                    color: theme::palette().accent,
+                    width: 2.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            Space::new().width(Fill).height(Fill),
+        ]
+        .width(Fill)
+        .height(Fill)
+        .into();
+    }
+    let contents: Element<'a, M> = if zone == PaneDropZone::Center {
+        container(
+            text(labels::PANE_VIEW_DOCK_AS_TAB)
+                .size(theme::SIZE_TAB)
+                .color(theme::palette().accent_text),
+        )
+        .center_x(Fill)
+        .center_y(Fill)
+        .into()
+    } else {
+        Space::new().into()
+    };
+    let preview = container(contents)
+        .width(Fill)
+        .height(Fill)
+        .padding(8)
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(theme::palette().accent_soft)),
+            border: Border {
+                color: theme::palette().accent,
+                width: 2.0,
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        });
+    match zone {
+        PaneDropZone::Strip => Space::new().into(),
+        PaneDropZone::Center => preview.into(),
+        PaneDropZone::Left => row![
+            preview.width(Length::FillPortion(1)),
+            Space::new().width(Length::FillPortion(1))
+        ]
+        .width(Fill)
+        .height(Fill)
+        .into(),
+        PaneDropZone::Right => row![
+            Space::new().width(Length::FillPortion(1)),
+            preview.width(Length::FillPortion(1))
+        ]
+        .width(Fill)
+        .height(Fill)
+        .into(),
+        PaneDropZone::Top => column![
+            preview.height(Length::FillPortion(1)),
+            Space::new().height(Length::FillPortion(1))
+        ]
+        .width(Fill)
+        .height(Fill)
+        .into(),
+        PaneDropZone::Bottom => column![
+            Space::new().height(Length::FillPortion(1)),
+            preview.height(Length::FillPortion(1))
+        ]
+        .width(Fill)
+        .height(Fill)
+        .into(),
+    }
 }
 
 /// Botões do canto direito da barra, na ordem do Flutter: dividir à direita, dividir abaixo, fechar.
@@ -185,4 +365,43 @@ pub fn view_empty_body<'a, M: 'a>() -> Element<'a, M> {
     .width(Fill)
     .height(Fill)
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PaneDropZone;
+    use iced::{Point, Size};
+
+    #[test]
+    fn pane_drop_zones_match_flutter_edge_quadrants() {
+        let size = Size::new(400.0, 200.0);
+        assert_eq!(
+            PaneDropZone::at(Point::new(10.0, 100.0), size),
+            PaneDropZone::Left
+        );
+        assert_eq!(
+            PaneDropZone::at(Point::new(390.0, 100.0), size),
+            PaneDropZone::Right
+        );
+        assert_eq!(
+            PaneDropZone::at(Point::new(200.0, 45.0), size),
+            PaneDropZone::Top
+        );
+        assert_eq!(
+            PaneDropZone::at(Point::new(200.0, 190.0), size),
+            PaneDropZone::Bottom
+        );
+        assert_eq!(
+            PaneDropZone::at(Point::new(200.0, 100.0), size),
+            PaneDropZone::Center
+        );
+        assert_eq!(
+            PaneDropZone::at(Point::new(100.0, 100.0), size),
+            PaneDropZone::Center
+        );
+        assert_eq!(
+            PaneDropZone::at(Point::new(200.0, 20.0), size),
+            PaneDropZone::Strip
+        );
+    }
 }

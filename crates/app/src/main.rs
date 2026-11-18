@@ -67,6 +67,7 @@ pub mod git_panel;
 pub mod git_presenter;
 pub mod git_state;
 pub mod gorilla;
+pub mod harness_monitor;
 pub mod harness_pane;
 pub mod island;
 pub mod labels;
@@ -125,8 +126,9 @@ use crate::files_panel::FilesMsg;
 use crate::gallery_create::GalleryError;
 use crate::gallery_panel::GalleryMsg;
 use crate::island::{AgentIsland, IslandMsg, PermissionDecision};
-use crate::pane_chrome::ChromeCallbacks;
+use crate::pane_chrome::{ChromeCallbacks, PaneDragEvent, PaneDropZone};
 use crate::pane_model::{BrowserId, ChatId, PaneModel, PaneTab, QueryId, TermId};
+use crate::pane_strip::TabDragEvent;
 use crate::pane_tree::PaneTree;
 use crate::right_tabs::RightTab;
 use crate::ssh_prompts::{HostKeyPrompt, PassphrasePrompt};
@@ -383,7 +385,13 @@ enum Msg {
     WindowUnfocused,
     WindowFocused,
     StatusTick,
+    HarnessPoll,
+    HarnessDetected(Vec<(TermId, String)>),
+    TerminalActivityTick,
+    AgentGraphPulse,
     TabHover(Option<(Pane, usize)>),
+    TabDrag(Pane, TabDragEvent),
+    PaneDrag(Pane, PaneDragEvent),
     SelectTab(usize),
     CloseTab(usize),
     NewTerminalTab,
@@ -490,6 +498,41 @@ const QUERY_DISK_CHECK_MS: u64 = 1000;
 /// Intervalo de atualização da aba Telemetria quando visível (`telemetry_viewmodel.dart`).
 const TELEMETRY_POLL_MS: u64 = 2000;
 
+fn harness_icon(kind: &str) -> (Option<&'static [u8]>, bool) {
+    let (icon, monochrome) = match kind {
+        "antigravity" => (
+            include_bytes!("../assets/harness_icons/antigravity.svg") as &[u8],
+            false,
+        ),
+        "claudecode" => (
+            include_bytes!("../assets/harness_icons/claudecode.svg") as &[u8],
+            true,
+        ),
+        "codex" => (
+            include_bytes!("../assets/harness_icons/codex.svg") as &[u8],
+            false,
+        ),
+        "cursor" => (
+            include_bytes!("../assets/harness_icons/cursor.svg") as &[u8],
+            true,
+        ),
+        "githubcopilot" => (
+            include_bytes!("../assets/harness_icons/githubcopilot.svg") as &[u8],
+            true,
+        ),
+        "opencode" => (
+            include_bytes!("../assets/harness_icons/opencode.svg") as &[u8],
+            true,
+        ),
+        "pi" => (
+            include_bytes!("../assets/harness_icons/pi.svg") as &[u8],
+            true,
+        ),
+        _ => return (None, false),
+    };
+    (Some(icon), monochrome)
+}
+
 struct Shell {
     status_runtime: StatusRuntime,
     team: Node,
@@ -512,14 +555,26 @@ struct Shell {
     /// Pane aguardando a resposta do diálogo "Fechar painel?".
     pending_close_pane: Option<Pane>,
     hovered_tab: Option<(Pane, usize)>,
+    tab_drag_source: Option<(Pane, usize)>,
+    tab_drag_target: Option<(Pane, usize, bool)>,
+    tab_drag_origin: Option<iced::Point>,
+    tab_drag_cursor: Option<iced::Point>,
+    tab_drag_active: bool,
+    pane_drag_target: Option<(Pane, PaneDropZone)>,
     terminals: BTreeMap<TermId, TerminalPane>,
     terminal_labels: HashMap<TermId, String>,
+    active_harnesses: HashMap<TermId, &'static str>,
+    output_activity: HashMap<TermId, Instant>,
+    terminal_input_at: HashMap<TermId, Instant>,
+    harness_poll_requested_at: Option<Instant>,
+    graph_pulse: bool,
     agent_graphs: HashMap<PathBuf, agent_graph_store::AgentGraphStore>,
     agent_graph_save_due: HashMap<PathBuf, Instant>,
     external_waiters: Vec<ExternalWaiter>,
     pending_agent_deliveries: Vec<PendingAgentDelivery>,
     graph_context: Option<String>,
     graph_rename: Option<(String, String)>,
+    agent_graph_create_at: Option<(f32, f32)>,
     chats: BTreeMap<ChatId, ChatPane>,
     file_viewers: BTreeMap<PathBuf, FileViewerState>,
     editors: BTreeMap<PathBuf, editor_pane::EditorPane>,
@@ -615,14 +670,26 @@ impl Default for Shell {
             panes,
             pending_close_pane: None,
             hovered_tab: None,
+            tab_drag_source: None,
+            tab_drag_target: None,
+            tab_drag_origin: None,
+            tab_drag_cursor: None,
+            tab_drag_active: false,
+            pane_drag_target: None,
             terminals,
             terminal_labels: HashMap::new(),
+            active_harnesses: HashMap::new(),
+            output_activity: HashMap::new(),
+            terminal_input_at: HashMap::new(),
+            harness_poll_requested_at: None,
+            graph_pulse: false,
             agent_graphs: HashMap::new(),
             agent_graph_save_due: HashMap::new(),
             external_waiters: Vec::new(),
             pending_agent_deliveries: Vec::new(),
             graph_context: None,
             graph_rename: None,
+            agent_graph_create_at: None,
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
             editors: BTreeMap::new(),
@@ -1503,6 +1570,172 @@ impl Shell {
         self.workspaces.active().and_then(|ws| ws.path.as_deref())
     }
 
+    fn update_tab_drag(&mut self, cursor: iced::Point) {
+        let Some(origin) = self.tab_drag_origin else {
+            return;
+        };
+        self.tab_drag_cursor = Some(cursor);
+        let dx = cursor.x - origin.x;
+        let dy = cursor.y - origin.y;
+        self.tab_drag_active |= dx * dx + dy * dy >= 36.0;
+    }
+
+    fn finish_tab_drag(&mut self, target: Option<(Pane, PaneDropZone, Option<usize>)>) {
+        let source = self.tab_drag_source.take();
+        let active = self.tab_drag_active;
+        self.tab_drag_origin = None;
+        self.tab_drag_cursor = None;
+        self.tab_drag_active = false;
+        self.tab_drag_target = None;
+        self.pane_drag_target = None;
+
+        let (Some((from, index)), Some((to, zone, insertion)), true) = (source, target, active)
+        else {
+            return;
+        };
+        let moved = if let Some(insertion) = insertion {
+            self.panes.move_tab(from, index, to, insertion)
+        } else {
+            match zone {
+                PaneDropZone::Center | PaneDropZone::Strip if from != to => {
+                    let end = self.panes.model(to).map_or(0, |model| model.tabs().len());
+                    self.panes.move_tab(from, index, to, end)
+                }
+                PaneDropZone::Center | PaneDropZone::Strip => false,
+                PaneDropZone::Left => self
+                    .panes
+                    .move_tab_to_split(from, index, to, Axis::Vertical, true)
+                    .is_some(),
+                PaneDropZone::Right => self
+                    .panes
+                    .move_tab_to_split(from, index, to, Axis::Vertical, false)
+                    .is_some(),
+                PaneDropZone::Top => self
+                    .panes
+                    .move_tab_to_split(from, index, to, Axis::Horizontal, true)
+                    .is_some(),
+                PaneDropZone::Bottom => self
+                    .panes
+                    .move_tab_to_split(from, index, to, Axis::Horizontal, false)
+                    .is_some(),
+            }
+        };
+        if moved
+            && (insertion.is_some() || matches!(zone, PaneDropZone::Center | PaneDropZone::Strip))
+        {
+            self.panes.focus(to);
+        }
+    }
+
+    fn terminal_harness_icon(&self, id: TermId) -> Option<(&'static [u8], bool)> {
+        let kind = self.active_harnesses.get(&id).copied().or_else(|| {
+            match self
+                .status_runtime
+                .pane_record(&agent_status::pane_id_for_term(id))
+                .and_then(|record| record.harness())
+            {
+                Some(gsh_core::status::AgentHarness::Claude) => Some("claudecode"),
+                Some(gsh_core::status::AgentHarness::Codex) => Some("codex"),
+                Some(gsh_core::status::AgentHarness::Pi) => Some("pi"),
+                None => None,
+            }
+        })?;
+        let (icon, monochrome) = harness_icon(kind);
+        icon.map(|icon| (icon, monochrome))
+    }
+
+    fn poll_harness_processes(&mut self) -> Task<Msg> {
+        if self
+            .harness_poll_requested_at
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(250))
+        {
+            return Task::none();
+        }
+        self.harness_poll_requested_at = Some(Instant::now());
+        let roots = self
+            .terminals
+            .iter()
+            .filter_map(|(id, term)| term.child_pid().map(|pid| (*id, pid)))
+            .collect::<Vec<_>>();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let processes = harness_monitor::scan(
+                        &roots.iter().map(|(_, pid)| *pid).collect::<Vec<_>>(),
+                    );
+                    roots
+                        .into_iter()
+                        .filter_map(|(id, pid)| {
+                            harness_monitor::detect(pid, &processes)
+                                .map(|kind| (id, kind.to_owned()))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await
+                .unwrap_or_default()
+            },
+            Msg::HarnessDetected,
+        )
+    }
+
+    fn apply_harness_detection(&mut self, detected: Vec<(TermId, String)>) {
+        self.active_harnesses = detected
+            .into_iter()
+            .map(|(id, kind)| {
+                (
+                    id,
+                    match kind.as_str() {
+                        "antigravity" => "antigravity",
+                        "claudecode" => "claudecode",
+                        "codex" => "codex",
+                        "cursor" => "cursor",
+                        "githubcopilot" => "githubcopilot",
+                        "opencode" => "opencode",
+                        "pi" => "pi",
+                        _ => "",
+                    },
+                )
+            })
+            .filter(|(_, kind)| !kind.is_empty())
+            .collect();
+        if let Some(PaneTab::AgentGraph(workspace)) = self.panes.focused_model().active_tab() {
+            let workspace = workspace.clone();
+            self.place_missing_graph_agents(&workspace);
+        }
+        let cutoff = Instant::now() - Duration::from_secs(3);
+        self.output_activity
+            .retain(|id, at| self.terminals.contains_key(id) && *at >= cutoff);
+    }
+
+    fn poll_terminal_output(&mut self) {
+        let ids = self
+            .active_harnesses
+            .keys()
+            .filter(|id| {
+                self.status_runtime
+                    .pane_record(&agent_status::pane_id_for_term(**id))
+                    .and_then(|record| record.harness())
+                    .is_none()
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        for id in ids {
+            let Some(term) = self.terminals.get_mut(&id) else {
+                continue;
+            };
+            let previous = term.snapshot().clone();
+            let _ = term.update(TerminalMsg::Tick);
+            if term.snapshot() != &previous
+                && self
+                    .terminal_input_at
+                    .get(&id)
+                    .is_none_or(|at| at.elapsed() >= Duration::from_millis(300))
+            {
+                self.output_activity.insert(id, Instant::now());
+            }
+        }
+    }
+
     fn poll_external_waiters(&mut self) {
         let now = Instant::now();
         let mut waiting = Vec::new();
@@ -1616,17 +1849,53 @@ impl Shell {
             .keys()
             .filter_map(|id| {
                 let pane_id = agent_status::pane_id_for_term(*id);
-                self.status_runtime
+                (self
+                    .status_runtime
                     .pane_record(&pane_id)
                     .and_then(|record| record.harness())
                     .is_some()
-                    .then_some(pane_id)
+                    || self.active_harnesses.contains_key(id))
+                .then_some(pane_id)
             })
             .collect::<Vec<_>>();
         if let Some(graph) = self.agent_graphs.get(workspace) {
             ids.extend(graph.externals().keys().cloned());
         }
         ids
+    }
+
+    fn place_missing_graph_agents(&mut self, workspace: &Path) {
+        let ids = self.live_graph_agents(workspace);
+        let (placed, maestro, linked) = {
+            let graph = self
+                .agent_graphs
+                .entry(workspace.to_path_buf())
+                .or_default();
+            let placed = graph.place_missing(&ids);
+            let maestro = graph.maestro().map(str::to_owned);
+            let linked = maestro.as_ref().map_or_else(Vec::new, |maestro| {
+                placed
+                    .iter()
+                    .filter(|id| graph.add_link(maestro, id))
+                    .cloned()
+                    .collect()
+            });
+            (placed, maestro, linked)
+        };
+        if let Some(maestro) = maestro {
+            for id in linked {
+                let intro = self.link_intro(workspace, &maestro, &id);
+                self.queue_agent_delivery(
+                    workspace.to_path_buf(),
+                    maestro.clone(),
+                    id,
+                    vec![intro],
+                );
+            }
+        }
+        if !placed.is_empty() {
+            self.schedule_agent_graph_save(workspace.to_path_buf());
+        }
     }
 
     fn graph_agent_label(
@@ -1897,11 +2166,12 @@ impl Shell {
                     .status_runtime
                     .pane_record(&pane_id)
                     .is_some_and(|record| record.harness().is_some());
-                if by_hook || activity.touched_count(&pane_id) > 0 {
+                let active_harness = self.active_harnesses.contains_key(id);
+                if by_hook || active_harness || activity.touched_count(&pane_id) > 0 {
                     tabs.push(AgentTab {
                         id: pane_id,
                         label: model.display_title(tab),
-                        by_hook,
+                        by_hook: by_hook || active_harness,
                     });
                 }
             }
@@ -2448,6 +2718,74 @@ impl Shell {
                 self.hovered_tab = tab;
                 Task::none()
             }
+            Msg::TabDrag(pane, event) => {
+                match event {
+                    TabDragEvent::Start { index, cursor } => {
+                        self.tab_drag_source = Some((pane, index));
+                        self.tab_drag_origin = Some(cursor);
+                        self.tab_drag_cursor = Some(cursor);
+                        self.tab_drag_active = false;
+                        self.tab_drag_target = None;
+                        self.pane_drag_target = None;
+                        self.panes.focus(pane);
+                        if let Some(model) = self.panes.model_mut(pane) {
+                            model.activate(index);
+                        }
+                    }
+                    TabDragEvent::Hover {
+                        index,
+                        before,
+                        cursor,
+                    } => {
+                        self.update_tab_drag(cursor);
+                        if self.tab_drag_active {
+                            self.tab_drag_target = Some((pane, index, before));
+                            self.pane_drag_target = None;
+                        }
+                    }
+                    TabDragEvent::Drop { cursor, .. } => {
+                        self.update_tab_drag(cursor);
+                        if self.tab_drag_active {
+                            if let Some((target, index, before)) = self.tab_drag_target {
+                                self.finish_tab_drag(Some((
+                                    target,
+                                    PaneDropZone::Center,
+                                    Some(index + usize::from(!before)),
+                                )));
+                            } else {
+                                self.finish_tab_drag(None);
+                            }
+                        } else {
+                            self.finish_tab_drag(None);
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Msg::PaneDrag(pane, event) => {
+                match event {
+                    PaneDragEvent::Hover { zone, cursor } => {
+                        self.update_tab_drag(cursor);
+                        if self.tab_drag_active {
+                            if zone == PaneDropZone::Strip && self.tab_drag_target.is_some() {
+                                self.pane_drag_target = None;
+                            } else {
+                                self.pane_drag_target = Some((pane, zone));
+                                self.tab_drag_target = None;
+                            }
+                        }
+                    }
+                    PaneDragEvent::Drop { zone, cursor } => {
+                        self.update_tab_drag(cursor);
+                        if self.tab_drag_active {
+                            self.finish_tab_drag(Some((pane, zone, None)));
+                        } else {
+                            self.finish_tab_drag(None);
+                        }
+                    }
+                }
+                Task::none()
+            }
             Msg::WindowCloseRequested(id) => {
                 if self.editors.values().any(|e| e.state.buffer.is_dirty()) {
                     self.pending_window_close = Some(id);
@@ -2517,6 +2855,19 @@ impl Shell {
                     );
                 }
                 Task::batch(command_tasks)
+            }
+            Msg::HarnessPoll => self.poll_harness_processes(),
+            Msg::HarnessDetected(detected) => {
+                self.apply_harness_detection(detected);
+                Task::none()
+            }
+            Msg::TerminalActivityTick => {
+                self.poll_terminal_output();
+                Task::none()
+            }
+            Msg::AgentGraphPulse => {
+                self.graph_pulse = !self.graph_pulse;
+                Task::none()
             }
             Msg::TeamCliCommand(command) => self.handle_team_cli(command),
             Msg::TeamCliSendComplete(reply, from, result, flight) => {
@@ -2598,7 +2949,19 @@ impl Shell {
                         .terminals
                         .iter_mut()
                         .filter(|(id, _)| visible.contains(id))
-                        .map(|(_, term)| term.update(TerminalMsg::Tick).map(Msg::Terminal));
+                        .map(|(id, term)| {
+                            let previous = term.snapshot().clone();
+                            let task = term.update(TerminalMsg::Tick).map(Msg::Terminal);
+                            if term.snapshot() != &previous
+                                && self
+                                    .terminal_input_at
+                                    .get(id)
+                                    .is_none_or(|at| at.elapsed() >= Duration::from_millis(300))
+                            {
+                                self.output_activity.insert(*id, Instant::now());
+                            }
+                            task
+                        });
                     return Task::batch(ticks.chain(command_tasks));
                 }
                 if let TerminalMsg::Keyboard(iced::keyboard::Event::KeyPressed {
@@ -2633,10 +2996,22 @@ impl Shell {
                 }
             }
             Msg::TerminalIn(id, term_msg) => {
-                self.terminals.get_mut(&id).map_or_else(Task::none, |term| {
+                let submitted_input = matches!(
+                    &term_msg,
+                    TerminalMsg::Keyboard(iced::keyboard::Event::KeyPressed { .. })
+                );
+                if submitted_input {
+                    self.terminal_input_at.insert(id, Instant::now());
+                }
+                let terminal_task = self.terminals.get_mut(&id).map_or_else(Task::none, |term| {
                     term.update(term_msg)
                         .map(move |message| Msg::TerminalIn(id, message))
-                })
+                });
+                if submitted_input {
+                    Task::batch([terminal_task, self.poll_harness_processes()])
+                } else {
+                    terminal_task
+                }
             }
             Msg::Chat(id, chat_msg) => {
                 if let Some(chat) = self.chats.get_mut(&id) {
@@ -2998,9 +3373,23 @@ impl Shell {
                     self.agent_graphs.insert(workspace.clone(), graph);
                 }
                 self.panes.focused_model_mut().open_agent_graph(&workspace);
+                self.place_missing_graph_agents(&workspace);
                 Task::none()
             }
             Msg::AgentGraph(agent_graph::Message::Create) => {
+                self.agent_graph_create_at = None;
+                let root = self
+                    .active_workspace_dir()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_default();
+                self.agent_graph_dialog = Some(agent_graph_dialog::Draft::new(
+                    &root,
+                    desktop_agent_apps::detect(),
+                ));
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::CreateAt(x, y)) => {
+                self.agent_graph_create_at = Some((x, y));
                 let root = self
                     .active_workspace_dir()
                     .map(Path::to_path_buf)
@@ -3215,6 +3604,7 @@ impl Shell {
             Msg::AgentGraphDialog(message) => match message {
                 agent_graph_dialog::Message::Cancel => {
                     self.agent_graph_dialog = None;
+                    self.agent_graph_create_at = None;
                     Task::none()
                 }
                 agent_graph_dialog::Message::Browse => {
@@ -3250,12 +3640,36 @@ impl Shell {
                             Msg::AgentDesktopInstalled,
                         );
                     }
-                    let id = self.panes.alloc_term_id();
+                    let graph_pane = self.panes.focused();
+                    let target_pane = self.panes.leaves().into_iter().find(|pane| {
+                        *pane != graph_pane
+                            && self.panes.model(*pane).is_some_and(|model| {
+                                !model
+                                    .tabs()
+                                    .iter()
+                                    .any(|tab| matches!(tab, PaneTab::AgentGraph(_)))
+                            })
+                    });
+                    let id = if let Some(pane) = target_pane {
+                        let id = self.panes.alloc_term_id();
+                        if let Some(model) = self.panes.model_mut(pane) {
+                            model.open_terminal(id);
+                            model.set_terminal_label(id, draft.name.trim().to_owned());
+                        }
+                        id
+                    } else {
+                        let Some(id) = self.panes.split_with_terminal(graph_pane, Axis::Vertical)
+                        else {
+                            self.agent_graph_dialog = Some(draft);
+                            return Task::none();
+                        };
+                        if let Some(model) = self.panes.model_mut(self.panes.focused()) {
+                            model.set_terminal_label(id, draft.name.trim().to_owned());
+                        }
+                        id
+                    };
                     let cwd = PathBuf::from(draft.cwd.trim());
-                    self.panes.focused_model_mut().open_terminal(id);
-                    self.panes
-                        .focused_model_mut()
-                        .set_terminal_label(id, draft.name.trim().to_owned());
+                    self.panes.focus(graph_pane);
                     let mut term = self.spawn_terminal_for_dir(id, Some(cwd.as_path()));
                     if !draft.command.trim().is_empty() {
                         term.send_command(draft.command.trim());
@@ -3271,6 +3685,9 @@ impl Shell {
                     let mut live = self.live_graph_agents(&workspace);
                     live.push(tab_id.clone());
                     let graph = self.agent_graphs.entry(workspace.clone()).or_default();
+                    if let Some((x, y)) = self.agent_graph_create_at.take() {
+                        graph.set_position(&tab_id, x, y);
+                    }
                     if let Some(index) = draft.color {
                         if let Some(color) = gsh_core::agent_color::AGENT_PALETTE.get(index) {
                             let argb = 0xff00_0000
@@ -3869,9 +4286,50 @@ impl Shell {
         } else {
             Subscription::none()
         };
+        let harness_poll = if self
+            .terminals
+            .values()
+            .any(|term| term.child_pid().is_some())
+        {
+            iced::time::every(Duration::from_secs(2)).map(|_| Msg::HarnessPoll)
+        } else {
+            Subscription::none()
+        };
+        let output_heuristic_active = self.active_harnesses.keys().any(|id| {
+            self.status_runtime
+                .pane_record(&agent_status::pane_id_for_term(*id))
+                .and_then(|record| record.harness())
+                .is_none()
+        });
+        let terminal_activity = if output_heuristic_active {
+            iced::time::every(Duration::from_millis(100)).map(|_| Msg::TerminalActivityTick)
+        } else {
+            Subscription::none()
+        };
+        let graph_visible = matches!(
+            self.panes.focused_model().active_tab(),
+            Some(PaneTab::AgentGraph(_))
+        );
+        let graph_working = self.terminals.keys().any(|id| {
+            self.status_runtime
+                .pane_record(&agent_status::pane_id_for_term(*id))
+                .is_some_and(|record| record.status() == gsh_core::status::TurnStatus::Working)
+                || self
+                    .output_activity
+                    .get(id)
+                    .is_some_and(|at| at.elapsed() < Duration::from_secs(3))
+        });
+        let graph_pulse = if graph_visible && graph_working {
+            iced::time::every(Duration::from_millis(450)).map(|_| Msg::AgentGraphPulse)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch(
             [
                 status_sub,
+                harness_poll,
+                terminal_activity,
+                graph_pulse,
                 query_shortcuts,
                 query_disk,
                 telemetry_poll,
@@ -3945,18 +4403,37 @@ impl Shell {
                             continue;
                         };
                         let tab_id = agent_status::pane_id_for_term(*id);
-                        if self
+                        let hook = self
                             .status_runtime
                             .pane_record(&tab_id)
-                            .and_then(|record| record.harness())
-                            .is_none()
-                        {
+                            .and_then(|record| record.harness());
+                        let harness = self.active_harnesses.get(id).copied().or(match hook {
+                            Some(gsh_core::status::AgentHarness::Claude) => Some("claudecode"),
+                            Some(gsh_core::status::AgentHarness::Codex) => Some("codex"),
+                            Some(gsh_core::status::AgentHarness::Pi) => Some("pi"),
+                            None => None,
+                        });
+                        let Some(harness) = harness else {
                             continue;
-                        }
-                        let status = self
+                        };
+                        let hook_record = self
                             .status_runtime
                             .pane_record(&tab_id)
-                            .map_or(gsh_core::status::TurnStatus::Idle, |record| record.status());
+                            .filter(|record| record.harness().is_some());
+                        let status = hook_record.map_or_else(
+                            || {
+                                if self
+                                    .output_activity
+                                    .get(id)
+                                    .is_some_and(|at| at.elapsed() < Duration::from_secs(3))
+                                {
+                                    gsh_core::status::TurnStatus::Working
+                                } else {
+                                    gsh_core::status::TurnStatus::Idle
+                                }
+                            },
+                            |record| record.status(),
+                        );
                         let status = match status {
                             gsh_core::status::TurnStatus::Working => {
                                 labels::AGENT_GRAPH_STATUS_WORKING
@@ -3970,6 +4447,7 @@ impl Shell {
                             .terminal_labels
                             .get(id)
                             .cloned()
+                            .or_else(|| term.title())
                             .unwrap_or_else(|| model.display_title(tab));
                         let cwd = term
                             .cwd()
@@ -3994,7 +4472,12 @@ impl Shell {
                             label,
                             detail: cwd,
                             status: status.to_owned(),
+                            status_pulsing: status == labels::AGENT_GRAPH_STATUS_WORKING
+                                && self.graph_pulse,
                             color,
+                            harness_icon: harness_icon(harness).0,
+                            harness_icon_monochrome: harness_icon(harness).1,
+                            queued: 0,
                             maestro: graph.and_then(agent_graph_store::AgentGraphStore::maestro)
                                 == Some(tab_id.as_str()),
                         });
@@ -4038,7 +4521,14 @@ impl Shell {
                                 labels::AGENT_GRAPH_STATUS_OFFLINE
                             }
                             .to_owned(),
+                            status_pulsing: false,
                             color,
+                            harness_icon: Some(external.app.icon()),
+                            harness_icon_monochrome: !matches!(
+                                external.app,
+                                desktop_agent_apps::DesktopApp::CodexDesktop
+                            ),
+                            queued: external.inbox.len(),
                             maestro: graph.maestro() == Some(id.as_str()),
                         });
                         let at = graph.position(id).unwrap_or_else(|| {
@@ -4137,12 +4627,33 @@ impl Shell {
         let hovered = self
             .hovered_tab
             .and_then(|(hovered_pane, index)| (hovered_pane == pane).then_some(index));
+        let drop_target = self
+            .tab_drag_target
+            .and_then(|(target_pane, index, before)| {
+                (target_pane == pane).then_some((index, before))
+            });
         pane_chrome::view(
             model,
             content,
             ChromeCallbacks {
                 on_select_tab: move |index| Msg::SelectTabIn(pane, index),
                 on_close_tab: move |index| Msg::CloseTabIn(pane, index),
+                on_tab_drag: move |_, event| Msg::TabDrag(pane, event),
+                drop_target,
+                drag_source: if self.tab_drag_active {
+                    self.tab_drag_source
+                        .and_then(|(source_pane, index)| (source_pane == pane).then_some(index))
+                } else {
+                    None
+                },
+                on_pane_drag: move |event| Msg::PaneDrag(pane, event),
+                pane_drop_zone: self
+                    .pane_drag_target
+                    .and_then(|(target_pane, zone)| (target_pane == pane).then_some(zone)),
+                terminal_icon: |term_id| self.terminal_harness_icon(term_id),
+                terminal_title: |term_id| {
+                    self.terminals.get(&term_id).and_then(TerminalPane::title)
+                },
                 on_new_terminal: Msg::NewTerminalIn(pane),
                 noop_msg: Msg::Noop,
                 on_split_right: Msg::SplitPane(pane, Axis::Vertical),
@@ -4489,7 +5000,7 @@ impl Shell {
             .into(),
             None => layered,
         };
-        match self.agent_graph_dialog.as_ref() {
+        let layered: Element<'_, Msg> = match self.agent_graph_dialog.as_ref() {
             Some(draft) => {
                 let taken = self.terminal_labels.values().cloned().collect::<Vec<_>>();
                 stack![
@@ -4498,6 +5009,37 @@ impl Shell {
                 ]
                 .into()
             }
+            None => layered,
+        };
+        let drag_feedback: Option<Element<'_, Msg>> = if self.tab_drag_active {
+            self.tab_drag_source
+                .zip(self.tab_drag_cursor)
+                .and_then(|((pane, index), cursor)| {
+                    let model = self.panes.model(pane)?;
+                    let tab = model.tabs().get(index)?;
+                    let title = match tab {
+                        PaneTab::Terminal(id) if model.terminal_label(*id).is_none() => self
+                            .terminals
+                            .get(id)
+                            .and_then(TerminalPane::title)
+                            .unwrap_or_else(|| model.display_title(tab)),
+                        _ => model.display_title(tab),
+                    };
+                    let icon = match tab {
+                        PaneTab::Terminal(id) => self.terminal_harness_icon(*id),
+                        _ => None,
+                    };
+                    Some(
+                        iced::widget::pin(pane_tab::drag_feedback::<Msg>(tab, title, icon))
+                            .position(iced::Point::new(cursor.x + 12.0, cursor.y + 8.0))
+                            .into(),
+                    )
+                })
+        } else {
+            None
+        };
+        match drag_feedback {
+            Some(feedback) => stack![layered, feedback].into(),
             None => layered,
         }
     }
@@ -4630,14 +5172,26 @@ mod tests {
             panes: PaneTree::default(),
             pending_close_pane: None,
             hovered_tab: None,
+            tab_drag_source: None,
+            tab_drag_target: None,
+            tab_drag_origin: None,
+            tab_drag_cursor: None,
+            tab_drag_active: false,
+            pane_drag_target: None,
             terminals,
             terminal_labels: HashMap::new(),
+            active_harnesses: HashMap::new(),
+            output_activity: HashMap::new(),
+            terminal_input_at: HashMap::new(),
+            harness_poll_requested_at: None,
+            graph_pulse: false,
             agent_graphs: HashMap::new(),
             agent_graph_save_due: HashMap::new(),
             external_waiters: Vec::new(),
             pending_agent_deliveries: Vec::new(),
             graph_context: None,
             graph_rename: None,
+            agent_graph_create_at: None,
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
             editors: BTreeMap::new(),
@@ -4851,8 +5405,67 @@ mod tests {
     }
 
     #[test]
+    fn clicking_a_tab_does_not_reorder_it_but_dragging_does() {
+        let mut shell = test_shell();
+        let pane = shell.panes.focused();
+        let model = shell.panes.model_mut(pane).expect("source pane");
+        model.open_terminal(2);
+        model.open_terminal(3);
+        let origin = iced::Point::new(100.0, 100.0);
+        let _ = shell.update(Msg::TabDrag(
+            pane,
+            TabDragEvent::Start {
+                index: 0,
+                cursor: origin,
+            },
+        ));
+        let _ = shell.update(Msg::TabDrag(
+            pane,
+            TabDragEvent::Drop {
+                index: 0,
+                cursor: origin,
+            },
+        ));
+        assert_eq!(
+            shell.panes.model(pane).expect("source pane").tabs(),
+            &[
+                PaneTab::Terminal(1),
+                PaneTab::Terminal(2),
+                PaneTab::Terminal(3)
+            ]
+        );
+
+        let _ = shell.update(Msg::TabDrag(
+            pane,
+            TabDragEvent::Start {
+                index: 0,
+                cursor: origin,
+            },
+        ));
+        let cursor = iced::Point::new(110.0, 100.0);
+        let _ = shell.update(Msg::TabDrag(
+            pane,
+            TabDragEvent::Hover {
+                index: 2,
+                before: false,
+                cursor,
+            },
+        ));
+        let _ = shell.update(Msg::TabDrag(pane, TabDragEvent::Drop { index: 2, cursor }));
+        assert_eq!(
+            shell.panes.model(pane).expect("source pane").tabs(),
+            &[
+                PaneTab::Terminal(2),
+                PaneTab::Terminal(3),
+                PaneTab::Terminal(1)
+            ]
+        );
+    }
+
+    #[test]
     fn creating_terminal_agent_applies_monitor_maestro_and_greeting_options() {
         let mut shell = test_shell();
+        let _ = shell.update(Msg::OpenAgentGraph);
         let directory = tempfile::tempdir().expect("temporary working directory");
         let workspace = shell
             .active_workspace_dir()
@@ -4869,11 +5482,14 @@ mod tests {
 
         let _ = shell.update(Msg::AgentGraphDialog(agent_graph_dialog::Message::Create));
 
-        assert!(shell
-            .panes
-            .focused_model()
-            .tabs()
-            .contains(&PaneTab::Terminal(2)));
+        assert!(matches!(
+            shell.panes.focused_model().active_tab(),
+            Some(PaneTab::AgentGraph(_))
+        ));
+        assert_ne!(
+            shell.panes.pane_of(&PaneTab::Terminal(2)),
+            Some(shell.panes.focused())
+        );
         assert_eq!(
             shell.terminal_labels.get(&2).map(String::as_str),
             Some("Revisor")

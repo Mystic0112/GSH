@@ -10,12 +10,22 @@ use iced::advanced::overlay;
 use iced::advanced::renderer;
 use iced::advanced::widget::{tree, Operation, Tree};
 use iced::advanced::{Clipboard, Shell, Widget};
-use iced::{mouse, touch, Element, Event, Length, Rectangle, Size, Vector};
+use iced::{mouse, touch, Element, Event, Length, Point, Rectangle, Size, Vector};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerPhase {
+    Press,
+    Move,
+    Release,
+}
+
+type PointerCallback<'a, Message> = dyn Fn(Point, Size, Point, PointerPhase) -> Message + 'a;
 
 pub struct FocusOnPress<'a, Message, Theme, Renderer> {
     content: Element<'a, Message, Theme, Renderer>,
     /// `None` quando o pane já é o focado: nada a publicar.
     on_press: Option<Message>,
+    on_pointer_event: Option<Box<PointerCallback<'a, Message>>>,
 }
 
 impl<'a, Message, Theme, Renderer> FocusOnPress<'a, Message, Theme, Renderer> {
@@ -26,7 +36,16 @@ impl<'a, Message, Theme, Renderer> FocusOnPress<'a, Message, Theme, Renderer> {
         Self {
             content: content.into(),
             on_press,
+            on_pointer_event: None,
         }
+    }
+
+    pub fn on_pointer_event(
+        mut self,
+        callback: impl Fn(Point, Size, Point, PointerPhase) -> Message + 'a,
+    ) -> Self {
+        self.on_pointer_event = Some(Box::new(callback));
+        self
     }
 }
 
@@ -100,6 +119,26 @@ where
         if let (true, Some(message)) = (pressed, self.on_press.as_ref()) {
             if cursor.is_over(layout.bounds()) {
                 shell.publish(message.clone());
+            }
+        }
+
+        let phase = match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                Some(PointerPhase::Press)
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. }) => Some(PointerPhase::Move),
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                Some(PointerPhase::Release)
+            }
+            _ => None,
+        };
+        if let (Some(phase), Some(callback), Some(position)) = (
+            phase,
+            self.on_pointer_event.as_ref(),
+            cursor.position_in(layout.bounds()),
+        ) {
+            if let Some(global) = cursor.position() {
+                shell.publish(callback(position, layout.bounds().size(), global, phase));
             }
         }
     }

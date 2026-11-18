@@ -5,12 +5,29 @@ use crate::{
     pane_tab::view_tab,
     theme,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TabDragEvent {
+    Start {
+        index: usize,
+        cursor: iced::Point,
+    },
+    Hover {
+        index: usize,
+        before: bool,
+        cursor: iced::Point,
+    },
+    Drop {
+        index: usize,
+        cursor: iced::Point,
+    },
+}
 use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
 
-pub(crate) fn view_tab_strip<'a, M, FSelect, FClose, FHover>(
+pub(crate) fn view_tab_strip<'a, M, FSelect, FClose, FHover, FDrag, FIcon, FTitle, FPaneDrag>(
     model: &'a PaneModel,
-    callbacks: ChromeCallbacks<M, FSelect, FClose>,
+    callbacks: ChromeCallbacks<M, FSelect, FClose, FDrag, FIcon, FTitle, FPaneDrag>,
     dirty: &dyn Fn(&PaneTab) -> bool,
     hovered: Option<usize>,
     on_hover: FHover,
@@ -21,22 +38,65 @@ where
     FSelect: Fn(usize) -> M + 'a,
     FClose: Fn(usize) -> M + 'a,
     FHover: Fn(Option<usize>) -> M,
+    FDrag: Fn(usize, TabDragEvent) -> M + 'a,
+    FIcon: Fn(crate::pane_model::TermId) -> Option<(&'static [u8], bool)>,
+    FTitle: Fn(crate::pane_model::TermId) -> Option<String>,
 {
     let active_idx = model.active_index();
     let mut tabs_row = row![].height(Fill).align_y(Alignment::Center);
+    let on_drag = std::rc::Rc::new(callbacks.on_tab_drag);
     for (idx, tab) in model.tabs().iter().enumerate() {
         let is_active = active_idx == Some(idx);
+        let on_drag_start = std::rc::Rc::clone(&on_drag);
+        let on_drag_hover = std::rc::Rc::clone(&on_drag);
+        let on_drag_drop = std::rc::Rc::clone(&on_drag);
         tabs_row = tabs_row.push(view_tab(
             tab,
             crate::pane_tab::TabPresentation {
-                title: model.display_title(tab),
+                title: match tab {
+                    PaneTab::Terminal(id) if model.terminal_label(*id).is_none() => {
+                        (callbacks.terminal_title)(*id).unwrap_or_else(|| model.display_title(tab))
+                    }
+                    _ => model.display_title(tab),
+                },
                 active: is_active,
                 dirty: dirty(tab),
                 hovered: hovered == Some(idx),
+                drop_before: callbacks
+                    .drop_target
+                    .filter(|(target, _)| *target == idx)
+                    .map(|(_, before)| before),
+                dragging: callbacks.drag_source == Some(idx),
             },
             (callbacks.on_select_tab)(idx),
             (callbacks.on_close_tab)(idx),
             (on_hover(Some(idx)), on_hover(None)),
+            (
+                move |cursor| on_drag_start(idx, TabDragEvent::Start { index: idx, cursor }),
+                move |point, cursor| {
+                    on_drag_hover(
+                        idx,
+                        TabDragEvent::Hover {
+                            index: idx,
+                            before: point.x < theme::TAB_WIDTH / 2.0,
+                            cursor,
+                        },
+                    )
+                },
+                move |point| {
+                    on_drag_drop(
+                        idx,
+                        TabDragEvent::Drop {
+                            index: idx,
+                            cursor: point,
+                        },
+                    )
+                },
+            ),
+            match tab {
+                PaneTab::Terminal(id) => (callbacks.terminal_icon)(*id),
+                _ => None,
+            },
         ));
     }
 

@@ -208,6 +208,7 @@ impl Dimensions for TermDimensions {
 #[derive(Clone, Default)]
 struct ProxyListener {
     pty_replies: Arc<Mutex<Vec<String>>>,
+    title: Arc<Mutex<Option<String>>>,
 }
 
 impl ProxyListener {
@@ -215,13 +216,19 @@ impl ProxyListener {
         let mut guard = lock_unpoisoned(&self.pty_replies);
         std::mem::take(&mut *guard)
     }
+
+    fn title(&self) -> Option<String> {
+        lock_unpoisoned(&self.title).clone()
+    }
 }
 
 impl EventListener for ProxyListener {
     fn send_event(&self, event: Event) {
-        if let Event::PtyWrite(text) = event {
-            let mut guard = lock_unpoisoned(&self.pty_replies);
-            guard.push(text);
+        match event {
+            Event::PtyWrite(text) => lock_unpoisoned(&self.pty_replies).push(text),
+            Event::Title(title) => *lock_unpoisoned(&self.title) = Some(title),
+            Event::ResetTitle => *lock_unpoisoned(&self.title) = None,
+            _ => {}
         }
     }
 }
@@ -478,6 +485,12 @@ impl TermSession {
         state.snapshot()
     }
 
+    /// Último título OSC 0/2 informado pelo programa do terminal.
+    pub fn title(&self) -> Option<String> {
+        let (lock, _) = &*self.state;
+        lock_unpoisoned(lock).listener.title()
+    }
+
     /// Rola o scrollback para cima (em direção ao histórico antigo) em `lines` linhas.
     pub fn scroll_up(&self, lines: usize) {
         if lines == 0 {
@@ -691,6 +704,15 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+
+    #[test]
+    fn osc_title_is_forwarded_and_reset() {
+        let listener = ProxyListener::default();
+        listener.send_event(Event::Title("~/projeto/agente".into()));
+        assert_eq!(listener.title().as_deref(), Some("~/projeto/agente"));
+        listener.send_event(Event::ResetTitle);
+        assert_eq!(listener.title(), None);
+    }
     use crate::snapshot::{NamedColor, Rgb, TermColor};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);

@@ -179,6 +179,10 @@ impl PaneModel {
         }
     }
 
+    pub fn terminal_label(&self, id: TermId) -> Option<&str> {
+        self.terminal_labels.get(&id).map(String::as_str)
+    }
+
     /// Abre uma aba de terminal `id` ao final da lista e a torna ativa.
     pub fn open_terminal(&mut self, id: TermId) {
         self.tabs.push(PaneTab::Terminal(id));
@@ -349,6 +353,49 @@ impl PaneModel {
         }
     }
 
+    /// Reordena uma aba usando a posição de destino antes da remoção, igual a
+    /// `reorderTabs` do Flutter. A aba ativa acompanha a mesma aba.
+    pub fn reorder_tab(&mut self, from: usize, target: usize) -> bool {
+        if from >= self.tabs.len() || target > self.tabs.len() {
+            return false;
+        }
+        let to = target.saturating_sub(if target > from { 1 } else { 0 });
+        if from == to {
+            return true;
+        }
+        let active = self.active;
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to.min(self.tabs.len()), tab);
+        self.active = active.map(|current| {
+            if current == from {
+                to
+            } else if from < current && to >= current {
+                current - 1
+            } else if from > current && to <= current {
+                current + 1
+            } else {
+                current
+            }
+        });
+        true
+    }
+
+    /// Insere uma aba transferida e a ativa; títulos OSC de terminais também
+    /// acompanham a aba ao mudar de pane.
+    pub fn insert_transferred(&mut self, index: usize, tab: PaneTab, label: Option<String>) {
+        let index = index.min(self.tabs.len());
+        match tab {
+            PaneTab::Terminal(id) => {
+                if let Some(label) = label {
+                    self.terminal_labels.insert(id, label);
+                }
+                self.tabs.insert(index, PaneTab::Terminal(id));
+            }
+            tab => self.tabs.insert(index, tab),
+        }
+        self.active = Some(index);
+    }
+
     /// Fecha a aba em `index`, ajustando a aba ativa e retornando a aba removida.
     pub fn close(&mut self, index: usize) -> Option<PaneTab> {
         if index >= self.tabs.len() {
@@ -454,6 +501,24 @@ mod tests {
         assert_eq!(model.active_index(), None);
         assert!(model.tabs().is_empty());
         assert_eq!(model.close(0), None);
+    }
+
+    #[test]
+    fn reorder_mantem_a_aba_ativa_e_usa_slot_antes_da_remocao() {
+        let mut model = with_terminal();
+        model.open_file("/proj/a.rs");
+        model.open_terminal(2);
+        assert!(model.reorder_tab(0, 3));
+        assert_eq!(
+            model.tabs(),
+            &[
+                PaneTab::File(PathBuf::from("/proj/a.rs")),
+                PaneTab::Terminal(2),
+                PaneTab::Terminal(1),
+            ]
+        );
+        assert_eq!(model.active_index(), Some(1));
+        assert_eq!(model.active_tab(), Some(&PaneTab::Terminal(2)));
     }
 
     #[test]
