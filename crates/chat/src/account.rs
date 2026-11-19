@@ -48,6 +48,8 @@ pub fn parse_models(init: &Value) -> Vec<ModelOption> {
                 description: string_of(m, "description"),
                 resolved: str_of(m, "resolvedModel").map(ToOwned::to_owned),
                 efforts,
+                // `initialize` e `get_usage` atuais não expõem esse requisito.
+                requires_credits: false,
             })
         })
         .collect()
@@ -315,6 +317,7 @@ mod tests {
         assert_eq!(m[0].resolved.as_deref(), Some("claude-opus-5-5"));
         assert_eq!(m[0].efforts, ["low", "high", "max"]);
         assert!(m[1].efforts.is_empty());
+        assert!(!m[0].requires_credits);
         assert!(parse_models(&Value::Null).is_empty());
     }
 

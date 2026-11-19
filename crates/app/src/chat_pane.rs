@@ -128,6 +128,7 @@ pub enum ChatMsg {
     },
     SetMode(String),
     SetModel(String),
+    SetPrimaryModel(u8),
     SetEffort(String),
     OpenComposerMenu(ComposerMenu),
     CloseComposerMenu,
@@ -186,9 +187,9 @@ pub enum ChatMsg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComposerMenu {
     Mode,
-    Effort,
     Model,
-    RefreshingEffort,
+    ModelEffort,
+    ModelMore,
     RefreshingModel,
 }
 
@@ -199,6 +200,57 @@ pub enum SlashKey {
     Enter,
     Tab,
     Escape,
+}
+
+/// Gets the highest listed model version for each supported family, in menu order.
+pub fn primary_models(models: &[ModelOption]) -> Vec<&ModelOption> {
+    ["opus", "sonnet", "fable", "haiku"]
+        .into_iter()
+        .filter_map(|family| {
+            models
+                .iter()
+                .filter(|model| model_family(model).as_deref() == Some(family))
+                .max_by_key(|model| model_version(model))
+        })
+        .collect()
+}
+
+fn model_family(model: &ModelOption) -> Option<String> {
+    ["opus", "sonnet", "fable", "haiku"]
+        .into_iter()
+        .find(|family| {
+            [&model.display_name, &model.value]
+                .into_iter()
+                .chain(model.resolved.as_ref())
+                .any(|name| name.to_ascii_lowercase().contains(family))
+        })
+        .map(str::to_owned)
+}
+
+fn model_version(model: &ModelOption) -> (u32, u32) {
+    let Some(family) = model_family(model) else {
+        return (0, 0);
+    };
+    let names = [&model.display_name, &model.value]
+        .into_iter()
+        .chain(model.resolved.as_ref());
+    for name in names {
+        let lower = name.to_ascii_lowercase();
+        let Some(index) = lower.find(&family) else {
+            continue;
+        };
+        let after_family = &name[index + family.len()..];
+        let digits: Vec<u32> = after_family
+            .split(|character: char| !character.is_ascii_digit())
+            .filter(|part| !part.is_empty())
+            .filter_map(|part| part.parse().ok())
+            .take(2)
+            .collect();
+        if let Some(major) = digits.first().copied() {
+            return (major, digits.get(1).copied().unwrap_or_default());
+        }
+    }
+    (0, 0)
 }
 
 /// Estado e controlador de uma aba de chat por agente.
@@ -660,6 +712,17 @@ impl ChatPane {
                 }
                 Task::none()
             }
+            ChatMsg::SetPrimaryModel(index) => {
+                if let Some(model) = primary_models(&self.models).get(index as usize) {
+                    self.composer_menu = None;
+                    let value = model.value.clone();
+                    self.model = Some(value.clone());
+                    if let Some(engine) = &self.engine {
+                        engine.set_model(&value);
+                    }
+                }
+                Task::none()
+            }
             ChatMsg::SetEffort(effort) => {
                 self.composer_menu = None;
                 self.effort = Some(effort.clone());
@@ -671,10 +734,9 @@ impl ChatPane {
             ChatMsg::OpenComposerMenu(menu) => {
                 self.composer_menu = Some(match menu {
                     ComposerMenu::Model => ComposerMenu::RefreshingModel,
-                    ComposerMenu::Effort => ComposerMenu::RefreshingEffort,
                     other => other,
                 });
-                if matches!(menu, ComposerMenu::Model | ComposerMenu::Effort) {
+                if matches!(menu, ComposerMenu::Model) {
                     self.update(ChatMsg::UsageRefresh)
                 } else {
                     Task::none()
@@ -831,10 +893,7 @@ impl ChatPane {
                     Some(ComposerMenu::RefreshingModel) if !self.models.is_empty() => {
                         Some(ComposerMenu::Model)
                     }
-                    Some(ComposerMenu::RefreshingEffort) if !self.efforts().is_empty() => {
-                        Some(ComposerMenu::Effort)
-                    }
-                    Some(ComposerMenu::RefreshingModel | ComposerMenu::RefreshingEffort) => None,
+                    Some(ComposerMenu::RefreshingModel) => None,
                     other => other,
                 };
                 Task::none()
@@ -844,10 +903,7 @@ impl ChatPane {
                     Some(ComposerMenu::RefreshingModel) if !self.models.is_empty() => {
                         Some(ComposerMenu::Model)
                     }
-                    Some(ComposerMenu::RefreshingEffort) if !self.efforts().is_empty() => {
-                        Some(ComposerMenu::Effort)
-                    }
-                    Some(ComposerMenu::RefreshingModel | ComposerMenu::RefreshingEffort) => None,
+                    Some(ComposerMenu::RefreshingModel) => None,
                     other => other,
                 };
                 Task::none()
@@ -1759,5 +1815,57 @@ mod tests {
         assert!(
             matches!(pane.items().last(),Some(ChatItem::Questions{answered:Some(a),..}) if a.get("Quais?").is_some_and(|v|v=="A, B") && a.get("Quando?").is_some_and(|v|v=="amanhã"))
         );
+    }
+
+    fn model(value: &str, display_name: &str, family_efforts: &[&str]) -> ModelOption {
+        ModelOption {
+            value: value.into(),
+            display_name: display_name.into(),
+            description: format!("{display_name} description"),
+            resolved: None,
+            efforts: family_efforts
+                .iter()
+                .map(|effort| (*effort).into())
+                .collect(),
+            requires_credits: false,
+        }
+    }
+
+    #[test]
+    fn atalhos_apontam_para_versao_mais_recente_de_cada_familia() {
+        let models = vec![
+            model("claude-opus-5-4", "Opus 5.4", &[]),
+            model("claude-haiku-5-5", "Haiku 5.5", &[]),
+            model("claude-fable-5-2", "Fable 5.2", &[]),
+            model("claude-sonnet-5-5", "Sonnet 5.5", &[]),
+            model("claude-opus-5-5", "Opus 5.5", &[]),
+            model("claude-sonnet-5-4", "Sonnet 5.4", &[]),
+        ];
+        let selected = primary_models(&models);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|model| model.display_name.as_str())
+                .collect::<Vec<_>>(),
+            ["Opus 5.5", "Sonnet 5.5", "Fable 5.2", "Haiku 5.5"],
+        );
+    }
+
+    #[test]
+    fn atalho_seleciona_modelo_e_esforco_aplica_nivel_escolhido() {
+        let mut pane = ChatPane::default();
+        pane.apply_event(ChatEvent::Models(vec![
+            model("claude-opus-5-5", "Opus 5.5", &["low", "high"]),
+            model("claude-sonnet-5-5", "Sonnet 5.5", &["low", "high"]),
+            model("claude-fable-5-2", "Fable 5.2", &["low", "max"]),
+            model("claude-haiku-5-5", "Haiku 5.5", &["low"]),
+        ]));
+        let _ = pane.update(ChatMsg::SetPrimaryModel(2));
+        assert_eq!(pane.model(), Some("claude-fable-5-2"));
+
+        pane.composer_menu = Some(ComposerMenu::ModelEffort);
+        let _ = pane.update(ChatMsg::SetEffort("max".into()));
+        assert_eq!(pane.effort(), Some("max"));
+        assert_eq!(pane.composer_menu(), None);
     }
 }

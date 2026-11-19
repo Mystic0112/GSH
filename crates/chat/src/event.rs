@@ -16,6 +16,8 @@ pub struct ModelOption {
     pub resolved: Option<String>,
     /// Níveis de esforço que o modelo aceita (`low`...`max`); vazio = não tem.
     pub efforts: Vec<String>,
+    /// O CLI atual não informa requisito de créditos por modelo; fica falso até haver sinal.
+    pub requires_credits: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

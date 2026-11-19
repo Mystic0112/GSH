@@ -1,15 +1,15 @@
 //! Barra inferior, seletores e medidor de uso do composer.
 
 use iced::widget::canvas::{self, Path, Stroke};
-use iced::widget::{button, container, row, text, tooltip, Space};
+use iced::widget::{button, container, mouse_area, row, text, tooltip, Space};
 use iced::{
-    mouse, Alignment, Background, Border, Element, Fill, Length, Point, Radians, Rectangle,
+    mouse, Alignment, Background, Border, Element, Event, Fill, Length, Point, Radians, Rectangle,
     Renderer, Theme,
 };
 
 use crate::anchored::Anchored;
 use crate::app_menu::{self, Entry, Item};
-use crate::chat_pane::{ChatMsg, ChatPane, ComposerMenu};
+use crate::chat_pane::{primary_models, ChatMsg, ChatPane, ComposerMenu};
 use crate::{labels, theme};
 
 pub(super) fn view_bottom_bar(pane: &ChatPane) -> Element<'_, ChatMsg> {
@@ -58,6 +58,7 @@ pub(super) fn view_bottom_bar(pane: &ChatPane) -> Element<'_, ChatMsg> {
             0.0,
         ),
         theme::CHAT_MODE_PADDING,
+        None,
     );
     let mut bar = row![
         attach,
@@ -101,64 +102,11 @@ pub(super) fn view_bottom_bar(pane: &ChatPane) -> Element<'_, ChatMsg> {
         ));
     }
     bar = bar.push(Space::new().width(2.0));
-    let efforts = pane.efforts();
-    if !efforts.is_empty() {
-        let mut effort_children = row![text(labels::ICON_SPEED)
-            .font(theme::FONT_ICON)
-            .size(theme::CHAT_EFFORT_ICON_SIZE)
-            .color(theme::palette().text3),]
-        .align_y(Alignment::Center);
-        if let Some(effort) = pane.effort() {
-            effort_children = effort_children.push(Space::new().width(4.0)).push(
-                text(effort_label(effort))
-                    .font(theme::FONT_BODY)
-                    .size(theme::CHAT_EFFORT_LABEL_SIZE)
-                    .color(theme::palette().text3),
-            );
-        }
-        let items = efforts
-            .iter()
-            .map(|effort| {
-                Item::Entry(
-                    Entry::new(effort_label(effort), ChatMsg::SetEffort(effort.clone()))
-                        .selected(pane.effort() == Some(effort.as_str())),
-                )
-            })
-            .collect();
-        let effort = tooltip(
-            picker(
-                effort_children.into(),
-                pane.composer_menu() == Some(ComposerMenu::Effort),
-                ComposerMenu::Effort,
-                app_menu::menu(items, 0.0),
-                theme::CHAT_EFFORT_PADDING,
-            ),
-            crate::pane_chrome::tip_bubble(format!(
-                "{}{}\n{}",
-                labels::CHAT_EFFORT_TOOLTIP,
-                pane.effort()
-                    .map(effort_label)
-                    .unwrap_or_else(|| labels::CHAT_EFFORT_AUTO.to_string()),
-                labels::CHAT_EFFORT_HINT,
-            )),
-            tooltip::Position::Top,
-        );
-        bar = bar.push(effort);
-    }
-    let model_items = pane
-        .models()
-        .iter()
-        .map(|model| {
-            Item::Entry(
-                Entry::new(&model.display_name, ChatMsg::SetModel(model.value.clone()))
-                    .description(model.description.clone())
-                    .selected(
-                        model.value == model_value
-                            || model.resolved.as_deref() == Some(model_value),
-                    ),
-            )
-        })
-        .collect();
+    let model_items = model_menu_items(pane, model_value);
+    let model_menu_open = matches!(
+        pane.composer_menu(),
+        Some(ComposerMenu::Model | ComposerMenu::ModelEffort | ComposerMenu::ModelMore)
+    );
     let model = picker(
         row![
             text(selected_model)
@@ -173,10 +121,11 @@ pub(super) fn view_bottom_bar(pane: &ChatPane) -> Element<'_, ChatMsg> {
         ]
         .align_y(Alignment::Center)
         .into(),
-        pane.composer_menu() == Some(ComposerMenu::Model),
+        model_menu_open,
         ComposerMenu::Model,
-        app_menu::menu(model_items, 0.0),
+        app_menu::menu(model_items, theme::MODEL_MENU_MIN_WIDTH),
         theme::CHAT_MODE_PADDING,
+        Some(model_menu_shortcut),
     );
     bar = bar.push(if pane.cost_usd() > 0.0 {
         tooltip(
@@ -261,6 +210,7 @@ fn picker<'a>(
     menu_type: ComposerMenu,
     menu: Element<'a, ChatMsg>,
     padding: [f32; 2],
+    key_handler: Option<fn(&Event) -> Option<ChatMsg>>,
 ) -> Element<'a, ChatMsg> {
     let trigger = button(content)
         .padding(padding)
@@ -275,7 +225,149 @@ fn picker<'a>(
             },
             ..Default::default()
         });
-    Anchored::new(trigger, open.then_some(menu), ChatMsg::CloseComposerMenu).into()
+    let anchored = Anchored::new(trigger, open.then_some(menu), ChatMsg::CloseComposerMenu);
+    match key_handler {
+        Some(handler) => anchored.on_key(handler).into(),
+        None => anchored.into(),
+    }
+}
+
+fn model_menu_shortcut(event: &Event) -> Option<ChatMsg> {
+    let Event::Keyboard(iced::keyboard::Event::KeyPressed { key, .. }) = event else {
+        return None;
+    };
+    model_shortcut(key)
+}
+
+fn model_shortcut(key: &iced::keyboard::Key) -> Option<ChatMsg> {
+    let iced::keyboard::Key::Character(value) = key else {
+        return None;
+    };
+    let index = match value.as_str() {
+        "1" => 0,
+        "2" => 1,
+        "3" => 2,
+        "4" => 3,
+        _ => return None,
+    };
+    Some(ChatMsg::SetPrimaryModel(index))
+}
+
+fn model_menu_items(pane: &ChatPane, current: &str) -> Vec<Item<ChatMsg>> {
+    let primary = primary_models(pane.models());
+    let mut items = primary
+        .iter()
+        .enumerate()
+        .map(|(index, model)| {
+            Item::Entry(
+                Entry::new(&model.display_name, ChatMsg::SetModel(model.value.clone()))
+                    .selected(model.value == current || model.resolved.as_deref() == Some(current))
+                    .shortcut((index + 1).to_string())
+                    .requires_credits(model.requires_credits),
+            )
+        })
+        .collect::<Vec<_>>();
+    items.push(Item::Divider);
+    let efforts = pane.efforts();
+    if !efforts.is_empty() {
+        let effort_items = efforts
+            .iter()
+            .map(|effort| {
+                Item::Entry(
+                    Entry::new(effort_label(effort), ChatMsg::SetEffort(effort.clone()))
+                        .selected(pane.effort() == Some(effort.as_str())),
+                )
+            })
+            .collect();
+        let effort_value = pane
+            .effort()
+            .map(effort_label)
+            .unwrap_or_else(|| labels::CHAT_EFFORT_AUTO.to_string());
+        items.push(Item::Custom(submenu_item(
+            labels::CHAT_MODEL_EFFORT,
+            Some(effort_value),
+            app_menu::menu(effort_items, 0.0),
+            pane.composer_menu() == Some(ComposerMenu::ModelEffort),
+            ChatMsg::OpenComposerMenu(ComposerMenu::ModelEffort),
+        )));
+        items.push(Item::Divider);
+    }
+    let primary_values = primary
+        .iter()
+        .map(|model| model.value.as_str())
+        .collect::<Vec<_>>();
+    let other_models = pane
+        .models()
+        .iter()
+        .filter(|model| !primary_values.contains(&model.value.as_str()))
+        .map(|model| {
+            Item::Entry(
+                Entry::new(&model.display_name, ChatMsg::SetModel(model.value.clone()))
+                    .description(model.description.clone())
+                    .selected(model.value == current || model.resolved.as_deref() == Some(current)),
+            )
+        })
+        .collect();
+    items.push(Item::Custom(submenu_item(
+        labels::CHAT_MODEL_MORE,
+        None,
+        app_menu::menu(other_models, 0.0),
+        pane.composer_menu() == Some(ComposerMenu::ModelMore),
+        ChatMsg::OpenComposerMenu(ComposerMenu::ModelMore),
+    )));
+    items
+}
+
+fn submenu_item(
+    label: &'static str,
+    detail: Option<String>,
+    menu: Element<'static, ChatMsg>,
+    open: bool,
+    message: ChatMsg,
+) -> Element<'static, ChatMsg> {
+    let mut content = row![text(label)
+        .font(theme::FONT_BODY)
+        .size(theme::AGENT_MENU_TEXT_SIZE)
+        .color(theme::palette().text)];
+    if let Some(detail) = detail {
+        content = content.push(Space::new().width(Fill)).push(
+            text(detail)
+                .font(theme::FONT_BODY)
+                .size(theme::AGENT_MENU_TEXT_SIZE)
+                .color(theme::palette().text3),
+        );
+    }
+    content = content.push(Space::new().width(Fill)).push(
+        text(labels::ICON_CHEVRON_RIGHT)
+            .font(theme::FONT_ICON)
+            .size(theme::AGENT_MENU_TEXT_SIZE)
+            .color(theme::palette().text3),
+    );
+    let trigger = button(content.align_y(Alignment::Center))
+        .width(Fill)
+        .padding(iced::Padding {
+            top: theme::AGENT_MENU_ITEM_VERTICAL,
+            right: theme::AGENT_MENU_ITEM_RIGHT,
+            bottom: theme::AGENT_MENU_ITEM_VERTICAL,
+            left: theme::AGENT_MENU_ITEM_LEFT,
+        })
+        .on_press(message.clone())
+        .style(|_: &Theme, status| button::Style {
+            background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                .then(|| Background::Color(theme::palette().panel3)),
+            text_color: theme::palette().text,
+            border: Border {
+                radius: theme::AGENT_MENU_RADIUS.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+    let trigger = mouse_area(trigger).on_enter(message);
+    Anchored::new(trigger, open.then_some(menu), ChatMsg::CloseComposerMenu)
+        .side()
+        .on_escape(ChatMsg::OpenComposerMenu(ComposerMenu::Model))
+        .on_leave(ChatMsg::OpenComposerMenu(ComposerMenu::Model))
+        .into()
 }
 
 fn effort_label(value: &str) -> String {
@@ -348,6 +440,18 @@ fn short_model_name_matches_dart_golden_cases() {
     for (input, expected) in cases {
         assert_eq!(short_model_name(input).as_str(), expected, "{input:?}");
     }
+}
+
+#[cfg(test)]
+#[test]
+fn model_menu_shortcuts_cover_primary_positions() {
+    use iced::keyboard::Key;
+    for (key, index) in [("1", 0), ("2", 1), ("3", 2), ("4", 3)] {
+        assert!(
+            matches!(model_shortcut(&Key::Character(key.into())), Some(ChatMsg::SetPrimaryModel(actual)) if actual == index)
+        );
+    }
+    assert!(model_shortcut(&Key::Character("5".into())).is_none());
 }
 
 struct UsageRing {

@@ -312,3 +312,131 @@ fn capture_chat_composer_snapshot() {
         .expect("snapshot write");
     std::fs::rename(generated, target).expect("rename snapshot");
 }
+
+#[cfg(test)]
+#[test]
+#[ignore = "gera capturas do menu de modelos e do submenu para revisão visual"]
+fn capture_chat_model_menu_snapshots() {
+    use iced::widget::container;
+    use iced::{Settings, Size};
+    use iced_test::simulator::Simulator;
+    use std::path::Path;
+
+    std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
+    theme::set_active(theme::ThemeVariant::Dark);
+    let mut pane = ChatPane::default();
+    pane.apply_event(gsh_chat::ChatEvent::Models(vec![
+        model_option(
+            "claude-opus-5-5",
+            "Opus 5.5",
+            "Best for everyday tasks",
+            &["low", "medium", "high", "xhigh", "max"],
+            false,
+        ),
+        model_option(
+            "claude-sonnet-5-5",
+            "Sonnet 5.5",
+            "Efficient for routine tasks",
+            &["low", "medium", "high", "xhigh"],
+            false,
+        ),
+        model_option(
+            "claude-fable-5-2",
+            "Fable 5.2",
+            "Most capable for hard tasks",
+            &["low", "high"],
+            true,
+        ),
+        model_option(
+            "claude-haiku-5-5",
+            "Haiku 5.5",
+            "Fastest for quick answers",
+            &["low", "medium"],
+            false,
+        ),
+        model_option(
+            "claude-opus-5-4",
+            "Opus 5.4",
+            "Previous Opus",
+            &["low", "high"],
+            false,
+        ),
+        model_option(
+            "claude-sonnet-5-4",
+            "Sonnet 5.4",
+            "Previous Sonnet",
+            &["low", "high"],
+            false,
+        ),
+    ]));
+    pane.apply_event(gsh_chat::ChatEvent::ModelChanged(
+        "claude-sonnet-5-5".into(),
+    ));
+    let _ = pane.update(ChatMsg::OpenComposerMenu(ComposerMenu::Model));
+    let _ = pane.update(ChatMsg::RefreshAccountResult(Ok(None)));
+
+    let settings = Settings {
+        fonts: theme::EMBEDDED_FONTS
+            .iter()
+            .map(|font| (*font).into())
+            .collect(),
+        default_font: theme::FONT_BODY,
+        ..Default::default()
+    };
+    let screenshot = |pane: &ChatPane, width: f32, target: &Path| {
+        let content = container(bar::view_bottom_bar(pane))
+            .width(Fill)
+            .height(Fill)
+            .style(|_: &Theme| container::Style {
+                background: Some(Background::Color(theme::palette().panel)),
+                ..Default::default()
+            });
+        let generated = target.with_file_name(format!(
+            "{}-tiny-skia.png",
+            target
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("model-menu")
+        ));
+        let _ = std::fs::remove_file(target);
+        let _ = std::fs::remove_file(&generated);
+        let mut simulator =
+            Simulator::with_size(settings.clone(), Size::new(width, 218.0), content);
+        simulator
+            .snapshot(&Theme::Dark)
+            .expect("model menu snapshot render")
+            .matches_image(target)
+            .expect("model menu snapshot write");
+        std::fs::rename(generated, target).expect("rename model menu snapshot");
+    };
+
+    screenshot(
+        &pane,
+        302.0,
+        Path::new("/home/heliodev/projetos/GSH-wt/shots/rust-model-menu-fixed.png"),
+    );
+    let _ = pane.update(ChatMsg::OpenComposerMenu(ComposerMenu::ModelEffort));
+    screenshot(
+        &pane,
+        600.0,
+        Path::new("/home/heliodev/projetos/GSH-wt/shots/rust-model-menu-fixed-submenu.png"),
+    );
+}
+
+#[cfg(test)]
+fn model_option(
+    value: &str,
+    display_name: &str,
+    description: &str,
+    efforts: &[&str],
+    requires_credits: bool,
+) -> gsh_chat::ModelOption {
+    gsh_chat::ModelOption {
+        value: value.into(),
+        display_name: display_name.into(),
+        description: description.into(),
+        resolved: None,
+        efforts: efforts.iter().map(|effort| (*effort).into()).collect(),
+        requires_credits,
+    }
+}

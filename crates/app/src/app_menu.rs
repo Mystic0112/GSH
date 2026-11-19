@@ -24,6 +24,8 @@ pub struct Entry<M> {
     pub leading: Option<Leading>,
     pub selected: bool,
     pub danger: bool,
+    pub shortcut: Option<String>,
+    pub requires_credits: bool,
     /// `None` = item cinza, não clicável.
     pub on_press: Option<M>,
 }
@@ -31,6 +33,7 @@ pub struct Entry<M> {
 pub enum Item<M> {
     Entry(Entry<M>),
     Divider,
+    Custom(Element<'static, M>),
 }
 
 impl<M> Entry<M> {
@@ -41,6 +44,8 @@ impl<M> Entry<M> {
             leading: None,
             selected: false,
             danger: false,
+            shortcut: None,
+            requires_credits: false,
             on_press: Some(on_press),
         }
     }
@@ -60,6 +65,16 @@ impl<M> Entry<M> {
         self
     }
 
+    pub fn shortcut(mut self, shortcut: impl Into<String>) -> Self {
+        self.shortcut = Some(shortcut.into());
+        self
+    }
+
+    pub fn requires_credits(mut self, requires_credits: bool) -> Self {
+        self.requires_credits = requires_credits;
+        self
+    }
+
     pub fn danger(mut self) -> Self {
         self.danger = true;
         self
@@ -75,6 +90,8 @@ impl<M> Entry<M> {
             leading: None,
             selected: false,
             danger: false,
+            shortcut: None,
+            requires_credits: false,
             on_press,
         }
     }
@@ -100,7 +117,7 @@ pub fn menu<'a, M: Clone + 'a>(items: Vec<Item<M>>, min_width: f32) -> Element<'
                     .map_or(0, |description| description.chars().count())
                     .max(entry.label.chars().count()),
             ),
-            Item::Divider => None,
+            Item::Divider | Item::Custom(_) => None,
         })
         .max()
         .unwrap_or(0);
@@ -112,6 +129,7 @@ pub fn menu<'a, M: Clone + 'a>(items: Vec<Item<M>>, min_width: f32) -> Element<'
             Item::Divider => container(panel_widgets::hairline_h())
                 .padding([theme::AGENT_MENU_DIVIDER_VERTICAL, 0.0])
                 .into(),
+            Item::Custom(content) => content,
             Item::Entry(entry) => entry_view(entry),
         });
     }
@@ -187,13 +205,49 @@ fn entry_view<'a, M: Clone + 'a>(entry: Entry<M>) -> Element<'a, M> {
             .into()
     };
     content = content.push(label);
-    if entry.selected {
-        content = content.push(Space::new().width(Fill)).push(
-            text(labels::ICON_CHECK)
+    if entry.requires_credits {
+        let badge = row![
+            text(labels::ICON_INFO_OUTLINE)
                 .font(theme::FONT_ICON)
-                .size(theme::AGENT_MENU_CHECK_SIZE)
-                .color(palette.accent_text),
-        );
+                .size(theme::CHAT_MODEL_CREDITS_ICON_SIZE)
+                .color(palette.text3),
+            text(labels::CHAT_MODEL_REQUIRES_CREDITS)
+                .font(theme::FONT_BODY)
+                .size(theme::CHAT_MODEL_CREDITS_TEXT_SIZE)
+                .color(palette.text3),
+        ]
+        .spacing(3.0)
+        .align_y(Alignment::Center);
+        content =
+            content
+                .push(Space::new().width(6.0))
+                .push(
+                    container(badge)
+                        .padding([2.0, 5.0])
+                        .style(|_: &Theme| container::Style {
+                            background: Some(Background::Color(theme::palette().panel3)),
+                            border: Border {
+                                radius: 9.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }),
+                );
+    }
+    if entry.selected || entry.shortcut.is_some() {
+        content = content
+            .push(Space::new().width(Fill))
+            .push(if entry.selected {
+                text(labels::ICON_CHECK)
+                    .font(theme::FONT_ICON)
+                    .size(theme::AGENT_MENU_CHECK_SIZE)
+                    .color(palette.accent)
+            } else {
+                text(entry.shortcut.unwrap_or_default())
+                    .font(theme::FONT_BODY)
+                    .size(theme::AGENT_MENU_TEXT_SIZE)
+                    .color(palette.text3)
+            });
     }
     button(content)
         .width(Length::Fill)

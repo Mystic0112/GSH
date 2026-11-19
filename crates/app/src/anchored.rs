@@ -21,6 +21,16 @@ pub struct Anchored<'a, Message> {
     /// `[base]` ou `[base, menu]`.
     children: Vec<Element<'a, Message>>,
     on_dismiss: Message,
+    placement: Placement,
+    key_handler: Option<fn(&Event) -> Option<Message>>,
+    on_escape: Option<Message>,
+    on_leave: Option<Message>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Placement {
+    Below,
+    Side,
 }
 
 impl<'a, Message: Clone> Anchored<'a, Message> {
@@ -34,7 +44,32 @@ impl<'a, Message: Clone> Anchored<'a, Message> {
         Self {
             children,
             on_dismiss,
+            placement: Placement::Below,
+            key_handler: None,
+            on_escape: None,
+            on_leave: None,
         }
+    }
+
+    /// Anchors the popup beside its trigger, preferring the right side.
+    pub fn side(mut self) -> Self {
+        self.placement = Placement::Side;
+        self
+    }
+
+    pub fn on_key(mut self, handler: fn(&Event) -> Option<Message>) -> Self {
+        self.key_handler = Some(handler);
+        self
+    }
+
+    pub fn on_escape(mut self, message: Message) -> Self {
+        self.on_escape = Some(message);
+        self
+    }
+
+    pub fn on_leave(mut self, message: Message) -> Self {
+        self.on_leave = Some(message);
+        self
     }
 }
 
@@ -159,6 +194,11 @@ impl<Message: Clone> Widget<Message, iced::Theme, iced::Renderer> for Anchored<'
                 content,
                 tree: state,
                 on_dismiss: self.on_dismiss.clone(),
+                placement: self.placement,
+                key_handler: self.key_handler,
+                on_escape: self.on_escape.clone(),
+                on_leave: self.on_leave.clone(),
+                viewport: *viewport,
             }))),
             _ => None,
         };
@@ -172,6 +212,11 @@ struct Popup<'a, 'b, Message> {
     content: &'b mut Element<'a, Message>,
     tree: &'b mut Tree,
     on_dismiss: Message,
+    placement: Placement,
+    key_handler: Option<fn(&Event) -> Option<Message>>,
+    on_escape: Option<Message>,
+    on_leave: Option<Message>,
+    viewport: Rectangle,
 }
 
 impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer>
@@ -184,17 +229,36 @@ impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer>
             .as_widget_mut()
             .layout(self.tree, renderer, &limits);
         let size = node.size();
-        let x = self
-            .anchor
-            .x
-            .min(bounds.width - size.width - EDGE_MARGIN)
-            .max(0.0);
-        let below = self.anchor.y + self.anchor.height + GAP;
-        // sem espaço embaixo, abre acima do gatilho (o shadcn inverte sozinho)
-        let y = if below + size.height > bounds.height {
-            (self.anchor.y - GAP - size.height).max(0.0)
-        } else {
-            below
+        let (x, y) = match self.placement {
+            Placement::Below => {
+                let x = self
+                    .anchor
+                    .x
+                    .min(bounds.width - size.width - EDGE_MARGIN)
+                    .max(0.0);
+                let below = self.anchor.y + self.anchor.height + GAP;
+                let y = if below + size.height > bounds.height {
+                    (self.anchor.y - GAP - size.height).max(0.0)
+                } else {
+                    below
+                };
+                (x, y)
+            }
+            Placement::Side => {
+                let right = self.anchor.x + self.anchor.width + GAP;
+                let left = self.anchor.x - size.width - GAP;
+                let x = if right + size.width <= bounds.width - EDGE_MARGIN {
+                    right
+                } else {
+                    left.max(EDGE_MARGIN)
+                };
+                let y = self
+                    .anchor
+                    .y
+                    .min(bounds.height - size.height - EDGE_MARGIN)
+                    .max(EDGE_MARGIN);
+                (x, y)
+            }
         };
         node.move_to(Point::new(x, y))
     }
@@ -227,6 +291,11 @@ impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer>
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
     ) {
+        if let Some(message) = self.key_handler.and_then(|handler| handler(event)) {
+            shell.publish(message);
+            shell.capture_event();
+            return;
+        }
         let escape = matches!(
             event,
             Event::Keyboard(keyboard::Event::KeyPressed {
@@ -236,8 +305,31 @@ impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer>
         );
         let outside_click = matches!(event, Event::Mouse(mouse::Event::ButtonPressed(_)))
             && !cursor.is_over(layout.bounds());
+        if matches!(self.placement, Placement::Side)
+            && matches!(event, Event::Mouse(mouse::Event::CursorMoved { .. }))
+            && cursor.position().is_some_and(|position| {
+                let popup = layout.bounds();
+                let corridor = Rectangle {
+                    x: self.anchor.x.min(popup.x),
+                    y: self.anchor.y,
+                    width: (self.anchor.x - popup.x).abs(),
+                    height: self.anchor.height,
+                };
+                !popup.contains(position)
+                    && !self.anchor.contains(position)
+                    && !corridor.contains(position)
+            })
+        {
+            shell.publish(self.on_leave.as_ref().unwrap_or(&self.on_dismiss).clone());
+            shell.capture_event();
+            return;
+        }
         if escape || outside_click {
-            shell.publish(self.on_dismiss.clone());
+            shell.publish(if escape {
+                self.on_escape.as_ref().unwrap_or(&self.on_dismiss).clone()
+            } else {
+                self.on_dismiss.clone()
+            });
             shell.capture_event();
             return;
         }
@@ -265,6 +357,20 @@ impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer>
             cursor,
             &layout.bounds(),
             renderer,
+        )
+    }
+
+    fn overlay<'a>(
+        &'a mut self,
+        layout: Layout<'a>,
+        renderer: &iced::Renderer,
+    ) -> Option<overlay::Element<'a, Message, iced::Theme, iced::Renderer>> {
+        self.content.as_widget_mut().overlay(
+            self.tree,
+            layout,
+            renderer,
+            &self.viewport,
+            Vector::ZERO,
         )
     }
 }
