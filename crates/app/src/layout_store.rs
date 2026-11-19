@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::pane_model::{PaneModel, PaneTab, TermId};
+use crate::pane_model::{ChatId, PaneModel, PaneTab, QueryId, TermId};
 
 pub const VERSION: u32 = 1;
 
@@ -18,6 +18,12 @@ pub struct LayoutDoc {
     pub active_workspace: usize,
     #[serde(default)]
     pub terminal_cwds: Vec<(TermId, PathBuf)>,
+    #[serde(default)]
+    pub chat_sessions: Vec<(ChatId, String)>,
+    #[serde(default)]
+    pub query_files: Vec<(QueryId, PathBuf)>,
+    #[serde(default)]
+    pub query_connections: Vec<(QueryId, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -81,20 +87,7 @@ impl crate::pane_tree::PaneTree {
                     let empty = PaneModel::empty();
                     let m = tree.model(*p).unwrap_or(&empty);
                     LayoutNode::Pane {
-                        tabs: m
-                            .tabs()
-                            .iter()
-                            .filter(|t| {
-                                !matches!(
-                                    t,
-                                    PaneTab::Chat(_)
-                                        | PaneTab::Query { .. }
-                                        | PaneTab::Redis { .. }
-                                        | PaneTab::Mongo { .. }
-                                )
-                            })
-                            .cloned()
-                            .collect(),
+                        tabs: m.tabs().to_vec(),
                         active: m.active_index(),
                         terminal_labels: m
                             .tabs()
@@ -152,6 +145,9 @@ impl crate::pane_tree::PaneTree {
             workspaces,
             active_workspace,
             terminal_cwds: Vec::new(),
+            chat_sessions: Vec::new(),
+            query_files: Vec::new(),
+            query_connections: Vec::new(),
         }
     }
     pub fn from_doc(doc: &LayoutDoc) -> Self {
@@ -160,6 +156,7 @@ impl crate::pane_tree::PaneTree {
             n: &LayoutNode,
             models: &mut Vec<PaneModel>,
             next_term: &mut TermId,
+            query_files: &[(QueryId, PathBuf)],
         ) -> Configuration<PaneModel> {
             match n {
                 LayoutNode::Pane {
@@ -172,6 +169,10 @@ impl crate::pane_tree::PaneTree {
                         .enumerate()
                         .filter(|(_, t)| match t {
                             PaneTab::File(p) => p.exists(),
+                            PaneTab::Query { id, .. } => query_files
+                                .iter()
+                                .find(|(saved_id, _)| saved_id == id)
+                                .is_some_and(|(_, path)| std::fs::read_to_string(path).is_ok()),
                             PaneTab::Harness(p) | PaneTab::AgentGraph(p) => p.exists(),
                             _ => true,
                         })
@@ -196,8 +197,8 @@ impl crate::pane_tree::PaneTree {
                         Axis::Vertical => pane_grid::Axis::Vertical,
                     },
                     ratio: ratio.clamp(0.16, 0.84),
-                    a: Box::new(config(a, models, next_term)),
-                    b: Box::new(config(b, models, next_term)),
+                    a: Box::new(config(a, models, next_term, query_files)),
+                    b: Box::new(config(b, models, next_term, query_files)),
                 },
             }
         }
@@ -219,7 +220,7 @@ impl crate::pane_tree::PaneTree {
         }
         let mut models = Vec::new();
         let mut next_term = max_term(&doc.tree).saturating_add(1);
-        let configuration = config(&doc.tree, &mut models, &mut next_term);
+        let configuration = config(&doc.tree, &mut models, &mut next_term, &doc.query_files);
         let grid = pane_grid::State::with_configuration(configuration);
         let leaves: Vec<_> = {
             fn walk(n: &pane_grid::Node, v: &mut Vec<pane_grid::Pane>) {
@@ -335,5 +336,75 @@ mod tests {
         } else {
             unreachable!();
         }
+    }
+
+    #[test]
+    fn new_session_metadata_round_trips_and_old_v1_documents_still_read() {
+        let mut doc = crate::pane_tree::PaneTree::default().snapshot();
+        doc.chat_sessions = vec![(7, "session-7".into())];
+        doc.query_files = vec![(8, PathBuf::from("query.dbq"))];
+        doc.query_connections = vec![(8, "db".into())];
+        let json = serde_json::to_value(&doc).unwrap();
+        assert_eq!(serde_json::from_value::<LayoutDoc>(json).unwrap(), doc);
+        let mut old = serde_json::to_value(&doc).unwrap();
+        let object = old.as_object_mut().unwrap();
+        object.remove("chat_sessions");
+        object.remove("query_files");
+        object.remove("query_connections");
+        let decoded: LayoutDoc = serde_json::from_value(old).unwrap();
+        assert!(decoded.chat_sessions.is_empty());
+        assert!(decoded.query_files.is_empty());
+        assert!(decoded.query_connections.is_empty());
+    }
+
+    #[test]
+    fn scratch_queries_and_queries_missing_a_file_are_discarded() {
+        let mut tree = crate::pane_tree::PaneTree::default();
+        let pane = tree.focused();
+        tree.model_mut(pane)
+            .unwrap()
+            .open_query(1, "Untitled-1.dbq".into());
+        let doc = tree.snapshot();
+        let restored = crate::pane_tree::PaneTree::from_doc(&doc);
+        assert!(!restored
+            .focused_model()
+            .tabs()
+            .iter()
+            .any(|tab| matches!(tab, PaneTab::Query { .. })));
+    }
+
+    #[test]
+    fn chat_query_redis_and_mongo_tabs_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let query_path = dir.path().join("saved.dbq");
+        fs::write(&query_path, "-- db: pg\nselect 1;\n").unwrap();
+        let mut tree = crate::pane_tree::PaneTree::default();
+        let model = tree.focused_model_mut();
+        model.open_chat(12);
+        model.open_query(13, "saved.dbq".into());
+        model.open_redis(14, "cache".into());
+        model.open_mongo(15, "mongo".into(), "items".into());
+        let mut doc = tree.snapshot();
+        doc.chat_sessions = vec![(12, "session-12".into())];
+        doc.query_files = vec![(13, query_path)];
+        doc.query_connections = vec![(13, "selected-pg".into())];
+        let restored = crate::pane_tree::PaneTree::from_doc(&doc);
+        let tabs = restored.focused_model().tabs();
+        assert!(tabs.contains(&PaneTab::Chat(12)));
+        assert!(tabs.contains(&PaneTab::Query {
+            id: 13,
+            title: "saved.dbq".into()
+        }));
+        assert!(tabs.contains(&PaneTab::Redis {
+            id: 14,
+            conn: "cache".into()
+        }));
+        assert!(tabs.contains(&PaneTab::Mongo {
+            id: 15,
+            conn: "mongo".into(),
+            collection: "items".into()
+        }));
+        assert_eq!(doc.chat_sessions[0].1, "session-12");
+        assert_eq!(doc.query_connections[0].1, "selected-pg");
     }
 }

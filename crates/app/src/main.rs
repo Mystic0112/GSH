@@ -603,6 +603,7 @@ struct Shell {
     window_focused: bool,
     layout_path: Option<PathBuf>,
     layout_save_due: Option<Instant>,
+    layout_restore_browsers_pending: bool,
 }
 
 struct ExternalWaiter {
@@ -646,6 +647,7 @@ impl Default for Shell {
         let panes = restored
             .as_ref()
             .map_or_else(PaneTree::default, PaneTree::from_doc);
+        let layout_restore_browsers_pending = restored.is_some();
 
         let initial_pane_id = pane_id_for_term(1);
         status_runtime.register_pane(initial_pane_id.clone());
@@ -758,6 +760,7 @@ impl Default for Shell {
             window_focused: true,
             layout_path,
             layout_save_due: None,
+            layout_restore_browsers_pending,
         };
         let files: Vec<_> = shell
             .panes
@@ -785,6 +788,10 @@ impl Default for Shell {
                     shell.file_viewers.insert(path, state);
                 }
             }
+        }
+        if let Some(doc) = restored.as_ref() {
+            shell.restore_layout_chats(doc);
+            shell.restore_layout_queries(doc);
         }
         shell.configure_team();
         shell
@@ -833,7 +840,192 @@ impl Shell {
             .iter()
             .filter_map(|(id, terminal)| terminal.cwd().map(|cwd| (*id, cwd.to_path_buf())))
             .collect();
+        doc.chat_sessions = self
+            .chats
+            .iter()
+            .filter_map(|(id, chat)| chat.session_id().map(|sid| (*id, sid.to_owned())))
+            .collect();
+        doc.query_files = self
+            .queries
+            .iter()
+            .filter_map(|(id, query)| query.path.clone().map(|path| (*id, path)))
+            .collect();
+        doc.query_connections = self
+            .queries
+            .iter()
+            .filter_map(|(id, query)| query.conn.clone().map(|conn| (*id, conn)))
+            .collect();
         let _ = doc.write_atomic(path);
+    }
+
+    fn restore_layout_chats(&mut self, doc: &layout_store::LayoutDoc) {
+        let cwd = self.active_workspace_dir().map(Path::to_path_buf);
+        let branch = self
+            .workspaces
+            .active()
+            .and_then(|ws| ws.git_branch.clone());
+        let session_ids: HashMap<_, _> = doc.chat_sessions.iter().cloned().collect();
+        let ids: Vec<_> = self
+            .panes
+            .models()
+            .into_iter()
+            .flat_map(|model| model.tabs().to_vec())
+            .filter_map(|tab| match tab {
+                PaneTab::Chat(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        for id in ids {
+            let mut chat = ChatPane::new(cwd.clone(), branch.clone())
+                .with_defaults(
+                    self.settings.current.chat.permission_mode.clone(),
+                    self.settings.current.chat.effort.clone(),
+                )
+                .with_static_test_mode(self.static_test_mode);
+            if let Some(session_id) = session_ids.get(&id) {
+                let _ = chat.restore_session_id(session_id);
+            }
+            self.chats.insert(id, chat);
+        }
+    }
+
+    fn restore_layout_queries(&mut self, doc: &layout_store::LayoutDoc) {
+        let files: HashMap<_, _> = doc.query_files.iter().cloned().collect();
+        let connections: HashMap<_, _> = doc.query_connections.iter().cloned().collect();
+        let root = self
+            .active_workspace_dir()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let tabs: Vec<_> = self
+            .panes
+            .models()
+            .into_iter()
+            .flat_map(|model| model.tabs().to_vec())
+            .filter_map(|tab| match tab {
+                PaneTab::Query { id, .. } => files.get(&id).map(|path| (id, path.clone())),
+                _ => None,
+            })
+            .collect();
+        for (id, path) in tabs {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let mut query = DbQuery::from_file(id, path, content, root.clone());
+            query.conn = connections.get(&id).cloned().or(query.conn);
+            self.queries.insert(id, query);
+        }
+    }
+
+    fn restore_layout_browsers(&mut self) -> Task<Msg> {
+        if !self.layout_restore_browsers_pending {
+            return Task::none();
+        }
+        self.layout_restore_browsers_pending = false;
+        let tabs: Vec<_> =
+            self.panes
+                .leaves()
+                .into_iter()
+                .flat_map(|pane| {
+                    self.panes.model(pane).into_iter().flat_map(move |model| {
+                        model.tabs().iter().cloned().map(move |tab| (pane, tab))
+                    })
+                })
+                .collect();
+        let mut tasks = Vec::new();
+        let mut discard = Vec::new();
+        for (pane, tab) in tabs {
+            match tab {
+                PaneTab::Redis { id, conn } => {
+                    let registered = self.db.connection(&conn).is_some_and(|c| {
+                        c.origin == gsh_db::Origin::Registered && c.engine == gsh_db::Engine::Redis
+                    });
+                    if !registered {
+                        discard.push((pane, PaneTab::Redis { id, conn }));
+                        continue;
+                    }
+                    let root = self.file_tree.root().map(Path::to_path_buf);
+                    let mut tab = RedisTab::new(
+                        conn,
+                        root.clone(),
+                        self.db.secrets().clone(),
+                        self.db.ssh_passphrases.clone(),
+                    );
+                    tasks.push(
+                        tab.start_initial_scan()
+                            .map(move |message| Msg::Redis(id, message)),
+                    );
+                    self.redis_tabs.insert(id, tab);
+                }
+                PaneTab::Mongo {
+                    id,
+                    conn,
+                    collection,
+                } => {
+                    let registered = self.db.connection(&conn).is_some_and(|c| {
+                        c.origin == gsh_db::Origin::Registered && c.engine == gsh_db::Engine::Mongo
+                    });
+                    if !registered {
+                        discard.push((
+                            pane,
+                            PaneTab::Mongo {
+                                id,
+                                conn,
+                                collection,
+                            },
+                        ));
+                        continue;
+                    }
+                    let root = self.file_tree.root().map(Path::to_path_buf);
+                    let mut tab = MongoTab::new(
+                        conn,
+                        collection,
+                        root,
+                        self.db.secrets().clone(),
+                        self.db.mongo_store().clone(),
+                        self.db.ssh_passphrases.clone(),
+                    );
+                    tasks.push(
+                        tab.start_initial_load()
+                            .map(move |message| Msg::Mongo(id, message)),
+                    );
+                    self.mongo_tabs.insert(id, tab);
+                }
+                _ => {}
+            }
+        }
+        let affected_panes = discard.iter().fold(Vec::new(), |mut panes, (pane, _)| {
+            if !panes.contains(pane) {
+                panes.push(*pane);
+            }
+            panes
+        });
+        for (pane, tab) in discard {
+            if let Some(model) = self.panes.model_mut(pane) {
+                if let Some(index) = model.tabs().iter().position(|candidate| candidate == &tab) {
+                    model.close(index);
+                }
+            }
+        }
+        for pane in affected_panes {
+            if self
+                .panes
+                .model(pane)
+                .is_some_and(|model| model.tabs().is_empty())
+            {
+                if self.panes.leaves().len() > 1 {
+                    self.panes.close_if_empty(pane);
+                } else {
+                    let id = self.panes.alloc_term_id();
+                    if let Some(model) = self.panes.model_mut(pane) {
+                        model.open_terminal(id);
+                        let cwd = self.active_workspace_dir().map(Path::to_path_buf);
+                        let terminal = self.spawn_terminal_for_dir(id, cwd.as_deref());
+                        self.terminals.insert(id, terminal);
+                    }
+                }
+            }
+        }
+        Task::batch(tasks)
     }
 
     fn team_config(&self) -> TeamConfig {
@@ -2376,7 +2568,8 @@ impl Shell {
         let mut shell = Self::default();
         let boot_task = shell.telemetry.boot_task().map(Msg::Telemetry);
         let ws_task = shell.sync_telemetry_workspace();
-        (shell, Task::batch([boot_task, ws_task]))
+        let db_task = shell.reload_db();
+        (shell, Task::batch([boot_task, ws_task, db_task]))
     }
 
     fn handle_telemetry(&mut self, msg: TelemetryMsg) -> Task<Msg> {
@@ -2790,6 +2983,16 @@ impl Shell {
     /// ter editado os arquivos), qualquer que seja o jeito de chegar nela.
     fn update(&mut self, msg: Msg) -> Task<Msg> {
         let layout_before = self.panes.snapshot();
+        let chat_sessions_before: Vec<_> = self
+            .chats
+            .iter()
+            .map(|(id, chat)| (*id, chat.session_id().map(str::to_owned)))
+            .collect();
+        let query_state_before: Vec<_> = self
+            .queries
+            .iter()
+            .map(|(id, query)| (*id, query.path.clone(), query.conn.clone()))
+            .collect();
         let workspaces_before = (
             self.workspaces.selected_index(),
             self.workspaces
@@ -2808,7 +3011,21 @@ impl Shell {
                 .filter_map(|workspace| workspace.path.clone())
                 .collect::<Vec<_>>(),
         );
-        if self.panes.snapshot() != layout_before || workspaces_after != workspaces_before {
+        let chat_sessions_after: Vec<_> = self
+            .chats
+            .iter()
+            .map(|(id, chat)| (*id, chat.session_id().map(str::to_owned)))
+            .collect();
+        let query_state_after: Vec<_> = self
+            .queries
+            .iter()
+            .map(|(id, query)| (*id, query.path.clone(), query.conn.clone()))
+            .collect();
+        if self.panes.snapshot() != layout_before
+            || workspaces_after != workspaces_before
+            || chat_sessions_after != chat_sessions_before
+            || query_state_after != query_state_before
+        {
             self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
         }
         let loads: Vec<Task<Msg>> = self
@@ -4093,9 +4310,13 @@ impl Shell {
             }
             Msg::Telemetry(message) => self.handle_telemetry(message),
             Msg::Db(message) => {
+                let loaded = matches!(message, DbMsg::Loaded(..));
                 let (task, effect) = self.db.update(message);
                 self.sync_browser_contexts();
-                let task = task.map(Msg::Db);
+                let mut task = task.map(Msg::Db);
+                if loaded {
+                    task = Task::batch([task, self.restore_layout_browsers()]);
+                }
                 match effect {
                     Some(DbEffect::NewQuery { conn, sql }) => {
                         Task::batch([task, self.open_scratch_query(&conn, sql.as_deref())])
@@ -5367,6 +5588,7 @@ mod tests {
             window_focused: true,
             layout_path: None,
             layout_save_due: None,
+            layout_restore_browsers_pending: false,
         }
     }
 
@@ -5386,6 +5608,105 @@ mod tests {
         assert_eq!(
             restored.panes.focused_model().tabs(),
             &[PaneTab::Settings, PaneTab::Terminal(1)]
+        );
+    }
+
+    #[test]
+    fn shell_restores_chat_session_id_in_workspace_directory() {
+        let mut shell = test_shell();
+        let cwd = shell.active_workspace_dir().map(Path::to_path_buf);
+        shell.panes.focused_model_mut().open_chat(42);
+        let mut doc = shell.panes.snapshot();
+        doc.chat_sessions = vec![(42, "01234567-89ab-cdef-0123-456789abcdef".into())];
+        shell.restore_layout_chats(&doc);
+        let chat = shell.chats.get(&42).unwrap();
+        assert_eq!(
+            chat.session_id(),
+            Some("01234567-89ab-cdef-0123-456789abcdef")
+        );
+        assert_eq!(chat.cwd(), cwd.as_deref());
+    }
+
+    #[test]
+    fn shell_discards_restored_browsers_without_registered_connections() {
+        let mut shell = test_shell();
+        shell.panes.focused_model_mut().close(0);
+        shell
+            .panes
+            .focused_model_mut()
+            .open_redis(21, "removed-cache".into());
+        shell
+            .panes
+            .focused_model_mut()
+            .open_mongo(22, "removed-mongo".into(), "items".into());
+        shell.layout_restore_browsers_pending = true;
+        let _ = shell.restore_layout_browsers();
+        assert!(!shell
+            .panes
+            .focused_model()
+            .tabs()
+            .iter()
+            .any(|tab| { matches!(tab, PaneTab::Redis { .. } | PaneTab::Mongo { .. }) }));
+        assert!(matches!(
+            shell.panes.focused_model().tabs(),
+            [PaneTab::Terminal(_)]
+        ));
+    }
+
+    #[test]
+    fn shell_restores_query_file_and_selected_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("saved.dbq");
+        std::fs::write(&path, "-- db: from-file\nselect 1;\n").unwrap();
+        let mut shell = test_shell();
+        shell
+            .panes
+            .focused_model_mut()
+            .open_query(31, "saved.dbq".into());
+        let mut doc = shell.panes.snapshot();
+        doc.query_files = vec![(31, path.clone())];
+        doc.query_connections = vec![(31, "selected-after-change".into())];
+        shell.restore_layout_queries(&doc);
+        let query = shell.queries.get(&31).unwrap();
+        assert_eq!(query.path.as_deref(), Some(path.as_path()));
+        assert_eq!(query.conn.as_deref(), Some("selected-after-change"));
+    }
+
+    #[test]
+    fn shell_restores_browsers_for_registered_matching_engines() {
+        let mut shell = test_shell();
+        shell
+            .panes
+            .focused_model_mut()
+            .open_redis(51, "cache".into());
+        shell
+            .panes
+            .focused_model_mut()
+            .open_mongo(52, "documents".into(), "items".into());
+        shell.db.connections = vec![
+            gsh_db::Connection::from_json(
+                &serde_json::json!({"name": "cache", "url": "redis://127.0.0.1:6379/0"}),
+                gsh_db::Origin::Registered,
+            )
+            .unwrap(),
+            gsh_db::Connection::from_json(
+                &serde_json::json!({"name": "documents", "url": "mongodb://127.0.0.1:27017"}),
+                gsh_db::Origin::Registered,
+            )
+            .unwrap(),
+        ];
+        shell.layout_restore_browsers_pending = true;
+        let _ = shell.restore_layout_browsers();
+        assert_eq!(
+            shell.redis_tabs.get(&51).map(|tab| tab.conn_name.as_str()),
+            Some("cache")
+        );
+        assert_eq!(
+            shell
+                .mongo_tabs
+                .get(&52)
+                .map(|tab| (tab.conn_name.as_str(), tab.collection.as_str())),
+            Some(("documents", "items"))
         );
     }
 

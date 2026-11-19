@@ -1546,6 +1546,23 @@ impl ChatPane {
         self.busy = false;
         self.refresh_markdown();
     }
+
+    /// Reanexa uma conversa salva no layout e carrega seu transcript antes do próximo envio.
+    pub fn restore_session_id(&mut self, session_id: &str) -> bool {
+        if !gsh_chat::history::is_session_id(session_id) {
+            return false;
+        }
+        let Some(project) = self.cwd.as_ref() else {
+            return false;
+        };
+        self.load_session(gsh_chat::SessionEntry {
+            id: session_id.to_owned(),
+            title: String::new(),
+            project: project.to_string_lossy().into_owned(),
+            last_seen_ms: 0,
+        });
+        true
+    }
 }
 
 fn open_external_url(url: &str) -> Result<(), String> {
