@@ -3,6 +3,7 @@
 mod appearance;
 pub mod claude;
 mod controls;
+pub mod localsend;
 pub mod view;
 
 use crate::theme::{self, ThemeVariant};
@@ -17,6 +18,7 @@ pub enum Error {
     InvalidScrollback,
     InvalidTerminalSize,
     InvalidTabSize,
+    InvalidLocalSendLimit,
     InvalidSection,
     Config(gsh_config::ConfigError),
     Io(std::io::Error),
@@ -53,7 +55,93 @@ pub enum Message {
     TeamDoorAllowChanged(String),
     TeamDoorAskChanged(bool),
     SaveControls,
+    LocalSend(LocalSendMessage),
     Claude(claude::Message),
+}
+
+#[derive(Debug, Clone)]
+pub enum LocalSendMessage {
+    EnableChanged(bool),
+    AliasChanged(String),
+    ChooseReceiveDir,
+    ReceiveDirPicked(Option<PathBuf>),
+    LimitsChanged {
+        max_file_mb: String,
+        max_files: String,
+    },
+    SendTo(String),
+    SendFilesPicked(String, Vec<PathBuf>),
+    CancelSend,
+    AcceptReceive,
+    RejectReceive,
+    ShowReceived,
+    OpenReceivedFolder,
+    Noop,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalSendState {
+    pub enabled: bool,
+    pub alias: String,
+    pub receive_dir: PathBuf,
+    pub max_file_mb: String,
+    pub max_files: String,
+    pub server_status: Option<String>,
+    pub error: Option<String>,
+    pub peers: Vec<LocalSendPeer>,
+    pub incoming: Option<LocalSendIncoming>,
+    pub transfer: Option<LocalSendTransfer>,
+    pub received_dir: Option<PathBuf>,
+}
+
+impl Default for LocalSendState {
+    fn default() -> Self {
+        let config = gsh_config::schema::LocalSend::default();
+        Self {
+            enabled: config.enabled,
+            alias: config.alias,
+            receive_dir: PathBuf::from(config.receive_dir),
+            max_file_mb: config.max_file_mb.to_string(),
+            max_files: config.max_files.to_string(),
+            server_status: None,
+            error: None,
+            peers: Vec::new(),
+            incoming: None,
+            transfer: None,
+            received_dir: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalSendPeer {
+    pub alias: String,
+    pub device_type: String,
+    pub ip: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalSendFile {
+    pub name: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalSendIncoming {
+    pub sender_alias: String,
+    pub sender_model: Option<String>,
+    pub sender_ip: String,
+    pub files: Vec<LocalSendFile>,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalSendTransfer {
+    pub peer_alias: String,
+    pub file_name: String,
+    pub bytes: u64,
+    pub total_bytes: u64,
+    pub sending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +152,7 @@ pub enum Section {
     Editor,
     Notifications,
     Team,
+    LocalSend,
 }
 
 pub struct Settings {
@@ -89,6 +178,7 @@ pub struct Settings {
     pub error: Option<Error>,
     pub saved: bool,
     pub claude: claude::ClaudeState,
+    pub localsend: LocalSendState,
 }
 
 impl Default for Settings {
@@ -116,6 +206,7 @@ impl Default for Settings {
             error: None,
             saved: false,
             claude: claude::ClaudeState::default(),
+            localsend: LocalSendState::default(),
         }
     }
 }
@@ -163,6 +254,11 @@ impl Settings {
                     self.theme_mode = config.theme_mode;
                     theme::set_active(ThemeVariant::from_mode(config.theme_mode));
                     self.current = config.clone();
+                    self.localsend.enabled = config.localsend.enabled;
+                    self.localsend.alias.clone_from(&config.localsend.alias);
+                    self.localsend.receive_dir = PathBuf::from(&config.localsend.receive_dir);
+                    self.localsend.max_file_mb = config.localsend.max_file_mb.to_string();
+                    self.localsend.max_files = config.localsend.max_files.to_string();
                     self.interface_size = config.interface_size.to_string();
                     self.scale = (config.interface_size.clamp(10.0, 20.0) / 14.0) as f32;
                     self.error = None;
@@ -266,6 +362,7 @@ impl Settings {
                 let _ = self.update(Message::SaveControls);
             }
             Message::ThemeSelected(mode) => self.select_theme(mode),
+            Message::LocalSend(message) => self.update_localsend(message),
             Message::TeamEnabledChanged(value) => {
                 self.current.farm.team.enabled = value;
                 self.save_team();
@@ -366,6 +463,76 @@ impl Settings {
         };
         self.saved = result.is_ok();
         self.error = result.err();
+    }
+
+    fn update_localsend(&mut self, message: LocalSendMessage) {
+        let settings_changed = match message {
+            LocalSendMessage::EnableChanged(enabled) => {
+                self.localsend.enabled = enabled;
+                self.current.localsend.enabled = enabled;
+                true
+            }
+            LocalSendMessage::AliasChanged(alias) => {
+                self.localsend.alias = alias.clone();
+                self.current.localsend.alias = alias;
+                true
+            }
+            LocalSendMessage::ReceiveDirPicked(Some(path)) => {
+                self.localsend.receive_dir.clone_from(&path);
+                self.current.localsend.receive_dir = path.to_string_lossy().into_owned();
+                true
+            }
+            LocalSendMessage::LimitsChanged {
+                max_file_mb,
+                max_files,
+            } => {
+                if !max_file_mb.is_empty() {
+                    self.localsend.max_file_mb.clone_from(&max_file_mb);
+                    match max_file_mb.parse::<u32>() {
+                        Ok(value) if (1..=2048).contains(&value) => {
+                            self.current.localsend.max_file_mb = value;
+                        }
+                        _ => {
+                            self.localsend.error = Some(String::from(
+                                crate::labels::SETTINGS_INVALID_LOCALSEND_LIMIT,
+                            ));
+                            return;
+                        }
+                    }
+                }
+                if !max_files.is_empty() {
+                    self.localsend.max_files.clone_from(&max_files);
+                    match max_files.parse::<usize>() {
+                        Ok(value) if (1..=100).contains(&value) => {
+                            self.current.localsend.max_files = value;
+                        }
+                        _ => {
+                            self.localsend.error = Some(String::from(
+                                crate::labels::SETTINGS_INVALID_LOCALSEND_LIMIT,
+                            ));
+                            return;
+                        }
+                    }
+                }
+                true
+            }
+            _ => false,
+        };
+        if settings_changed {
+            self.localsend.error = None;
+            self.saved = false;
+            let result = match &self.path {
+                Ok(path) => controls::save_localsend(path, &self.current.localsend),
+                Err(_) => Err(Error::Config(gsh_config::ConfigError::NoHome)),
+            };
+            match result {
+                Ok(config) => {
+                    self.current = config;
+                    self.saved = true;
+                }
+                Err(error) => self.error = Some(error),
+            }
+        }
     }
 }
 

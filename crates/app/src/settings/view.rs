@@ -383,6 +383,7 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
             }
             rows
         }
+        Section::LocalSend => column![super::localsend::view(&s.localsend)],
     }
     .spacing(theme::SETTINGS_SECTION_TITLE_GAP)
     .width(Fill);
@@ -400,6 +401,7 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
             Error::InvalidScrollback => labels::SETTINGS_INVALID_SCROLLBACK,
             Error::InvalidTerminalSize => labels::SETTINGS_INVALID_TERMINAL_SIZE,
             Error::InvalidTabSize => labels::SETTINGS_INVALID_TAB_SIZE,
+            Error::InvalidLocalSendLimit => labels::SETTINGS_INVALID_LOCALSEND_LIMIT,
             Error::InvalidSection | Error::Config(_) | Error::Io(_) | Error::Document(_) => {
                 labels::SETTINGS_CONFIG_ERROR
             }
@@ -494,6 +496,11 @@ fn navigation(s: &Settings) -> Element<'_, Message> {
             Section::Notifications,
         ),
         (labels::ICON_FARM, labels::SETTINGS_TEAM, Section::Team),
+        (
+            labels::ICON_FILE_ITEM,
+            labels::LOCALSEND_TITLE,
+            Section::LocalSend,
+        ),
     ];
     let mut nav_list = column![];
     let mut found = false;

@@ -92,6 +92,7 @@ pub fn save(path: &Path, settings: &Settings) -> Result<gsh_config::Config, Erro
             );
         }
         Section::General => return gsh_config::load(path).map_err(Error::Config),
+        Section::LocalSend => return save_localsend(path, &settings.current.localsend),
     }
     let contents = doc.to_string();
     let config = gsh_config::load::parse(path, &contents).map_err(Error::Config)?;
@@ -192,6 +193,37 @@ pub fn save_team(path: &Path, team: &FarmTeam) -> Result<gsh_config::Config, Err
     } else {
         team_table.insert("secret", toml_edit::value(&team.secret));
     }
+    let contents = doc.to_string();
+    let config = gsh_config::load::parse(path, &contents).map_err(Error::Config)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(Error::Io)?;
+    }
+    super::write_atomic(path, &contents)?;
+    Ok(config)
+}
+
+pub fn save_localsend(
+    path: &Path,
+    localsend: &gsh_config::schema::LocalSend,
+) -> Result<gsh_config::Config, Error> {
+    let _ = gsh_config::load(path).map_err(Error::Config)?;
+    let original = match std::fs::read_to_string(path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(Error::Io(error)),
+    };
+    let mut doc = original
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(Error::Document)?;
+    let table = table(&mut doc, "localsend")?;
+    table.insert("enabled", toml_edit::value(localsend.enabled));
+    table.insert("alias", toml_edit::value(localsend.alias.trim()));
+    table.insert("receiveDir", toml_edit::value(localsend.receive_dir.trim()));
+    table.insert(
+        "maxFileMb",
+        toml_edit::value(i64::from(localsend.max_file_mb)),
+    );
+    table.insert("maxFiles", toml_edit::value(localsend.max_files as i64));
     let contents = doc.to_string();
     let config = gsh_config::load::parse(path, &contents).map_err(Error::Config)?;
     if let Some(parent) = path.parent() {
@@ -354,6 +386,35 @@ mod tests {
         assert!(contents.contains("doorAllow = \"ana, bia\""));
         save_team(&path, &FarmTeam::default()).unwrap();
         assert!(!std::fs::read_to_string(&path).unwrap().contains("secret ="));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn localsend_settings_are_saved_and_keep_unknown_keys() {
+        let dir =
+            std::env::temp_dir().join(format!("gsh-localsend-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "futureKey = 'keep'\n").unwrap();
+        let config = save_localsend(
+            &path,
+            &gsh_config::schema::LocalSend {
+                enabled: true,
+                alias: " GSH sala ".into(),
+                receive_dir: " /tmp/recebidos ".into(),
+                max_file_mb: 64,
+                max_files: 8,
+            },
+        )
+        .unwrap();
+        assert!(config.localsend.enabled);
+        assert_eq!(config.localsend.alias, "GSH sala");
+        assert_eq!(config.localsend.receive_dir, "/tmp/recebidos");
+        assert_eq!(config.localsend.max_file_mb, 64);
+        assert_eq!(config.localsend.max_files, 8);
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("futureKey = 'keep'"));
+        assert!(contents.contains("[localsend]"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

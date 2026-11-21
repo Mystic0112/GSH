@@ -625,6 +625,47 @@ pub const SETTINGS_TEAM_DOOR_ASK_DESC: &str = "Quando um colega mandar algo para
 pub const SETTINGS_TEAM_NETWORK: &str = "Rede do trabalho";
 pub const SETTINGS_TEAM_NETWORK_DESC: &str = "Faixa de IP da rede do escritório (ex.: 192.168.10.0/24). Preenchida, o GSH só anuncia e escuta quando você está nela.";
 pub const SETTINGS_TEAM_NETWORK_HINT: &str = "qualquer rede local";
+
+// LocalSend
+pub const LOCALSEND_TITLE: &str = "LocalSend";
+pub const LOCALSEND_ENABLE: &str = "Ativar LocalSend";
+pub const LOCALSEND_ALIAS: &str = "Nome deste dispositivo";
+pub const LOCALSEND_ALIAS_HINT: &str = "vazio usa o nome do computador";
+pub const LOCALSEND_RECEIVE_DIR: &str = "Pasta para receber";
+pub const LOCALSEND_CHOOSE_DIR: &str = "Escolher pasta…";
+pub const LOCALSEND_LIMITS: &str = "Limites de recebimento";
+pub const LOCALSEND_MAX_FILE_MB_HINT: &str = "por arquivo";
+pub const LOCALSEND_MAX_FILES_HINT: &str = "quantidade";
+pub const LOCALSEND_MB: &str = "MB por arquivo";
+pub const LOCALSEND_FILES: &str = "arquivos";
+pub const LOCALSEND_SERVER: &str = "Servidor";
+pub const LOCALSEND_STARTING: &str = "Iniciando…";
+pub const LOCALSEND_DEVICES: &str = "Dispositivos encontrados";
+pub const LOCALSEND_NO_DEVICES: &str = "Nenhum dispositivo LocalSend encontrado na rede.";
+pub const LOCALSEND_SEND_FILE: &str = "Enviar arquivo…";
+pub const LOCALSEND_CANCEL: &str = "Cancelar envio";
+pub const LOCALSEND_SEND_FAILED: &str = "Não foi possível enviar os arquivos.";
+pub const SETTINGS_INVALID_LOCALSEND_LIMIT: &str =
+    "Use um limite de 1 a 2.048 MB e de 1 a 100 arquivos.";
+pub const LOCALSEND_RECEIVE_TITLE: &str = "Receber arquivos?";
+pub const LOCALSEND_RECEIVE_FROM: &str = " quer enviar arquivos";
+pub const LOCALSEND_ACCEPT: &str = "Aceitar";
+pub const LOCALSEND_REJECT: &str = "Recusar";
+pub const LOCALSEND_RECEIVE_TO: &str = "Pasta de destino";
+pub const LOCALSEND_TOTAL: &str = "Total";
+pub const LOCALSEND_RECEIVED: &str = "Recebido";
+pub const LOCALSEND_OPEN_FOLDER: &str = "Abrir pasta";
+pub const LOCALSEND_SHOW: &str = "Mostrar";
+pub const LOCALSEND_PROGRESS: &str = "Recebendo";
+pub const LOCALSEND_PORT_BUSY: &str =
+    "A porta 53317 já está em uso. Feche o outro LocalSend e tente novamente.";
+pub const LOCALSEND_SERVER_ERROR: &str = "Não foi possível iniciar o servidor LocalSend.";
+pub fn localsend_server_status(port: u16, fingerprint: &str) -> String {
+    format!("Ativo na porta {port} · certificado {fingerprint}")
+}
+pub fn localsend_server_start_error(detail: &str) -> String {
+    format!("{} {detail}", LOCALSEND_SERVER_ERROR)
+}
 pub const FARM_TEAM_DOOR_TITLE: &str = "Batendo na porta";
 pub const FARM_TEAM_DOOR_OPEN: &str = "Abrir a porta";
 pub const FARM_TEAM_DOOR_REFUSE: &str = "Recusar";

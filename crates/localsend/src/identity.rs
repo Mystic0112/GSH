@@ -44,6 +44,35 @@ impl Clone for Identity {
 }
 
 impl Identity {
+    /// Cria uma identidade somente em memória. Útil quando o aplicativo não
+    /// pode persistir arquivos de identidade fora da pasta de recebimento.
+    pub fn generate(port: u16) -> Result<Self, IdentityError> {
+        let alias = hostname();
+        let generated = generate_simple_self_signed(vec![alias.clone()])
+            .map_err(|error| IdentityError::Certificate(error.to_string()))?;
+        let cert = generated.cert.der().clone();
+        let fingerprint = Sha256::digest(cert.as_ref())
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<_>>()
+            .join(":");
+        Ok(Self {
+            info: DeviceInfo {
+                alias,
+                version: VERSION.into(),
+                device_model: Some(std::env::consts::OS.to_owned()),
+                device_type: Some("desktop".into()),
+                fingerprint,
+                port: Some(port),
+                protocol: Some("https".into()),
+                download: false,
+            },
+            cert,
+            key: PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(generated.key_pair.serialize_der())),
+            directory: PathBuf::new(),
+        })
+    }
+
     pub fn load_or_create(port: u16) -> Result<Self, IdentityError> {
         let directory = dirs::data_dir()
             .ok_or(IdentityError::DataDir)?

@@ -41,6 +41,8 @@ pub enum NetworkError {
     TooLarge,
     #[error("secure random source failed: {0}")]
     Random(String),
+    #[error("LocalSend transfer cancelled")]
+    Cancelled,
 }
 
 pub struct Discovery {

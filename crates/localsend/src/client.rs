@@ -90,7 +90,22 @@ pub fn send_files(
             &mut file,
             size,
             |sent| progress(path, sent, size),
-        )?;
+            &cancelled,
+        );
+        let response = match response {
+            Ok(status) => status,
+            Err(NetworkError::Cancelled) => {
+                let _ = https_request(
+                    SocketAddr::new(peer.ip.into(), port),
+                    &peer.info.fingerprint,
+                    "POST",
+                    &format!("{API}/cancel?sessionId={}", session.session_id),
+                    &[],
+                );
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
         if response != 200 {
             return Err(NetworkError::Http(response));
         }
@@ -200,6 +215,7 @@ fn https_stream_file(
     file: &mut File,
     size: u64,
     mut progress: impl FnMut(u64),
+    cancelled: &impl Fn() -> bool,
 ) -> Result<u16, NetworkError> {
     let tcp = TcpStream::connect_timeout(&address, Duration::from_secs(10))?;
     tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
@@ -222,6 +238,9 @@ fn https_stream_file(
     let mut sent = 0u64;
     let mut buf = [0u8; 64 * 1024];
     while sent < size {
+        if cancelled() {
+            return Err(NetworkError::Cancelled);
+        }
         let max = buf.len().min((size - sent) as usize);
         let n = file.read(&mut buf[..max])?;
         if n == 0 {

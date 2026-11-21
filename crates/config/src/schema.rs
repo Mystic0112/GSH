@@ -229,6 +229,7 @@ pub struct Config {
     pub features: Features,
     pub links: Links,
     pub farm: Farm,
+    pub localsend: LocalSend,
 }
 
 impl Default for Config {
@@ -265,6 +266,7 @@ impl Default for Config {
             features: Features::default(),
             links: Links::default(),
             farm: Farm::default(),
+            localsend: LocalSend::default(),
         }
     }
 }
@@ -444,6 +446,38 @@ pub struct Links {
     pub open_in_app: bool,
 }
 
+/// `[localsend]`: compartilhamento na LAN pelo protocolo LocalSend v2.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LocalSend {
+    /// Rede desligada por padrão; ativar também inicia a descoberta multicast.
+    pub enabled: bool,
+    /// Vazio usa o hostname atual.
+    pub alias: String,
+    /// Destino exclusivo para recebimentos.
+    pub receive_dir: String,
+    /// Limite por arquivo em MiB (máximo 2048, limite do crate).
+    pub max_file_mb: u32,
+    /// Máximo de arquivos por envio (limite do crate: 100).
+    pub max_files: usize,
+}
+
+impl Default for LocalSend {
+    fn default() -> Self {
+        let receive_dir = dirs::download_dir()
+            .or_else(dirs::home_dir)
+            .map(|path| path.join("GSH").to_string_lossy().into_owned())
+            .unwrap_or_else(|| "GSH".to_owned());
+        Self {
+            enabled: false,
+            alias: String::new(),
+            receive_dir,
+            max_file_mb: 2048,
+            max_files: 100,
+        }
+    }
+}
+
 /// `[farm]`.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -530,6 +564,7 @@ impl fmt::Debug for Config {
             .field("features", &self.features)
             .field("links", &self.links)
             .field("farm", &self.farm)
+            .field("localsend", &self.localsend)
             .finish()
     }
 }
@@ -581,6 +616,13 @@ impl Config {
         self.automation.model_id = self.automation.model_id.map(|m| m.trim().to_owned());
         self.lsp_commands.retain(|_, v| !v.trim().is_empty());
         self.lsp_formatters.retain(|_, v| !v.trim().is_empty());
+        self.localsend.alias = self.localsend.alias.trim().to_owned();
+        self.localsend.receive_dir = match self.localsend.receive_dir.trim() {
+            "" => LocalSend::default().receive_dir,
+            dir => dir.to_owned(),
+        };
+        self.localsend.max_file_mb = self.localsend.max_file_mb.clamp(1, 2048);
+        self.localsend.max_files = self.localsend.max_files.clamp(1, 100);
 
         finite("interfaceSize", self.interface_size)?;
         finite("codeSize", self.code_size)?;
@@ -684,12 +726,44 @@ mod tests {
         assert_eq!(c.farm.scenery, FarmScenery::Farm);
         assert_eq!(c.farm.team, FarmTeam::default());
         assert!(!c.farm.team.enabled && c.farm.team.secret.is_empty());
+        assert!(!c.localsend.enabled);
+        assert!(c.localsend.alias.is_empty());
+        assert!(c.localsend.receive_dir.ends_with("GSH"));
+        assert_eq!(c.localsend.max_file_mb, 2048);
+        assert_eq!(c.localsend.max_files, 100);
     }
 
     #[test]
     fn empty_file_is_all_defaults() {
         assert_eq!(from(""), Config::default());
         assert_eq!(from("# só comentário\n"), Config::default());
+    }
+
+    #[test]
+    fn localsend_section_deserializes_and_keeps_safe_defaults() {
+        let c = from("[localsend]\nenabled = true\nalias = \"Estação\"\nreceiveDir = \"/tmp/recebidos\"\nmaxFileMb = 64\nmaxFiles = 8\n");
+        assert!(c.localsend.enabled);
+        assert_eq!(c.localsend.alias, "Estação");
+        assert_eq!(c.localsend.receive_dir, "/tmp/recebidos");
+        assert_eq!(c.localsend.max_file_mb, 64);
+        assert_eq!(c.localsend.max_files, 8);
+
+        let partial = from("[localsend]\nenabled = true\n");
+        assert_eq!(
+            partial.localsend,
+            LocalSend {
+                enabled: true,
+                ..LocalSend::default()
+            }
+        );
+    }
+
+    #[test]
+    fn localsend_limits_are_clamped_to_crate_maxima() {
+        let config = from("[localsend]\nmaxFileMb = 9000\nmaxFiles = 500\nreceiveDir = \"  \"\n");
+        assert_eq!(config.localsend.max_file_mb, 2048);
+        assert_eq!(config.localsend.max_files, 100);
+        assert!(config.localsend.receive_dir.ends_with("GSH"));
     }
 
     /// Chaves do JSON do Flutter, com o ponto virando tabela.

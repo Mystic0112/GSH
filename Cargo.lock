@@ -2546,6 +2546,7 @@ dependencies = [
  "gsh-git",
  "gsh-harness",
  "gsh-ipc",
+ "gsh-localsend",
  "gsh-search",
  "gsh-team",
  "gsh-telemetry",

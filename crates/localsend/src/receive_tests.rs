@@ -12,7 +12,12 @@ mod tests {
         decision: ReceiveDecision,
     }
     impl Receiver for TestReceiver {
-        fn accept(&self, _sender: &DeviceInfo, _files: &[FileMetadata]) -> ReceiveDecision {
+        fn accept(
+            &self,
+            _sender: &DeviceInfo,
+            _sender_address: SocketAddr,
+            _files: &[FileMetadata],
+        ) -> ReceiveDecision {
             self.decision.clone()
         }
     }
@@ -207,6 +212,70 @@ mod tests {
             Err(NetworkError::Http(403))
         ));
         assert!(fs::read_dir(&destination).unwrap().next().is_none());
+        let _ = fs::remove_dir_all(destination);
+    }
+
+    #[test]
+    fn protocol_v2_handwritten_https_requests_match_official_payload_shape() {
+        let destination = temp_dir("manual-protocol");
+        let (server, server_identity) = make_server(
+            ReceiveDecision::Accept {
+                dir: destination.clone(),
+            },
+            Limits::default(),
+        );
+        let sender = identity("official-client");
+        let address = server.address();
+        let fingerprint = &server_identity.info.fingerprint;
+
+        let info: DeviceInfo = serde_json::from_slice(
+            &https_request(address, fingerprint, "GET", &format!("{API}/info"), &[]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(info.alias, server_identity.info.alias);
+        let registration = https_request(
+            address,
+            fingerprint,
+            "POST",
+            &format!("{API}/register"),
+            &serde_json::to_vec(&sender.info).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(serde_json::from_slice::<DeviceInfo>(&registration).unwrap(), info);
+
+        let request = serde_json::json!({
+            "info": sender.info,
+            "files": {
+                "manual-file": {
+                    "id": "manual-file",
+                    "fileName": "official-shape.txt",
+                    "size": 16,
+                    "fileType": "application/octet-stream"
+                }
+            }
+        });
+        let prepared: UploadSession = serde_json::from_slice(
+            &https_request(
+                address,
+                fingerprint,
+                "POST",
+                &format!("{API}/prepare-upload"),
+                &serde_json::to_vec(&request).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let token = prepared.files.get("manual-file").unwrap();
+        let path = format!(
+            "{API}/upload?sessionId={}&fileId=manual-file&token={token}",
+            prepared.session_id
+        );
+        https_request(address, fingerprint, "POST", &path, b"official payload")
+            .unwrap();
+        assert_eq!(
+            fs::read(destination.join("official-shape.txt")).unwrap(),
+            b"official payload"
+        );
         let _ = fs::remove_dir_all(destination);
     }
 }

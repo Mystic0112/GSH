@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const SESSION_TTL: Duration = Duration::from_secs(300);
+/// Tempo máximo para o usuário aceitar ou recusar um recebimento.
+pub const RECEIVE_DECISION_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub enum ReceiveDecision {
@@ -25,7 +27,16 @@ pub enum ReceiveDecision {
 }
 
 pub trait Receiver: Send + Sync + 'static {
-    fn accept(&self, sender: &DeviceInfo, files: &[FileMetadata]) -> ReceiveDecision;
+    fn accept(
+        &self,
+        sender: &DeviceInfo,
+        sender_address: SocketAddr,
+        files: &[FileMetadata],
+    ) -> ReceiveDecision;
+
+    fn progress(&self, _sender_address: SocketAddr, _name: &str, _bytes: u64, _total: u64) {}
+
+    fn completed(&self, _sender_address: SocketAddr, _dir: &std::path::Path) {}
 }
 
 #[derive(Debug, Clone)]
@@ -238,7 +249,7 @@ fn prepare(state: &State, peer: SocketAddr, request: PrepareUpload) -> Response 
     {
         return empty_response(400);
     }
-    let ReceiveDecision::Accept { dir } = state.receiver.accept(&request.info, &files) else {
+    let ReceiveDecision::Accept { dir } = state.receiver.accept(&request.info, peer, &files) else {
         return empty_response(403);
     };
     if fs::create_dir_all(&dir).is_err() {
@@ -375,6 +386,9 @@ fn upload(
                     return empty_response(500);
                 }
                 remaining -= n as u64;
+                state
+                    .receiver
+                    .progress(peer, &file.metadata.file_name, length - remaining, length);
             }
         }
     }
@@ -398,13 +412,18 @@ fn upload(
         let _ = fs::remove_file(&part);
         return empty_response(500);
     }
+    let mut completed_dir = None;
     if let Ok(mut sessions) = state.sessions.lock() {
         if let Some(session) = sessions.get_mut(session_id) {
             session.files.remove(file_id);
             if session.files.is_empty() {
+                completed_dir = Some(session.root.clone());
                 sessions.remove(session_id);
             }
         }
+    }
+    if let Some(dir) = completed_dir {
+        state.receiver.completed(peer, &dir);
     }
     empty_response(200)
 }
