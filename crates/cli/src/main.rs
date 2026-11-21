@@ -40,6 +40,23 @@ fn main() -> ExitCode {
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
 
+    if argv.first().is_some_and(|a| a == "browser") {
+        return match gsh_browser::install_if_requested(argv.get(1).map(String::as_str)) {
+            Ok(Some(message)) => {
+                println!("{message}");
+                ExitCode::SUCCESS
+            }
+            Ok(None) => {
+                eprintln!("gsh browser: browser daemon commands are not available yet");
+                ExitCode::from(2)
+            }
+            Err(e) => {
+                eprintln!("gsh browser: {e}");
+                ExitCode::from(1)
+            }
+        };
+    }
+
     match args::parse(&argv) {
         Ok(args::Command::Telemetry(targs)) => ExitCode::from(telemetry::run(&targs)),
         Ok(cmd) => match commands::run(cmd) {

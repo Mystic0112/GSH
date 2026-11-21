@@ -1,0 +1,15 @@
+[package]
+name = "gsh-browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+base64 = "0.22"
+dirs = "6"
+getrandom = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde_json.workspace = true
+sha2 = "0.10"
+thiserror.workspace = true
+tungstenite = { version = "0.26", features = ["handshake", "rustls-tls-webpki-roots"], default-features = false }

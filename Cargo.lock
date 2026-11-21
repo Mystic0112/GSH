@@ -2536,6 +2536,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gsh-browser"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "dirs",
+ "getrandom 0.3.4",
+ "reqwest",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "tungstenite",
+]
+
+[[package]]
 name = "gsh-chat"
 version = "0.1.0"
 dependencies = [
@@ -2548,6 +2562,7 @@ dependencies = [
 name = "gsh-cli"
 version = "0.1.0"
 dependencies = [
+ "gsh-browser",
  "gsh-core",
  "gsh-ipc",
  "libc",
@@ -2599,7 +2614,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-postgres-rustls",
  "tokio-util",
- "webpki-roots",
+ "webpki-roots 1.0.12",
  "zeroize",
 ]
 
@@ -2997,7 +3012,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
+ "webpki-roots 1.0.12",
 ]
 
 [[package]]
@@ -4153,7 +4168,7 @@ dependencies = [
  "tokio-util",
  "typed-builder",
  "uuid",
- "webpki-roots",
+ "webpki-roots 1.0.12",
 ]
 
 [[package]]
@@ -4261,7 +4276,7 @@ dependencies = [
  "tokio-util",
  "twox-hash",
  "url",
- "webpki-roots",
+ "webpki-roots 1.0.12",
 ]
 
 [[package]]
@@ -5891,7 +5906,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "url",
- "webpki-roots",
+ "webpki-roots 1.0.12",
  "xxhash-rust",
 ]
 
@@ -5975,7 +5990,9 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -6002,7 +6019,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
+ "webpki-roots 1.0.12",
 ]
 
 [[package]]
@@ -7338,7 +7355,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
- "webpki-roots",
+ "webpki-roots 1.0.12",
  "zeroize",
 ]
 
@@ -7547,7 +7564,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-rustls",
- "webpki-roots",
+ "webpki-roots 1.0.12",
  "x509-cert",
 ]
 
@@ -7744,6 +7761,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "tungstenite"
+version = "0.26.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4793cb5e56680ecbb1d843515b23b6de9a75eb04b66643e256a396d43be33c13"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http",
+ "httparse",
+ "log",
+ "rand 0.9.5",
+ "rustls",
+ "rustls-pki-types",
+ "sha1 0.10.7",
+ "thiserror 2.0.21",
+ "utf-8",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "twox-hash"
 version = "2.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7932,6 +7969,12 @@ dependencies = [
  "unicode-vo",
  "xmlwriter",
 ]
+
+[[package]]
+name = "utf-8"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 
 [[package]]
 name = "utf8_iter"
@@ -8271,6 +8314,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.12",
 ]
 
 [[package]]
