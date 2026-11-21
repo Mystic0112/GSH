@@ -89,23 +89,25 @@ impl PaneDropZone {
 }
 
 /// Envolve o conteúdo ativo do pane (terminal ou viewer) com a barra de abas.
-pub fn view<'a, M, FSelect, FClose, FHover, FDrag, FIcon, FTitle, FPaneDrag>(
+pub fn view<'a, M, FSelect, FClose, FHover, FDrag, FIcon, FTitle, FPaneDrag, FWheel>(
     model: &'a PaneModel,
     active_content: Element<'a, M>,
     callbacks: ChromeCallbacks<M, FSelect, FClose, FDrag, FIcon, FTitle, FPaneDrag>,
     dirty: &dyn Fn(&crate::pane_model::PaneTab) -> bool,
     hovered: Option<usize>,
     on_hover: FHover,
+    strip: crate::pane_strip::StripInput<FWheel, M>,
 ) -> Element<'a, M>
 where
     M: Clone + 'a,
-    FSelect: Fn(usize) -> M + 'a,
-    FClose: Fn(usize) -> M + 'a,
-    FHover: Fn(Option<usize>) -> M,
-    FDrag: Fn(usize, crate::pane_strip::TabDragEvent) -> M + 'a,
-    FIcon: Fn(crate::pane_model::TermId) -> Option<(&'static [u8], bool)>,
-    FTitle: Fn(crate::pane_model::TermId) -> Option<String>,
+    FSelect: Fn(usize) -> M + Clone + 'a,
+    FClose: Fn(usize) -> M + Clone + 'a,
+    FHover: Fn(Option<usize>) -> M + Clone + 'a,
+    FDrag: Fn(usize, crate::pane_strip::TabDragEvent) -> M + Clone + 'a,
+    FIcon: Fn(crate::pane_model::TermId) -> Option<(&'static [u8], bool)> + Clone + 'a,
+    FTitle: Fn(crate::pane_model::TermId) -> Option<String> + Clone + 'a,
     FPaneDrag: Fn(PaneDragEvent) -> M + Clone + 'a,
+    FWheel: Fn(f32) -> M + Clone + 'a,
 {
     let split_controls = split_controls(
         callbacks.on_split_right.clone(),
@@ -117,7 +119,15 @@ where
     let on_focus = callbacks.on_focus.clone();
     let on_pane_drag = std::rc::Rc::new(callbacks.on_pane_drag.clone());
     let pane_drop_zone = callbacks.pane_drop_zone;
-    let tab_strip = view_tab_strip(model, callbacks, dirty, hovered, on_hover, split_controls);
+    let tab_strip = view_tab_strip(
+        model,
+        callbacks,
+        dirty,
+        hovered,
+        on_hover,
+        strip,
+        split_controls,
+    );
     // o vazio da barra foca o pane; os botões capturam o próprio clique e já focam o pane
     let tab_strip: Element<'a, M> = match on_focus {
         Some(message) => mouse_area(tab_strip).on_press(message).into(),

@@ -26,6 +26,7 @@ pub const CHAT_TAB_TITLE: &str = "Chat";
 pub const PANES_PLACEHOLDER: &str = "Terminal (spike de PTY ainda não ligado)";
 pub const PANE_EMPTY_STATE: &str = "Nenhuma aba aberta — clique em + para abrir um terminal.";
 pub const PANE_VIEW_DROP_HERE_TO_MOVE: &str = "Solte aqui para mover a aba";
+pub const PANE_VIEW_ALL_TABS: &str = "Todas as abas";
 pub const TERMINAL_SPAWN_ERROR: &str = "Não foi possível iniciar a sessão do terminal.";
 
 // Chat com o agente (`pt_BR.i18n.json` -> `gsh.chat`)

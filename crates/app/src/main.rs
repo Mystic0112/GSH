@@ -393,6 +393,9 @@ enum Msg {
     AgentGraphPulse,
     TabHover(Option<(Pane, usize)>),
     TabDrag(Pane, TabDragEvent),
+    TabStripWheel(Pane, f32),
+    OpenTabList(Pane),
+    CloseTabList,
     PaneDrag(Pane, PaneDragEvent),
     SelectTab(usize),
     CloseTab(usize),
@@ -557,6 +560,7 @@ struct Shell {
     /// Pane aguardando a resposta do diálogo "Fechar painel?".
     pending_close_pane: Option<Pane>,
     hovered_tab: Option<(Pane, usize)>,
+    tab_list_open: Option<Pane>,
     tab_drag_source: Option<(Pane, usize)>,
     tab_drag_target: Option<(Pane, usize, bool)>,
     tab_drag_origin: Option<iced::Point>,
@@ -720,6 +724,7 @@ impl Default for Shell {
             panes,
             pending_close_pane: None,
             hovered_tab: None,
+            tab_list_open: None,
             tab_drag_source: None,
             tab_drag_target: None,
             tab_drag_origin: None,
@@ -2564,12 +2569,41 @@ impl Shell {
             .map(Msg::Telemetry)
     }
 
+    fn reveal_focused_active_tab(&self) -> Task<Msg> {
+        let pane = self.panes.focused();
+        self.panes
+            .model(pane)
+            .and_then(PaneModel::active_index)
+            .map_or_else(Task::none, |index| {
+                pane_strip::reveal_active_tab(pane, index)
+            })
+    }
+
     fn boot() -> (Self, Task<Msg>) {
         let mut shell = Self::default();
         let boot_task = shell.telemetry.boot_task().map(Msg::Telemetry);
         let ws_task = shell.sync_telemetry_workspace();
         let db_task = shell.reload_db();
-        (shell, Task::batch([boot_task, ws_task, db_task]))
+        let reveal_tasks: Vec<_> = shell
+            .panes
+            .leaves()
+            .into_iter()
+            .filter_map(|pane| {
+                shell
+                    .panes
+                    .model(pane)
+                    .and_then(PaneModel::active_index)
+                    .map(|index| pane_strip::reveal_active_tab(pane, index))
+            })
+            .collect();
+        (
+            shell,
+            Task::batch(
+                [boot_task, ws_task, db_task]
+                    .into_iter()
+                    .chain(reveal_tasks),
+            ),
+        )
     }
 
     fn handle_telemetry(&mut self, msg: TelemetryMsg) -> Task<Msg> {
@@ -2585,7 +2619,7 @@ impl Shell {
                         .focused_model_mut()
                         .open_telemetry_case(fingerprint, title);
                 }
-                task
+                Task::batch([task, self.reveal_focused_active_tab()])
             }
             Some(TelemetryEffect::OpenFile { path, line }) => {
                 let target = self.open_in_editor(path);
@@ -3085,8 +3119,10 @@ impl Shell {
                     }
                     TabDragEvent::Drop { cursor, .. } => {
                         self.update_tab_drag(cursor);
+                        let mut reveal = None;
                         if self.tab_drag_active {
                             if let Some((target, index, before)) = self.tab_drag_target {
+                                reveal = Some(target);
                                 self.finish_tab_drag(Some((
                                     target,
                                     PaneDropZone::Center,
@@ -3098,8 +3134,27 @@ impl Shell {
                         } else {
                             self.finish_tab_drag(None);
                         }
+                        if let Some(target) = reveal {
+                            if let Some(index) =
+                                self.panes.model(target).and_then(PaneModel::active_index)
+                            {
+                                return pane_strip::reveal_active_tab(target, index);
+                            }
+                        }
                     }
                 }
+                Task::none()
+            }
+            Msg::TabStripWheel(pane, delta) => iced::widget::operation::scroll_by(
+                pane_strip::scrollable_id(pane),
+                iced::widget::scrollable::AbsoluteOffset { x: delta, y: 0.0 },
+            ),
+            Msg::OpenTabList(pane) => {
+                self.tab_list_open = Some(pane);
+                Task::none()
+            }
+            Msg::CloseTabList => {
+                self.tab_list_open = None;
                 Task::none()
             }
             Msg::PaneDrag(pane, event) => {
@@ -3599,6 +3654,8 @@ impl Shell {
             }
             Msg::SelectTab(idx) => {
                 if let Some(tab) = self.panes.focused_model_mut().activate(idx).cloned() {
+                    let pane = self.panes.focused();
+                    let reveal_task = pane_strip::reveal_active_tab(pane, idx);
                     match tab {
                         PaneTab::Terminal(id) => {
                             if let Some(term) = self.terminals.get_mut(&id) {
@@ -3620,13 +3677,18 @@ impl Shell {
                         PaneTab::Query { id, .. } => {
                             // a aba garante as conexões do workspace dela mesmo sem o painel aberto
                             let root = self.queries.get(&id).map(|q| q.root().to_path_buf());
-                            return self.db.ensure_workspace(root).map(Msg::Db);
+                            return Task::batch([
+                                reveal_task,
+                                self.db.ensure_workspace(root).map(Msg::Db),
+                            ]);
                         }
                         PaneTab::TelemetryCase { fingerprint, .. } => {
-                            return self
-                                .telemetry
-                                .load_case_detail_task(fingerprint)
-                                .map(Msg::Telemetry);
+                            return Task::batch([
+                                reveal_task,
+                                self.telemetry
+                                    .load_case_detail_task(fingerprint)
+                                    .map(Msg::Telemetry),
+                            ]);
                         }
                         PaneTab::Farm
                         | PaneTab::Settings
@@ -3635,6 +3697,7 @@ impl Shell {
                         | PaneTab::Harness(_)
                         | PaneTab::AgentGraph(_) => {}
                     }
+                    return reveal_task;
                 }
                 Task::none()
             }
@@ -3679,7 +3742,7 @@ impl Shell {
                     self.settings.reload();
                 }
                 self.panes.focused_model_mut().open_settings();
-                Task::none()
+                self.reveal_focused_active_tab()
             }
             Msg::Settings(message) => {
                 self.settings.claude.workspace = self.active_workspace_dir().map(Path::to_path_buf);
@@ -3719,7 +3782,7 @@ impl Shell {
             }
             Msg::OpenFarm => {
                 self.panes.focused_model_mut().open_farm();
-                Task::none()
+                self.reveal_focused_active_tab()
             }
             Msg::OpenAgentGraph => {
                 let workspace = self
@@ -3735,7 +3798,7 @@ impl Shell {
                 }
                 self.panes.focused_model_mut().open_agent_graph(&workspace);
                 self.place_missing_graph_agents(&workspace);
-                Task::none()
+                self.reveal_focused_active_tab()
             }
             Msg::AgentGraph(agent_graph::Message::Create) => {
                 self.agent_graph_create_at = None;
@@ -4430,6 +4493,7 @@ impl Shell {
                 Task::none()
             }
             Msg::SelectTabIn(pane, idx) => {
+                self.tab_list_open = None;
                 self.panes.focus(pane);
                 self.update(Msg::SelectTab(idx))
             }
@@ -4487,7 +4551,13 @@ impl Shell {
             }
             Msg::NewTerminalTab => {
                 self.open_terminal_in_focused();
-                Task::none()
+                let pane = self.panes.focused();
+                self.panes
+                    .model(pane)
+                    .and_then(PaneModel::active_index)
+                    .map_or_else(Task::none, |index| {
+                        pane_strip::reveal_active_tab(pane, index)
+                    })
             }
             Msg::NewChatTab => {
                 let cwd = self.active_workspace_dir().map(Path::to_path_buf);
@@ -4504,7 +4574,13 @@ impl Shell {
                     )
                     .with_static_test_mode(self.static_test_mode);
                 self.chats.insert(id, chat);
-                Task::none()
+                let pane = self.panes.focused();
+                self.panes
+                    .model(pane)
+                    .and_then(PaneModel::active_index)
+                    .map_or_else(Task::none, |index| {
+                        pane_strip::reveal_active_tab(pane, index)
+                    })
             }
             Msg::SelectWorkspace(idx) => {
                 if idx != self.workspaces.selected_index() {
@@ -5042,6 +5118,13 @@ impl Shell {
             &dirty,
             hovered,
             move |index| Msg::TabHover(index.map(|index| (pane, index))),
+            pane_strip::StripInput {
+                pane,
+                on_wheel: move |delta| Msg::TabStripWheel(pane, delta),
+                menu_open: self.tab_list_open == Some(pane),
+                on_open_menu: Msg::OpenTabList(pane),
+                on_close_menu: Msg::CloseTabList,
+            },
         )
     }
 
@@ -5548,6 +5631,7 @@ mod tests {
             panes: PaneTree::default(),
             pending_close_pane: None,
             hovered_tab: None,
+            tab_list_open: None,
             tab_drag_source: None,
             tab_drag_target: None,
             tab_drag_origin: None,

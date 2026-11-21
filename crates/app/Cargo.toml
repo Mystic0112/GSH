@@ -24,6 +24,7 @@ gsh-telemetry = { path = "../telemetry" }
 gsh-term = { path = "../term" }
 gsh-team = { path = "../team" }
 iced = { version = "0.14", features = ["advanced", "canvas", "tokio", "svg", "image", "markdown"] }
+iced_runtime = "0.14"
 arboard = { version = "3.7", features = ["wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 pulldown-cmark = "0.12"

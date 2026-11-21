@@ -2517,6 +2517,7 @@ dependencies = [
  "gsh-telemetry",
  "gsh-term",
  "iced",
+ "iced_runtime",
  "iced_test",
  "image",
  "libc",
