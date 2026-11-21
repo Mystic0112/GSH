@@ -199,7 +199,7 @@ impl StatusServer {
             #[cfg(unix)]
             Transport::Unix => {
                 let path = config.gsh_dir.join(format!("{stem}.sock"));
-                let listener = bind_unix(&path)?;
+                let listener = bind_private_unix(&path)?;
                 (
                     Listener::Unix(listener),
                     Endpoint::Unix(path.clone()),
@@ -329,7 +329,7 @@ impl Drop for StatusServer {
 }
 
 #[cfg(unix)]
-fn bind_unix(path: &Path) -> Result<UnixListener, ServerError> {
+pub fn bind_private_unix(path: &Path) -> Result<UnixListener, ServerError> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_socket() => {
             fs::remove_file(path).map_err(|source| ServerError::StaleSocket {

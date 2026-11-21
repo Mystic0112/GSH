@@ -43,8 +43,6 @@ fn main() -> ExitCode {
     if argv.first().is_some_and(|a| a == "browser") {
         let result = if argv.get(1).map(String::as_str) == Some("daemon") {
             gsh_browser::daemon_main().map(|_| String::new())
-        } else if argv.get(1).map(String::as_str) == Some("start") {
-            gsh_browser::client_command(&["status".to_string()])
         } else {
             gsh_browser::cli(argv.get(1..).unwrap_or_default())
         };

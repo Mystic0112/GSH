@@ -108,6 +108,7 @@ fn reference(snapshot: &str, name: &str) -> String {
 }
 
 #[test]
+#[cfg_attr(not(has_obscura), ignore = "requires GSH_OBSCURA")]
 fn sobe_e_derruba_obscura() {
     binary_is_required();
     let obscura = Obscura::start().unwrap();
@@ -141,6 +142,7 @@ fn sobe_e_derruba_obscura() {
 }
 
 #[test]
+#[cfg_attr(not(has_obscura), ignore = "requires GSH_OBSCURA")]
 fn navega_e_le_titulo() {
     let server = TestServer::start();
     let mut browser = browser(&server);
@@ -148,6 +150,7 @@ fn navega_e_le_titulo() {
 }
 
 #[test]
+#[cfg_attr(not(has_obscura), ignore = "requires GSH_OBSCURA")]
 fn snapshot_tem_refs() {
     let server = TestServer::start();
     let mut browser = browser(&server);
@@ -173,6 +176,7 @@ fn snapshot_tem_refs() {
 }
 
 #[test]
+#[cfg_attr(not(has_obscura), ignore = "requires GSH_OBSCURA")]
 fn fill_e_click() {
     let server = TestServer::start();
     let mut browser = browser(&server);
@@ -190,6 +194,7 @@ fn fill_e_click() {
 }
 
 #[test]
+#[cfg_attr(not(has_obscura), ignore = "requires GSH_OBSCURA")]
 fn click_em_link_navega() {
     let server = TestServer::start();
     let mut browser = browser(&server);
@@ -201,6 +206,7 @@ fn click_em_link_navega() {
 }
 
 #[test]
+#[cfg_attr(not(has_obscura), ignore = "requires GSH_OBSCURA")]
 fn ref_antiga_e_recusada() {
     let server = TestServer::start();
     let mut browser = browser(&server);
@@ -215,6 +221,7 @@ fn ref_antiga_e_recusada() {
 }
 
 #[test]
+#[cfg_attr(not(has_obscura), ignore = "requires GSH_OBSCURA")]
 fn shot_gera_png() {
     let server = TestServer::start();
     let mut browser = browser(&server);
@@ -226,6 +233,7 @@ fn shot_gera_png() {
 }
 
 #[test]
+#[cfg_attr(not(has_obscura), ignore = "requires GSH_OBSCURA")]
 fn duas_abas_independentes() {
     let server = TestServer::start();
     let mut browser = browser(&server);
@@ -238,6 +246,7 @@ fn duas_abas_independentes() {
 }
 
 #[test]
+#[cfg_attr(not(has_obscura), ignore = "requires GSH_OBSCURA")]
 fn text_markdown() {
     let server = TestServer::start();
     let mut browser = browser(&server);
@@ -250,6 +259,7 @@ fn text_markdown() {
 }
 
 #[test]
+#[cfg_attr(not(has_obscura), ignore = "requires GSH_OBSCURA")]
 fn goto_bloqueia_esquemas() {
     let server = TestServer::start();
     let mut browser = browser(&server);
@@ -269,6 +279,7 @@ fn goto_bloqueia_esquemas() {
 }
 
 #[test]
+#[cfg_attr(not(has_obscura), ignore = "requires GSH_OBSCURA")]
 fn wait_texto() {
     let server = TestServer::start();
     let mut browser = browser(&server);

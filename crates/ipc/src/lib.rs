@@ -18,7 +18,24 @@
 
 mod server;
 
+#[cfg(unix)]
+pub use server::bind_private_unix;
 pub use server::{
     gsh_dir_from_env, Delivery, Endpoint, PendingCommand, ServerConfig, ServerError, StatusServer,
     Transport,
 };
+
+/// Compara tokens IPC sem encerrar a comparação no primeiro byte divergente.
+pub fn token_matches(expected: &str, received: &str) -> bool {
+    use std::iter;
+    let mut diff = expected.len() ^ received.len();
+    for (a, b) in expected
+        .bytes()
+        .chain(iter::repeat(0))
+        .zip(received.bytes().chain(iter::repeat(0)))
+        .take(expected.len().max(received.len()))
+    {
+        diff |= usize::from(a ^ b);
+    }
+    diff == 0
+}

@@ -44,7 +44,10 @@ impl Browser {
 
     pub fn eval(&mut self, expression: &str) -> Result<serde_json::Value, BrowserError> {
         let result = self.action("eval", [expression])?;
-        serde_json::from_str(&result).map_err(BrowserError::from)
+        let result = result
+            .strip_prefix(&format!("{}\n", crate::snapshot::WARNING))
+            .unwrap_or(&result);
+        serde_json::from_str(result).map_err(BrowserError::from)
     }
 
     pub fn snapshot(&mut self) -> Result<String, BrowserError> {
@@ -251,7 +254,11 @@ pub fn run_action(state: &mut BrowserState, a: &Action) -> Result<String, Browse
                 json!({"expression":expr,"returnByValue":true,"awaitPromise":true}),
                 Some(&sid),
             )?;
-            serde_json::to_string(&v["result"]["value"])?
+            format!(
+                "{}\n{}",
+                crate::snapshot::WARNING,
+                serde_json::to_string(&v["result"]["value"])?
+            )
         }
         "shot" => {
             let v = state.cdp.call(
@@ -350,6 +357,36 @@ pub fn run_action(state: &mut BrowserState, a: &Action) -> Result<String, Browse
                 Some(&sid),
             )?;
             "pressed".into()
+        }
+        "wait" => {
+            let needle = serde_json::to_string(arg)?;
+            let expression = format!("document.body?.innerText.includes({needle})");
+            let seconds = a
+                .args
+                .get(1)
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(10);
+            let end = Instant::now() + Duration::from_secs(seconds);
+            loop {
+                let v = state.cdp.call(
+                    "Runtime.evaluate",
+                    json!({"expression":expression,"returnByValue":true,"awaitPromise":true}),
+                    Some(&sid),
+                )?;
+                if v.pointer("/result/value")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                {
+                    break;
+                }
+                if Instant::now() >= end {
+                    return Err(BrowserError::Message(format!(
+                        "timed out waiting for text: {arg}"
+                    )));
+                }
+                thread::sleep(Duration::from_millis(40));
+            }
+            "found".into()
         }
         _ => {
             return Err(BrowserError::Message(format!(

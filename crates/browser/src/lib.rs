@@ -18,7 +18,11 @@ pub use url::validate_url;
 pub fn cli(args: &[String]) -> Result<String, BrowserError> {
     if args.first().map(String::as_str) == Some("install") {
         install()?;
-        return Ok("Obscura installed.".into());
+        return Ok(if args.iter().any(|arg| arg == "--json") {
+            serde_json::json!({"ok":true,"result":"Obscura installed."}).to_string()
+        } else {
+            "Obscura installed.".into()
+        });
     }
     client_command(args)
 }
