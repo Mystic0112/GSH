@@ -1,12 +1,153 @@
 use crate::{cdp::BrowserError, obscura::Obscura, snapshot::snapshot, validate_url, Cdp};
 use serde_json::json;
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fs,
+    path::PathBuf,
+    thread,
+    time::{Duration, Instant},
+};
 pub struct BrowserState {
     pub obscura: Obscura,
     pub cdp: Cdp,
     pub(crate) pages: HashMap<String, (String, String)>,
     pub(crate) refs: HashMap<String, HashMap<String, i64>>,
     pub temp: PathBuf,
+}
+
+/// A direct, in-process browser session backed by an Obscura process.
+pub struct Browser {
+    state: BrowserState,
+    page: String,
+}
+
+impl Browser {
+    pub fn start() -> Result<Self, BrowserError> {
+        let obscura = Obscura::start()?;
+        let cdp = Cdp::connect(&obscura.websocket_endpoint(), &obscura.token)?;
+        Ok(Self {
+            state: BrowserState {
+                obscura,
+                cdp,
+                pages: HashMap::new(),
+                refs: HashMap::new(),
+                temp: std::env::temp_dir(),
+            },
+            page: "main".into(),
+        })
+    }
+
+    pub fn goto(&mut self, url: &str) -> Result<(), BrowserError> {
+        self.action("goto", [url])?;
+        self.wait_ready(Duration::from_secs(10))
+    }
+
+    pub fn eval(&mut self, expression: &str) -> Result<serde_json::Value, BrowserError> {
+        let result = self.action("eval", [expression])?;
+        serde_json::from_str(&result).map_err(BrowserError::from)
+    }
+
+    pub fn snapshot(&mut self) -> Result<String, BrowserError> {
+        self.action("snapshot", std::iter::empty::<&str>())
+    }
+
+    pub fn text(&mut self) -> Result<String, BrowserError> {
+        self.action("text", std::iter::empty::<&str>())
+    }
+
+    pub fn fill(&mut self, reference: &str, value: &str) -> Result<(), BrowserError> {
+        self.action("fill", [reference, value]).map(|_| ())
+    }
+
+    pub fn click(&mut self, reference: &str) -> Result<(), BrowserError> {
+        let previous = self.current_url()?;
+        self.action("click", [reference])?;
+        let end = Instant::now() + Duration::from_millis(900);
+        while Instant::now() < end {
+            if self.current_url().is_ok_and(|url| url != previous) {
+                return self.wait_ready(Duration::from_secs(10));
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
+        Ok(())
+    }
+
+    pub fn back(&mut self) -> Result<(), BrowserError> {
+        self.action("back", std::iter::empty::<&str>())?;
+        self.wait_ready(Duration::from_secs(10))
+    }
+
+    pub fn shot(&mut self) -> Result<PathBuf, BrowserError> {
+        self.action("shot", std::iter::empty::<&str>())
+            .map(PathBuf::from)
+    }
+
+    pub fn open_tab(&mut self, name: &str, url: &str) -> Result<(), BrowserError> {
+        self.select_tab(name)?;
+        self.goto(url)
+    }
+
+    pub fn select_tab(&mut self, name: &str) -> Result<(), BrowserError> {
+        self.page = name.to_owned();
+        if !self.state.pages.contains_key(name) {
+            self.action("open", [name])?;
+        }
+        Ok(())
+    }
+
+    pub fn wait(&mut self, text: &str, timeout: Duration) -> Result<(), BrowserError> {
+        let needle = serde_json::to_string(text)?;
+        let expression = format!("document.body?.innerText.includes({needle})");
+        let end = Instant::now() + timeout;
+        loop {
+            if self.eval(&expression)?.as_bool() == Some(true) {
+                return Ok(());
+            }
+            if Instant::now() >= end {
+                return Err(BrowserError::Message(format!(
+                    "timed out waiting for text: {text}"
+                )));
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
+    }
+
+    pub fn current_url(&mut self) -> Result<String, BrowserError> {
+        self.eval("location.href")?
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| BrowserError::Message("page URL is unavailable".into()))
+    }
+
+    fn wait_ready(&mut self, timeout: Duration) -> Result<(), BrowserError> {
+        let end = Instant::now() + timeout;
+        loop {
+            if self.eval("document.readyState")?.as_str() == Some("complete") {
+                return Ok(());
+            }
+            if Instant::now() >= end {
+                return Err(BrowserError::Message(
+                    "timed out waiting for page load".into(),
+                ));
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
+    }
+
+    fn action<I, S>(&mut self, verb: &str, args: I) -> Result<String, BrowserError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        run_action(
+            &mut self.state,
+            &Action {
+                verb: verb.to_owned(),
+                args: args.into_iter().map(|s| s.as_ref().to_owned()).collect(),
+                page: self.page.clone(),
+            },
+        )
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Action {
@@ -139,9 +280,8 @@ pub fn run_action(state: &mut BrowserState, a: &Action) -> Result<String, Browse
                 .ok_or_else(|| BrowserError::Message("history unavailable".into()))?;
             let idx = if a.verb == "back" { cur - 1 } else { cur + 1 };
             let e = ents
-                .iter()
-                .find(|e| e["index"].as_i64() == Some(idx))
-                .ok_or_else(|| BrowserError::Message("no history entry".into()))?;
+                .get(usize::try_from(idx).unwrap_or(usize::MAX))
+                .ok_or_else(|| BrowserError::Message(format!("no history entry at {idx}: {h}")))?;
             state.cdp.call(
                 "Page.navigateToHistoryEntry",
                 json!({"entryId":e["id"]}),

@@ -6,6 +6,7 @@ mod obscura;
 mod snapshot;
 mod url;
 
+pub use actions::Browser;
 pub use actions::{run_action, Action, BrowserState};
 pub use cdp::{BrowserError, Cdp};
 pub use daemon::{client_command, daemon_main, Endpoint};

@@ -9,6 +9,19 @@ pub struct Obscura {
     pub port: u16,
     pub token: String,
 }
+impl Obscura {
+    pub fn start() -> Result<Self, BrowserError> {
+        start_obscura(false)
+    }
+
+    pub fn endpoint(&self) -> String {
+        format!("http://127.0.0.1:{}/json/version", self.port)
+    }
+
+    pub fn websocket_endpoint(&self) -> String {
+        format!("ws://127.0.0.1:{}/devtools/browser", self.port)
+    }
+}
 impl Drop for Obscura {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -73,7 +86,7 @@ pub fn start_obscura(allow_private: bool) -> Result<Obscura, BrowserError> {
     .stdout(Stdio::null())
     .stderr(Stdio::null());
     if allow_private {
-        cmd.arg("--allow-private-network");
+        cmd.env("OBSCURA_ALLOW_PRIVATE_NETWORK", "1");
     }
     let child = cmd.spawn()?;
     let mut o = Obscura { child, port, token };
