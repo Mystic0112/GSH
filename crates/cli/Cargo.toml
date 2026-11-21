@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 gsh-core = { path = "../core" }
+gsh-localsend = { path = "../localsend" }
 serde_json.workspace = true
 thiserror.workspace = true
 

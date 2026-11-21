@@ -1,0 +1,21 @@
+[package]
+name = "gsh-localsend"
+description = "LocalSend Protocol v2 device discovery and file transfer for GSH"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dirs = "6"
+get_if_addrs = "0.5"
+getrandom = { version = "0.3", features = ["std"] }
+rcgen = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-pemfile = "2"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+socket2 = { version = "0.6", features = ["all"] }
+thiserror.workspace = true
+
