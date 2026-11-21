@@ -41,14 +41,19 @@ fn main() -> ExitCode {
         .collect();
 
     if argv.first().is_some_and(|a| a == "browser") {
-        return match gsh_browser::install_if_requested(argv.get(1).map(String::as_str)) {
-            Ok(Some(message)) => {
-                println!("{message}");
+        let result = if argv.get(1).map(String::as_str) == Some("daemon") {
+            gsh_browser::daemon_main().map(|_| String::new())
+        } else if argv.get(1).map(String::as_str) == Some("start") {
+            gsh_browser::client_command(&["status".to_string()])
+        } else {
+            gsh_browser::cli(argv.get(1..).unwrap_or_default())
+        };
+        return match result {
+            Ok(out) => {
+                if !out.is_empty() {
+                    println!("{out}");
+                }
                 ExitCode::SUCCESS
-            }
-            Ok(None) => {
-                eprintln!("gsh browser: browser daemon commands are not available yet");
-                ExitCode::from(2)
             }
             Err(e) => {
                 eprintln!("gsh browser: {e}");
