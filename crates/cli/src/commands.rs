@@ -45,6 +45,7 @@ pub fn run(cmd: Command) -> Result<Option<String>, CliError> {
         } => close_tab(label, &target, json).map(Some),
         Command::ListTabs { target, json } => list_tabs(&target, json),
         Command::Telemetry(_) => Ok(None),
+        Command::LocalSend { args } => crate::localsend::run(&args),
     }
 }
 

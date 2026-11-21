@@ -11,6 +11,8 @@ USAGE:
   gsh peers                                list agents reachable through the team
   gsh deliver --to <Name/agent> <file> [note]  hand a file to a teammate's
                                                agent on the office network
+  gsh localsend peers [--json]             list LocalSend devices on the LAN
+  gsh localsend send <alias|ip> <file...>  send files to a LocalSend device
   gsh list-tabs       [--json]             list active tabs (alias: list-panes)
   gsh new-tab [--cwd <dir>] [--title <name>] [--split h|v]
                                                open a new terminal tab (prints its id)
@@ -36,6 +38,12 @@ TEAM (office network):
   order from their user) and decides what to do; deliveries land in
   `.gsh/inbox/<your name>/` in their agent's folder. When a teammate knocks
   on yours, reply with the `gsh msg --to ...` line shown in the message.
+
+LOCALSEND:
+  gsh localsend peers [--json]
+  gsh localsend send <alias|ip> <file...>
+  Lists or sends files to LocalSend Protocol v2 devices. A transfer requires
+  acceptance on the receiving device.
 
 IDS:
   Workspace ids are opaque UUIDs — use `workspacePath` (list-tabs) when you

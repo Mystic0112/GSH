@@ -228,6 +228,7 @@ fn expected_full_config() -> Config {
                 door_allow: "ana, bruno".to_owned(),
             },
         },
+        localsend: gsh_config::schema::LocalSend::default(),
     }
 }
 

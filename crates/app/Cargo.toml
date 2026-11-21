@@ -20,6 +20,7 @@ gsh-git = { path = "../git" }
 gsh-harness = { path = "../harness" }
 gsh-search = { path = "../search" }
 gsh-ipc = { path = "../ipc" }
+gsh-localsend = { path = "../localsend" }
 gsh-telemetry = { path = "../telemetry" }
 gsh-term = { path = "../term" }
 gsh-team = { path = "../team" }
