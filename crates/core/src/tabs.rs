@@ -1,7 +1,11 @@
-//! Formatação da saída de `gsh list-tabs`. A saída é lida por humano E por
+//! Domínio das abas e formatação da saída de `gsh list-tabs`. A saída é lida por humano E por
 //! agente, então largura de coluna e espaçamento importam.
 
 use serde_json::Value;
+
+mod model;
+
+pub use model::{NewTab, Tab, TabKind, EMPTY_TAB_TITLE};
 
 /// Preenche à direita com espaços até `n` caracteres (nunca trunca).
 pub fn pad(s: &str, n: usize) -> String {
@@ -59,7 +63,7 @@ fn format_tab_line(e: &Value) -> String {
     } else {
         format!("⚲ {label}")
     };
-    // Workspace: basename do path (o `workspaceId` é um UUID opaco). Sem
+    // Workspace: basename do path (o `workspaceId` é um identificador opaco). Sem
     // `workspacePath` (app antigo) mostra o id.
     let ws_path = field(e, "workspacePath");
     let ws = if ws_path.is_empty() {

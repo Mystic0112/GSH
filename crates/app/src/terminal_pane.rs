@@ -119,6 +119,9 @@ impl TerminalPane {
     /// Em modo estático de teste (`session.is_none()` e `!has_spawn_error`), mantém o snapshot
     /// e apenas atualiza `cwd`.
     pub fn respawn_in_dir(&mut self, cwd: Option<&Path>) {
+        if self.session.as_ref().is_some_and(TermSession::is_remote) {
+            return;
+        }
         if self.session.is_none() && !self.has_spawn_error {
             self.cwd = cwd.map(Path::to_path_buf);
             return;
@@ -199,6 +202,17 @@ impl TerminalPane {
         }
     }
 
+    /// Constrói um pane com sessão existente, respeitando a configuração visual atual.
+    pub fn with_session_config(session: TermSession, config: gsh_config::Config) -> Self {
+        let mut pane = Self::with_session(session);
+        pane.config = config;
+        let scale =
+            (pane.config.effective_terminal_size().clamp(8.0, 32.0) as f32) / theme::TERM_FONT_SIZE;
+        pane.metrics.cell_width *= scale;
+        pane.metrics.cell_height *= scale;
+        pane
+    }
+
     /// Constrói um [`TerminalPane`] estático a partir de um [`TermSnapshot`] (útil para testes).
     pub fn from_snapshot(snapshot: TermSnapshot) -> Self {
         Self::from_snapshot_in_dir(snapshot, None)
@@ -243,6 +257,10 @@ impl TerminalPane {
         self.session.as_ref().and_then(TermSession::child_pid)
     }
 
+    pub fn is_remote(&self) -> bool {
+        self.session.as_ref().is_some_and(TermSession::is_remote)
+    }
+
     /// Título curto OSC 0/2, como `_shortTitle` do Flutter.
     pub fn title(&self) -> Option<String> {
         let title = self.session.as_ref()?.title()?;
@@ -278,6 +296,17 @@ impl TerminalPane {
         true
     }
 
+    pub fn output_page(
+        &self,
+        limit: usize,
+        offset: usize,
+        from_start: bool,
+    ) -> Option<(String, usize, usize)> {
+        self.session
+            .as_ref()
+            .map(|session| session.output_page(limit, offset, from_start))
+    }
+
     /// Diretório de trabalho configurado para esta aba de terminal.
     pub fn cwd(&self) -> Option<&Path> {
         self.cwd.as_deref()
@@ -290,6 +319,28 @@ impl TerminalPane {
 
     /// Envia um comando seguido de quebra de linha para a sessão PTY, se ativa.
     pub fn send_command(&mut self, command: &str) {
+        let trimmed = command.trim_start();
+        if let Some(args) = trimmed
+            .strip_prefix("claude")
+            .filter(|args| args.is_empty() || args.starts_with(char::is_whitespace))
+        {
+            use crate::settings::claude::profiles;
+            match profiles::selected(&self.config).and_then(|path| {
+                path.map(|path| profiles::command(Some(&path), args.trim_start()))
+                    .transpose()
+            }) {
+                Ok(Some(command)) => return self.send_unscoped_command(&command),
+                Ok(None) => {}
+                Err(error) => {
+                    let quoted = crate::settings::claude::profiles::quote_error(&error);
+                    return self.send_unscoped_command(&format!("printf '%s\\n' {quoted} >&2"));
+                }
+            }
+        }
+        self.send_unscoped_command(command);
+    }
+
+    pub fn send_unscoped_command(&mut self, command: &str) {
         if let Some(session) = &self.session {
             session.scroll_to_bottom();
             let line = format!("{command}\n");

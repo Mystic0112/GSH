@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -14,6 +15,8 @@ use thiserror::Error;
 
 const PEER_TTL: Duration = Duration::from_secs(30);
 const DISCOVERY_TICK: Duration = Duration::from_secs(5);
+const REGISTER_TIMEOUT: Duration = Duration::from_secs(2);
+const REGISTER_QUEUE_SIZE: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +42,10 @@ pub enum NetworkError {
     NoInterfaces,
     #[error("file exceeds configured LocalSend size limit")]
     TooLarge,
+    #[error("LocalSend request exceeds the HTTP size limit")]
+    RequestTooLarge,
+    #[error("LocalSend response exceeds the HTTP size limit")]
+    ResponseTooLarge,
     #[error("secure random source failed: {0}")]
     Random(String),
     #[error("LocalSend transfer cancelled")]
@@ -52,9 +59,13 @@ pub struct Discovery {
 }
 impl Discovery {
     pub fn start(identity: Identity) -> Result<Self, NetworkError> {
+        Self::start_with_socket(identity, open_multicast()?)
+    }
+
+    fn start_with_socket(identity: Identity, socket: UdpSocket) -> Result<Self, NetworkError> {
         let peers = Arc::new(RwLock::new(HashMap::new()));
         let stop = Arc::new(AtomicBool::new(false));
-        let socket = open_multicast()?;
+        let registers = start_register_worker(identity.info.clone(), Arc::clone(&stop))?;
         let peer_map = Arc::clone(&peers);
         let worker_stop = Arc::clone(&stop);
         let worker = thread::Builder::new()
@@ -68,17 +79,7 @@ impl Discovery {
                             info: identity.info.clone(),
                             announce: true,
                         };
-                        if let Ok(json) = serde_json::to_vec(&announce) {
-                            if let Ok(addresses) = get_if_addrs() {
-                                for interface in addresses {
-                                    if let IfAddr::V4(addr) = interface.addr {
-                                        if !addr.ip.is_loopback() && !addr.ip.is_unspecified() {
-                                            send_on_interface(&socket, &json, addr.ip);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        send_multicast(&socket, &announce);
                         last_announce = Instant::now();
                     }
                     match socket.recv_from(&mut buffer) {
@@ -94,14 +95,11 @@ impl Discovery {
                                 };
                                 update_peer(&peer_map, message.info.clone(), peer_ip);
                                 if message.announce {
-                                    // Required first response path in Protocol v2: POST register to origin.
                                     if let Some(port) = message.info.port {
-                                        let _ = post_register(
-                                            peer_ip,
-                                            port,
-                                            &message.info,
-                                            &identity.info,
-                                        );
+                                        let address = SocketAddr::new(peer_ip.into(), port);
+                                        // Keep multicast responsive even when the register queue is full.
+                                        let _ =
+                                            registers.try_send((address, message.info.fingerprint));
                                     }
                                     let response = Announcement {
                                         info: identity.info.clone(),
@@ -136,6 +134,36 @@ impl Discovery {
             .map(|peers| peers.values().cloned().collect())
             .unwrap_or_default()
     }
+}
+
+fn start_register_worker(
+    local: DeviceInfo,
+    stop: Arc<AtomicBool>,
+) -> Result<mpsc::SyncSender<(SocketAddr, String)>, NetworkError> {
+    let body = serde_json::to_vec(&local)?;
+    let path = format!("{API}/register");
+    let (sender, receiver) = mpsc::sync_channel::<(SocketAddr, String)>(REGISTER_QUEUE_SIZE);
+    // Drop joins multicast only. An active register can outlive it by REGISTER_TIMEOUT.
+    drop(
+        thread::Builder::new()
+            .name("gsh-localsend-register".into())
+            .spawn(move || {
+                while let Ok((address, fingerprint)) = receiver.recv() {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let _ = client::https_request_with_timeout(
+                        address,
+                        &fingerprint,
+                        "POST",
+                        &path,
+                        &body,
+                        REGISTER_TIMEOUT,
+                    );
+                }
+            })?,
+    );
+    Ok(sender)
 }
 
 fn send_multicast(socket: &UdpSocket, announcement: &Announcement) {
@@ -224,26 +252,9 @@ fn elapsed_since(timestamp: u64) -> u64 {
     now_seconds().saturating_sub(timestamp)
 }
 
-fn post_register(
-    ip: Ipv4Addr,
-    port: u16,
-    peer: &DeviceInfo,
-    local: &DeviceInfo,
-) -> Result<DeviceInfo, NetworkError> {
-    let body = serde_json::to_vec(local)?;
-    let response = client::https_request(
-        SocketAddr::new(ip.into(), port),
-        &peer.fingerprint,
-        "POST",
-        &format!("{API}/register"),
-        &body,
-    )?;
-    Ok(serde_json::from_slice(&response)?)
-}
-
 #[path = "client.rs"]
 pub(crate) mod client;
-pub use client::send_files;
+pub use client::{send_files, send_open_files, send_open_files_until};
 
 pub fn local_info(identity: &Identity) -> DeviceInfo {
     let mut info = identity.info.clone();
@@ -255,7 +266,7 @@ pub fn local_info(identity: &Identity) -> DeviceInfo {
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
-    use std::net::SocketAddrV4;
+    use std::net::{SocketAddrV4, TcpListener};
 
     fn test_identity() -> Identity {
         let generated = rcgen::generate_simple_self_signed(vec!["mcast-test".into()]).unwrap();
@@ -320,5 +331,42 @@ mod tests {
             thread::sleep(Duration::from_millis(100));
         }
         panic!("multicast announcement was not discovered");
+    }
+
+    #[test]
+    fn discovery_drop_does_not_wait_for_stalled_registration() {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        let address = socket.local_addr().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let discovery = Discovery::start_with_socket(test_identity(), socket).unwrap();
+
+        let mut peer = test_identity().info;
+        peer.port = Some(listener.local_addr().unwrap().port());
+        let announcement = serde_json::to_vec(&Announcement {
+            info: peer,
+            announce: true,
+        })
+        .unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sender.send_to(&announcement, address).unwrap();
+
+        let deadline = Instant::now() + REGISTER_TIMEOUT;
+        let (_stalled_connection, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "register did not connect");
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("register accept failed: {error}"),
+            }
+        };
+        let start = Instant::now();
+        drop(discovery);
+        assert!(start.elapsed() < REGISTER_TIMEOUT / 2);
     }
 }

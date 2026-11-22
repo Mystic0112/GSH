@@ -62,6 +62,30 @@ pub fn diff_file(repo: &Path, rel_path: &Path, staged: bool) -> Result<FileDiff,
     GitClient::new().diff_file(repo, rel_path, staged)
 }
 
+/// Lista branches locais do repositório.
+pub fn branches(repo: &Path) -> Result<Vec<String>, GitError> {
+    GitClient::new().branches(repo)
+}
+
+/// Troca para uma branch local se a árvore estiver limpa.
+pub fn switch_branch(repo: &Path, name: &str) -> Result<(), GitError> {
+    GitClient::new().switch_branch(repo, name)
+}
+
+/// Lê as alterações staged, encerrando a leitura quando `max_bytes` é excedido.
+pub fn staged_diff<P: AsRef<Path>>(
+    repo: &Path,
+    paths: &[P],
+    max_bytes: usize,
+) -> Result<String, GitError> {
+    GitClient::new().staged_diff(repo, paths, max_bytes)
+}
+
+/// Lê o diff staged de todo o index com limite de bytes e prazo de execução.
+pub fn staged_index_diff(repo: &Path, max_bytes: usize) -> Result<String, GitError> {
+    GitClient::new().staged_index_diff(repo, max_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -102,6 +126,122 @@ mod tests {
             return None;
         }
         Some(client)
+    }
+
+    fn git(repo: &Path, args: &[&str]) {
+        let output = Command::new(resolve_git_binary())
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .expect("run git fixture");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn switches_local_branches_only_when_worktree_is_clean() {
+        let Some(client) = test_client() else {
+            return;
+        };
+        let temp = TempGitRepo::new();
+        git(&temp.path, &["init"]);
+        git(&temp.path, &["config", "user.name", "GSH Test"]);
+        git(&temp.path, &["config", "user.email", "gsh@example.test"]);
+        fs::write(temp.path.join("file.txt"), "initial\n").unwrap();
+        git(&temp.path, &["add", "file.txt"]);
+        client.commit(&temp.path, "initial").unwrap();
+        git(&temp.path, &["branch", "feature/viewers"]);
+        assert!(client
+            .branches(&temp.path)
+            .unwrap()
+            .contains(&"feature/viewers".into()));
+
+        fs::write(temp.path.join("file.txt"), "unsaved\n").unwrap();
+        assert_eq!(
+            client.switch_branch(&temp.path, "feature/viewers"),
+            Err(GitError::DirtyWorkingTree)
+        );
+        git(&temp.path, &["restore", "--worktree", "--", "file.txt"]);
+        client.switch_branch(&temp.path, "feature/viewers").unwrap();
+        assert_eq!(client.status(&temp.path).unwrap().branch, "feature/viewers");
+        assert!(matches!(
+            client.switch_branch(&temp.path, "missing"),
+            Err(GitError::BranchNotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn staged_diff_stops_at_the_requested_size_limit() {
+        let Some(client) = test_client() else {
+            return;
+        };
+        let temp = TempGitRepo::new();
+        git(&temp.path, &["init"]);
+        fs::write(temp.path.join("file.txt"), "initial\n").unwrap();
+        git(&temp.path, &["add", "file.txt"]);
+        client.commit(&temp.path, "initial").unwrap();
+        fs::write(temp.path.join("file.txt"), "x".repeat(1024)).unwrap();
+        client.stage(&temp.path, &["file.txt"]).unwrap();
+        assert!(matches!(
+            client.staged_diff(&temp.path, &["file.txt"], 64),
+            Err(GitError::StagedDiffTooLarge { max_bytes: 64 })
+        ));
+        assert_eq!(
+            client.staged_index_diff(&temp.path, 64),
+            Err(GitError::StagedDiffTooLarge { max_bytes: 64 })
+        );
+        assert_eq!(
+            client.staged_diff::<&str>(&temp.path, &[], 4096),
+            Err(GitError::EmptyPaths)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_index_diff_keeps_renames_and_ignores_external_converters() {
+        let Some(client) = test_client() else {
+            return;
+        };
+        let temp = TempGitRepo::new();
+        git(&temp.path, &["init"]);
+        fs::write(temp.path.join(".gitattributes"), "data.txt diff=marker\n").unwrap();
+        fs::write(temp.path.join("old.txt"), "same contents\n").unwrap();
+        fs::write(temp.path.join("data.txt"), "before\n").unwrap();
+        git(&temp.path, &["add", "--all"]);
+        client.commit(&temp.path, "initial").unwrap();
+        assert_eq!(client.staged_index_diff(&temp.path, 4096).unwrap(), "");
+
+        git(&temp.path, &["mv", "old.txt", "./:(exclude)renamed.txt"]);
+        fs::write(temp.path.join("data.txt"), "staged data\n").unwrap();
+        client.stage(&temp.path, &["data.txt"]).unwrap();
+        fs::write(temp.path.join("data.txt"), "unstaged data\n").unwrap();
+        let nested = temp.path.join("nested");
+        fs::create_dir(&nested).unwrap();
+        let marker = temp.path.join("converter-ran");
+        let mark = "sh -c ': > converter-ran'";
+        for key in ["diff.external", "diff.marker.textconv"] {
+            let config = format!("{key}={mark}");
+            git(
+                &nested,
+                &["-c", &config, "diff", "--cached", "--no-relative"],
+            );
+            fs::remove_file(&marker).unwrap();
+        }
+        let client = client
+            .with_config("diff.relative", "true")
+            .with_config("diff.renames", "true")
+            .with_config("diff.external", mark)
+            .with_config("diff.marker.textconv", mark);
+        let diff = client.staged_index_diff(&nested, 4096).unwrap();
+        assert!(!marker.exists());
+        assert!(diff.contains("rename from old.txt"));
+        assert!(diff.contains("rename to :(exclude)renamed.txt"));
+        assert!(diff.contains("+staged data"));
+        assert!(!diff.contains("unstaged data"));
     }
 
     #[test]

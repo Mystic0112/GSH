@@ -1,11 +1,15 @@
 //! Persistência do layout da janela principal.
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs, io,
     path::{Path, PathBuf},
 };
 
 use crate::pane_model::{ChatId, PaneModel, PaneTab, QueryId, TermId};
+
+#[cfg(target_os = "linux")]
+mod flutter;
 
 pub const VERSION: u32 = 1;
 
@@ -18,12 +22,24 @@ pub struct LayoutDoc {
     pub active_workspace: usize,
     #[serde(default)]
     pub terminal_cwds: Vec<(TermId, PathBuf)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_terminal_ids: Vec<TermId>,
     #[serde(default)]
     pub chat_sessions: Vec<(ChatId, String)>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub chat_profiles: BTreeMap<ChatId, PathBuf>,
     #[serde(default)]
     pub query_files: Vec<(QueryId, PathBuf)>,
     #[serde(default)]
     pub query_connections: Vec<(QueryId, String)>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workspace_names: BTreeMap<PathBuf, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workspace_realms: BTreeMap<PathBuf, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_channel: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub imported_layouts: BTreeMap<PathBuf, LayoutDoc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -52,6 +68,21 @@ impl LayoutDoc {
     pub fn read(path: &Path) -> Option<Self> {
         let doc: Self = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
         (doc.version == VERSION).then_some(doc)
+    }
+    pub fn read_for_startup(path: &Path) -> Option<Self> {
+        #[cfg(target_os = "linux")]
+        if fs::symlink_metadata(path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound) {
+            return match gsh_config::default_flutter_candidates()
+                .and_then(|candidates| gsh_config::flutter_state::load(&candidates))
+            {
+                Ok(state) => state.and_then(flutter::convert),
+                Err(error) => {
+                    eprintln!("GSH layout import: {error}");
+                    None
+                }
+            };
+        }
+        Self::read(path)
     }
     pub fn write_atomic(&self, path: &Path) -> io::Result<()> {
         let parent = path.parent().ok_or_else(|| {
@@ -145,18 +176,30 @@ impl crate::pane_tree::PaneTree {
             workspaces,
             active_workspace,
             terminal_cwds: Vec::new(),
+            remote_terminal_ids: Vec::new(),
             chat_sessions: Vec::new(),
+            chat_profiles: BTreeMap::new(),
             query_files: Vec::new(),
             query_connections: Vec::new(),
+            workspace_names: BTreeMap::new(),
+            workspace_realms: BTreeMap::new(),
+            active_channel: None,
+            imported_layouts: BTreeMap::new(),
         }
     }
     pub fn from_doc(doc: &LayoutDoc) -> Self {
         use iced::widget::pane_grid::{self, Configuration};
+        let remote_terminals = doc
+            .remote_terminal_ids
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
         fn config(
             n: &LayoutNode,
             models: &mut Vec<PaneModel>,
             next_term: &mut TermId,
             query_files: &[(QueryId, PathBuf)],
+            remote_terminals: &BTreeSet<TermId>,
         ) -> Configuration<PaneModel> {
             match n {
                 LayoutNode::Pane {
@@ -168,6 +211,7 @@ impl crate::pane_tree::PaneTree {
                         .iter()
                         .enumerate()
                         .filter(|(_, t)| match t {
+                            PaneTab::Terminal(id) => !remote_terminals.contains(id),
                             PaneTab::File(p) => p.exists(),
                             PaneTab::Query { id, .. } => query_files
                                 .iter()
@@ -176,7 +220,15 @@ impl crate::pane_tree::PaneTree {
                             PaneTab::Harness(p) | PaneTab::AgentGraph(p) => p.exists(),
                             _ => true,
                         })
-                        .map(|(index, tab)| (index, tab.clone()))
+                        .map(|(index, tab)| {
+                            let tab = match tab {
+                                PaneTab::File(path) => PaneTab::File(
+                                    path.canonicalize().unwrap_or_else(|_| path.clone()),
+                                ),
+                                _ => tab.clone(),
+                            };
+                            (index, tab)
+                        })
                         .collect();
                     let restored_active = active.and_then(|active| {
                         kept.iter().position(|(original, _)| *original == active)
@@ -186,8 +238,12 @@ impl crate::pane_tree::PaneTree {
                         restored_tabs.push(PaneTab::Terminal(*next_term));
                         *next_term = next_term.saturating_add(1);
                     }
-                    let model =
-                        PaneModel::restore(restored_tabs, restored_active, terminal_labels.clone());
+                    let labels = terminal_labels
+                        .iter()
+                        .filter(|(id, _)| !remote_terminals.contains(id))
+                        .cloned()
+                        .collect();
+                    let model = PaneModel::restore(restored_tabs, restored_active, labels);
                     models.push(model.clone());
                     Configuration::Pane(model)
                 }
@@ -197,30 +253,38 @@ impl crate::pane_tree::PaneTree {
                         Axis::Vertical => pane_grid::Axis::Vertical,
                     },
                     ratio: ratio.clamp(0.16, 0.84),
-                    a: Box::new(config(a, models, next_term, query_files)),
-                    b: Box::new(config(b, models, next_term, query_files)),
+                    a: Box::new(config(a, models, next_term, query_files, remote_terminals)),
+                    b: Box::new(config(b, models, next_term, query_files, remote_terminals)),
                 },
             }
         }
-        fn max_term(node: &LayoutNode) -> TermId {
+        fn max_term(node: &LayoutNode, remote_terminals: &BTreeSet<TermId>) -> TermId {
             match node {
                 LayoutNode::Pane { tabs, .. } => tabs
                     .iter()
                     .filter_map(|tab| {
                         if let PaneTab::Terminal(id) = tab {
-                            Some(*id)
+                            (!remote_terminals.contains(id)).then_some(*id)
                         } else {
                             None
                         }
                     })
                     .max()
                     .unwrap_or(0),
-                LayoutNode::Split { a, b, .. } => max_term(a).max(max_term(b)),
+                LayoutNode::Split { a, b, .. } => {
+                    max_term(a, remote_terminals).max(max_term(b, remote_terminals))
+                }
             }
         }
         let mut models = Vec::new();
-        let mut next_term = max_term(&doc.tree).saturating_add(1);
-        let configuration = config(&doc.tree, &mut models, &mut next_term, &doc.query_files);
+        let mut next_term = max_term(&doc.tree, &remote_terminals).saturating_add(1);
+        let configuration = config(
+            &doc.tree,
+            &mut models,
+            &mut next_term,
+            &doc.query_files,
+            &remote_terminals,
+        );
         let grid = pane_grid::State::with_configuration(configuration);
         let leaves: Vec<_> = {
             fn walk(n: &pane_grid::Node, v: &mut Vec<pane_grid::Pane>) {
@@ -342,6 +406,8 @@ mod tests {
     fn new_session_metadata_round_trips_and_old_v1_documents_still_read() {
         let mut doc = crate::pane_tree::PaneTree::default().snapshot();
         doc.chat_sessions = vec![(7, "session-7".into())];
+        doc.chat_profiles
+            .insert(7, PathBuf::from("/tmp/claude-work"));
         doc.query_files = vec![(8, PathBuf::from("query.dbq"))];
         doc.query_connections = vec![(8, "db".into())];
         let json = serde_json::to_value(&doc).unwrap();
@@ -349,6 +415,7 @@ mod tests {
         let mut old = serde_json::to_value(&doc).unwrap();
         let object = old.as_object_mut().unwrap();
         object.remove("chat_sessions");
+        object.remove("chat_profiles");
         object.remove("query_files");
         object.remove("query_connections");
         let decoded: LayoutDoc = serde_json::from_value(old).unwrap();
@@ -406,5 +473,18 @@ mod tests {
         }));
         assert_eq!(doc.chat_sessions[0].1, "session-12");
         assert_eq!(doc.query_connections[0].1, "selected-pg");
+    }
+
+    #[test]
+    fn remote_terminals_are_excluded_when_restoring_layout() {
+        let mut tree = crate::pane_tree::PaneTree::default();
+        let model = tree.focused_model_mut();
+        model.open_terminal(2);
+        model.set_terminal_label(2, "prod · SSH".into());
+        let mut doc = tree.snapshot();
+        doc.remote_terminal_ids = vec![2];
+        let restored = crate::pane_tree::PaneTree::from_doc(&doc);
+        assert_eq!(restored.focused_model().tabs(), &[PaneTab::Terminal(1)]);
+        assert_eq!(restored.focused_model().terminal_label(2), None);
     }
 }

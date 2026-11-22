@@ -8,6 +8,7 @@ use gsh_term::{indexed_to_rgb, Cell, CellColor, NamedColor, Rgb};
 use iced::font::{Style as FontStyle, Weight};
 use iced::{Color, Font, Padding};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, RwLock};
 
 /// Estrutura completa de tokens de superfície, borda, texto, marca e semântica
 /// de uma variante do tema `gsh` (espelha `AppColors` em `app_colors.dart`).
@@ -138,10 +139,130 @@ impl ThemeVariant {
 }
 
 static ACTIVE_LIGHT: AtomicBool = AtomicBool::new(false);
+static ACTIVE_PALETTE: LazyLock<RwLock<Option<GshPalette>>> = LazyLock::new(|| RwLock::new(None));
 
 /// Troca a variante ativa; vale para o próximo `view`, sem reiniciar.
 pub fn set_active(variant: ThemeVariant) {
     ACTIVE_LIGHT.store(variant == ThemeVariant::Light, Ordering::Relaxed);
+    *ACTIVE_PALETTE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
+/// Define tokens de UI de um tema importado; tokens ausentes herdam o GSH.
+pub fn set_imported_palette(spec: &str, variant: ThemeVariant) -> bool {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(spec) else {
+        return false;
+    };
+    let name = if variant == ThemeVariant::Light {
+        "light"
+    } else {
+        "dark"
+    };
+    let variants = root.get("variants");
+    let selected = variants
+        .and_then(|v| v.get(name))
+        .or_else(|| variants.and_then(|v| v.get(if name == "light" { "dark" } else { "light" })));
+    let Some(ui) = selected.and_then(|v| v.get("ui")) else {
+        return false;
+    };
+    set_palette_tokens(ui, variant)
+}
+
+/// Aplica a paleta embarcada do registry Flutter, ou a paleta do arquivo importado.
+pub fn set_theme_palette(id: &str, imported: Option<&str>, variant: ThemeVariant) -> bool {
+    if let Some(spec) = imported {
+        return set_imported_palette(spec, variant);
+    }
+    let Ok(themes) =
+        serde_json::from_str::<serde_json::Value>(include_str!("builtin_theme_palettes.json"))
+    else {
+        return false;
+    };
+    let Some(theme) = themes.as_array().and_then(|all| {
+        all.iter()
+            .find(|theme| theme.get("id").and_then(serde_json::Value::as_str) == Some(id))
+    }) else {
+        return false;
+    };
+    let key = if variant == ThemeVariant::Light {
+        "light"
+    } else {
+        "dark"
+    };
+    let base_key = if key == "light" { "dark" } else { "light" };
+    let Some(tokens) = theme.get(key).or_else(|| theme.get(base_key)) else {
+        return false;
+    };
+    set_palette_tokens(tokens, variant)
+}
+
+fn set_palette_tokens(ui: &serde_json::Value, variant: ThemeVariant) -> bool {
+    let mut palette = variant.palette();
+    macro_rules! token {
+        ($field:ident, $key:literal) => {
+            if let Some(color) = ui
+                .get($key)
+                .and_then(serde_json::Value::as_str)
+                .and_then(parse_color)
+            {
+                palette.$field = color;
+            }
+        };
+    }
+    token!(bg, "bg");
+    token!(panel, "panel");
+    token!(panel2, "panel2");
+    token!(panel3, "panel3");
+    token!(border, "border");
+    token!(border2, "border2");
+    token!(text, "text");
+    token!(text2, "text2");
+    token!(text3, "text3");
+    token!(text4, "text4");
+    token!(accent, "accent");
+    token!(accent_soft, "accentSoft");
+    token!(accent_text, "accentText");
+    token!(online, "online");
+    token!(ok, "ok");
+    token!(error, "error");
+    token!(warn, "warn");
+    token!(edited, "edited");
+    token!(edited_bg, "editedBg");
+    token!(git_staged, "gitStaged");
+    token!(git_untracked, "gitUntracked");
+    token!(git_deleted, "gitDeleted");
+    token!(git_conflict, "gitConflict");
+    token!(scrim, "scrim");
+    token!(shadow, "shadow");
+    ACTIVE_LIGHT.store(variant == ThemeVariant::Light, Ordering::Relaxed);
+    *ACTIVE_PALETTE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(palette);
+    true
+}
+
+fn parse_color(value: &str) -> Option<Color> {
+    let mut hex = value.strip_prefix('#')?.to_owned();
+    if hex.len() == 3 {
+        hex = hex.chars().flat_map(|c| [c, c]).collect();
+    }
+    if hex.len() == 6 {
+        hex.push_str("ff");
+    }
+    if hex.len() != 8 {
+        return None;
+    }
+    let n = u32::from_str_radix(&hex, 16).ok()?;
+    match hex.len() {
+        8 => Some(Color::from_rgba8(
+            (n >> 24) as u8,
+            (n >> 16) as u8,
+            (n >> 8) as u8,
+            (n as u8) as f32 / 255.0,
+        )),
+        _ => None,
+    }
 }
 
 /// Variante ativa no momento (escuro por padrão).
@@ -156,7 +277,10 @@ pub fn active() -> ThemeVariant {
 /// Paleta ativa. Leia cores daqui em `view`, nunca em constante, para que a
 /// troca de tema apareça ao vivo.
 pub fn palette() -> GshPalette {
-    active().palette()
+    ACTIVE_PALETTE
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(|| active().palette())
 }
 
 /// Razão de contraste WCAG 2.x entre duas cores opacas (de 1,0 a 21,0).
@@ -987,6 +1111,41 @@ mod tests {
         assert_ne!(palette().bg, GshPalette::DARK.bg);
         set_active(ThemeVariant::Dark);
         assert_eq!(palette().bg, GshPalette::DARK.bg);
+    }
+
+    #[test]
+    fn imported_ui_tokens_override_gsh_and_invalid_colors_keep_fallback() {
+        let _guard = test_guard();
+        let spec =
+            r##"{"variants":{"dark":{"ui":{"bg":"#010203","accent":"#80402080","text":"oops"}}}}"##;
+        assert!(set_imported_palette(spec, ThemeVariant::Dark));
+        assert_eq!(palette().bg, Color::from_rgb8(1, 2, 3));
+        assert_eq!(
+            palette().accent,
+            Color::from_rgba8(128, 64, 32, 128.0 / 255.0)
+        );
+        assert_eq!(palette().text, GshPalette::DARK.text);
+        set_active(ThemeVariant::Dark);
+    }
+
+    #[test]
+    fn built_in_themes_match_flutter_registry_and_css_alpha_order() {
+        let _guard = test_guard();
+        assert!(set_theme_palette("classic", None, ThemeVariant::Dark));
+        assert_eq!(palette().bg, Color::from_rgb8(0x0D, 0x0D, 0x0F));
+        assert_eq!(palette().accent, Color::from_rgb8(0x2F, 0x6F, 0xF0));
+        assert!(set_theme_palette("pantera", None, ThemeVariant::Light));
+        assert_eq!(palette().bg, Color::WHITE);
+        set_active(ThemeVariant::Dark);
+        assert!(set_imported_palette(
+            r##"{"variants":{"dark":{"ui":{"accentSoft":"#12345678"}}}}"##,
+            ThemeVariant::Dark,
+        ));
+        assert_eq!(
+            palette().accent_soft,
+            Color::from_rgba8(0x12, 0x34, 0x56, 0x78 as f32 / 255.0)
+        );
+        set_active(ThemeVariant::Dark);
     }
 
     #[test]

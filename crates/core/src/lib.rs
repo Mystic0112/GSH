@@ -1,9 +1,8 @@
-//! Domínio puro do GSH: sem I/O, sem UI. Os tipos reais entram no card "[F1] Modelo de domínio".
+//! Domínio puro do GSH: sem I/O, sem UI.
 //!
-//! Por enquanto só a lógica de protocolo da CLI `gsh` (sem socket, sem disco):
+//! - [`workspace`], [`panes`] e [`tabs`]: estado e transições de workspaces, painéis e abas;
 //! - [`wire`]: nomes de env, montagem de requisição e leitura de resposta;
 //! - [`hook`]: eventos de hook dos harnesses -> status de turno, payload do socket;
-//! - [`tabs`]: formatação da listagem de abas.
 //!
 //! Lado do app do status de turno (sem socket, sem relógio):
 //! - [`status`]: linha do socket -> `StatusUpdate` tipado e máquina de turno.
@@ -21,6 +20,7 @@
 pub mod agent_color;
 pub mod file_activity;
 pub mod hook;
+pub mod panes;
 pub mod status;
 pub mod tabs;
 pub mod wire;

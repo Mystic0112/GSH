@@ -22,10 +22,16 @@ pub mod agent_island_panel;
 pub mod agent_status;
 pub mod anchored;
 pub mod app_menu;
+pub mod app_menu_model;
+pub mod app_update;
+pub mod bag_mode;
+pub mod browser_pane;
 pub mod chat_composer;
 pub mod chat_pane;
 pub mod chat_view;
+pub mod claude_desktop_scanner;
 pub mod claude_hook_installer;
+pub mod claude_permission;
 pub mod clock;
 pub mod content_search_panel;
 pub mod content_search_state;
@@ -53,17 +59,22 @@ mod file_icons;
 pub mod file_ops;
 pub mod file_tree;
 pub mod file_viewer;
+mod file_viewer_assets;
+mod file_viewer_view;
 pub mod files_panel;
 pub mod gallery_create;
 pub mod gallery_panel;
 pub mod gallery_template;
+mod git_branch_view;
 pub mod git_changes_view;
 pub mod git_diff_view;
 pub mod git_file_row;
+mod git_harness;
 pub mod git_header;
 pub mod git_history_view;
 pub mod git_ops;
 pub mod git_panel;
+pub mod git_pr;
 pub mod git_presenter;
 pub mod git_state;
 pub mod gorilla;
@@ -72,8 +83,12 @@ pub mod harness_pane;
 pub mod island;
 pub mod labels;
 pub mod layout_store;
+mod localsend_agent;
 pub mod localsend_dialog;
 mod localsend_runtime;
+#[cfg(target_os = "linux")]
+mod lsp_runtime;
+pub mod native_notifications;
 pub mod pane_chrome;
 pub mod pane_close_dialog;
 pub mod pane_focus;
@@ -84,15 +99,22 @@ pub mod pane_tool_icon;
 pub mod pane_tree;
 pub mod panel_widgets;
 pub mod rail;
+#[cfg(target_os = "linux")]
+pub mod remote_connect_dialog;
+#[cfg(target_os = "linux")]
+mod remote_ssh;
 pub mod right_tabs;
+pub mod scheduled_automations;
 pub mod settings;
 pub mod ssh_prompts;
+pub mod team_markdown;
 pub mod telemetry_case_view;
 pub mod telemetry_panel;
 pub mod telemetry_state;
 pub mod terminal_canvas;
 pub mod terminal_grid;
 pub mod terminal_input;
+mod terminal_ipc;
 pub mod terminal_pane;
 pub mod theme;
 pub mod topbar;
@@ -103,12 +125,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver as MpscReceiver, Sender, SyncSender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
 
 use gsh_core::status::AgentHarness;
-use gsh_core::workspace::WorkspaceList;
+use gsh_core::workspace::{Workspace, WorkspaceList};
 use gsh_localsend::ReceiveDecision;
 use gsh_team::{Activity, FarmLoop, Knock, KnockKind, Mail, Node, Packet, TeamAgent, TeamConfig};
 use iced::widget::pane_grid::{self, Axis, Pane};
@@ -121,6 +143,7 @@ use crate::agent_status::{
     now_epoch_ms, pane_id_for_term, term_id_from_pane_id, PaneDescriptor, StatusRuntime,
 };
 use crate::chat_pane::{ChatMsg, ChatPane};
+use crate::claude_permission::{permission_key, ClaudePermissionAsk};
 use crate::content_search_panel::SearchMsg;
 use crate::content_search_state::SearchState;
 use crate::db_mongo::{MongoEffect, MongoMsg, MongoTab};
@@ -255,13 +278,11 @@ fn external_message_json(messages: Vec<agent_graph_store::AgentMessage>) -> Vec<
         .collect()
 }
 
-#[cfg(target_os = "linux")]
-fn send_desktop_notification(title: &str, body: &str) {
-    let _ = Command::new("notify-send").arg(title).arg(body).spawn();
+fn graph_chat_id(id: &str) -> Option<ChatId> {
+    let raw_id = id.strip_prefix('c')?;
+    let parsed = raw_id.parse::<ChatId>().ok()?;
+    (parsed.to_string() == raw_id).then_some(parsed)
 }
-
-#[cfg(not(target_os = "linux"))]
-fn send_desktop_notification(_: &str, _: &str) {}
 
 fn resolve_team_target(
     contacts: &[(gsh_team::Peer, TeamAgent)],
@@ -401,6 +422,7 @@ enum Msg {
     DismissGalleryError,
     GitResult(git_state::ResultMsg),
     Editor(PathBuf, editor_pane::EditorMsg),
+    FileViewer(file_viewer::FileViewerMsg),
     WindowCloseRequested(iced::window::Id),
     ConfirmWindowClose,
     CancelWindowClose,
@@ -417,11 +439,23 @@ enum Msg {
     TabStripWheel(Pane, f32),
     OpenTabList(Pane),
     CloseTabList,
+    ToggleAppMenu,
+    CloseAppMenu,
+    AppMenuAction(Box<Msg>),
+    AppMenuShortcut(iced::keyboard::Key, iced::keyboard::Modifiers),
+    CycleWorkspace(i8),
     PaneDrag(Pane, PaneDragEvent),
     SelectTab(usize),
     CloseTab(usize),
     NewTerminalTab,
+    #[cfg(target_os = "linux")]
+    OpenRemoteConnect,
+    #[cfg(target_os = "linux")]
+    RemoteConnectDialog(remote_connect_dialog::Message),
+    #[cfg(target_os = "linux")]
+    RemoteConnectFinished(u64),
     NewChatTab,
+    NewChatRight,
     /// Variantes de aba que primeiro focam o pane de origem do clique.
     SelectTabIn(Pane, usize),
     CloseTabIn(Pane, usize),
@@ -434,6 +468,12 @@ enum Msg {
     CancelClosePane,
     ResizePane(pane_grid::ResizeEvent),
     OpenFarm,
+    OpenBrowser,
+    Browser(browser_pane::BrowserMsg),
+    SelectContextChannel(Option<String>),
+    ToggleChannelEditor,
+    ChannelNameChanged(String),
+    AssignChannel,
     OpenAgentGraph,
     AgentGraph(agent_graph::Message),
     AgentGraphDialog(agent_graph_dialog::Message),
@@ -441,7 +481,12 @@ enum Msg {
     AgentDesktopInstalled(
         Result<(desktop_agent_apps::Integration, PathBuf), desktop_agent_apps::Error>,
     ),
+    TeamMarkdownImportPicked(Option<PathBuf>),
+    TeamMarkdownExportPicked(Option<PathBuf>),
+    CancelTeamImport,
+    ConfirmTeamImport,
     OpenSettings,
+    OpenLocalSend,
     Settings(settings::Message),
     Farm(farm::Message),
     Db(DbMsg),
@@ -463,6 +508,10 @@ enum Msg {
     /// Resposta do diálogo "Alterações não salvas" de uma query.
     CloseQuery(QueryId, CloseChoice),
     TeamCliCommand(gsh_ipc::PendingCommand),
+    NativeNotificationAction(String, native_notifications::Action),
+    LocalSendAgentDecision {
+        allow: bool,
+    },
     TeamCliSendComplete(
         SyncSender<serde_json::Value>,
         String,
@@ -473,8 +522,15 @@ enum Msg {
     Harness(harness_pane::Msg),
     Telemetry(TelemetryMsg),
     SelectWorkspace(usize),
+    DismissWorkspaceSwitchNotice,
     PickWorkspaceFolder,
     WorkspaceFolderPicked(Option<PathBuf>),
+    CheckForUpdates {
+        force: bool,
+    },
+    UpdateChecked(Option<app_update::UpdateInfo>),
+    OpenUpdateDownload,
+    DismissUpdate,
     ToggleRail,
     ToggleFiles,
     Noop,
@@ -487,8 +543,47 @@ enum Msg {
 /// Atalhos da aba de query valem em qualquer lugar da aba, não só com o editor focado.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QueryShortcut {
-    Save,
     Run,
+}
+
+fn menu_shortcut_matches(
+    binding: &str,
+    key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+) -> bool {
+    let normalized = binding.replace("Ctrl+,", "Ctrl+comma");
+    let mut parts = normalized.split('+');
+    let has_control = parts
+        .next()
+        .is_some_and(|part| part.eq_ignore_ascii_case("ctrl"));
+    let mut shift = false;
+    let mut alt = false;
+    let mut expected_key = None;
+    for part in parts {
+        if part.eq_ignore_ascii_case("shift") {
+            shift = true;
+        } else if part.eq_ignore_ascii_case("alt") {
+            alt = true;
+        } else {
+            expected_key = Some(if part.eq_ignore_ascii_case("comma") {
+                ","
+            } else {
+                part
+            });
+        }
+    }
+    let actual_key: Option<&str> = match key.as_ref() {
+        iced::keyboard::Key::Character(value) => Some(value),
+        _ => None,
+    };
+    has_control
+        && modifiers.control()
+        && !modifiers.logo()
+        && modifiers.alt() == alt
+        && modifiers.shift() == shift
+        && expected_key.is_some_and(|expected| {
+            actual_key.is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+        })
 }
 
 /// Escolha do diálogo ao fechar uma query com alterações não salvas.
@@ -565,6 +660,9 @@ struct Shell {
     team_mail: Option<Mail>,
     team_knocks: Vec<Knock>,
     localsend_host: Option<LocalSendHost>,
+    pending_localsend_agent: Option<localsend_agent::PendingSend>,
+    localsend_agent_preparation: Option<mpsc::Receiver<localsend_agent::PendingSend>>,
+    localsend_agent_busy: Arc<AtomicBool>,
     localsend_active_config: Option<gsh_config::schema::LocalSend>,
     localsend_requests: MpscReceiver<ReceiveEvent>,
     localsend_pending: VecDeque<IncomingRequest>,
@@ -578,14 +676,22 @@ struct Shell {
     receive_bridge: ReceiveBridge,
     island: AgentIsland,
     farm: farm::FarmPane,
+    browser: browser_pane::BrowserPane,
     db: DbState,
     queries: BTreeMap<QueryId, DbQuery>,
     redis_tabs: BTreeMap<BrowserId, RedisTab>,
     mongo_tabs: BTreeMap<BrowserId, MongoTab>,
     ssh_prompt: Option<PendingSsh>,
+    #[cfg(target_os = "linux")]
+    remote_connect: Option<remote_connect_dialog::Draft>,
+    #[cfg(target_os = "linux")]
+    remote_connect_generation: u64,
+    #[cfg(target_os = "linux")]
+    remote_connect_results: Arc<Mutex<HashMap<u64, Result<gsh_term::TermSession, String>>>>,
     /// Query com alterações não salvas que o usuário mandou fechar (aguarda a escolha).
     pending_close_query: Option<QueryId>,
     agent_graph_dialog: Option<agent_graph_dialog::Draft>,
+    team_import_review: Option<Result<team_markdown::TeamMarkdownSpec, String>>,
     harness: harness_pane::HarnessState,
     telemetry: TelemetryState,
     settings: settings::Settings,
@@ -594,6 +700,7 @@ struct Shell {
     pending_close_pane: Option<Pane>,
     hovered_tab: Option<(Pane, usize)>,
     tab_list_open: Option<Pane>,
+    app_menu_open: bool,
     tab_drag_source: Option<(Pane, usize)>,
     tab_drag_target: Option<(Pane, usize, bool)>,
     tab_drag_origin: Option<iced::Point>,
@@ -611,14 +718,21 @@ struct Shell {
     agent_graph_save_due: HashMap<PathBuf, Instant>,
     external_waiters: Vec<ExternalWaiter>,
     pending_agent_deliveries: Vec<PendingAgentDelivery>,
+    idle_waiters: Vec<terminal_ipc::IdleWaiter>,
+    pending_permissions: HashMap<String, PendingPermission>,
+    next_permission_id: u64,
+    notification_updates: HashMap<String, tokio::sync::watch::Sender<notify_rust::Notification>>,
     graph_context: Option<String>,
     graph_rename: Option<(String, String)>,
     agent_graph_create_at: Option<(f32, f32)>,
     chats: BTreeMap<ChatId, ChatPane>,
     file_viewers: BTreeMap<PathBuf, FileViewerState>,
     editors: BTreeMap<PathBuf, editor_pane::EditorPane>,
+    #[cfg(target_os = "linux")]
+    lsp: lsp_runtime::Pool,
     pending_window_close: Option<iced::window::Id>,
     workspaces: WorkspaceList,
+    channel_editor: Option<String>,
     file_tree: FileTree,
     file_create: Option<file_ops::CreateForm>,
     file_create_generation: u64,
@@ -639,8 +753,11 @@ struct Shell {
     static_test_mode: bool,
     window_focused: bool,
     layout_path: Option<PathBuf>,
+    imported_layouts: BTreeMap<PathBuf, layout_store::LayoutDoc>,
+    workspace_switch_notice: Option<&'static str>,
     layout_save_due: Option<Instant>,
     layout_restore_browsers_pending: bool,
+    update_state: app_update::UpdateState,
 }
 
 struct ExternalWaiter {
@@ -660,6 +777,13 @@ struct PendingAgentDelivery {
     ready: bool,
 }
 
+struct PendingPermission {
+    tab_id: String,
+    ask: ClaudePermissionAsk,
+    reply: SyncSender<serde_json::Value>,
+    deadline: Instant,
+}
+
 #[derive(Debug, Clone)]
 struct LocalSendProgress {
     name: String,
@@ -670,6 +794,58 @@ struct LocalSendProgress {
 enum LocalSendSendEvent {
     Progress(u64, LocalSendProgress),
     Finished(u64, Result<(), String>),
+}
+
+fn send_localsend_agent_result(
+    reply: SyncSender<serde_json::Value>,
+    files_sent: usize,
+    result: Result<String, String>,
+) {
+    let response = match result {
+        Ok(peer) => {
+            serde_json::json!({"ok":true,"data":{"status":"sent","peer":peer,"filesSent":files_sent}})
+        }
+        Err(error) => {
+            let message = if error.contains("HTTP 403") {
+                "LocalSend transfer was refused by the recipient".to_owned()
+            } else if error.contains("peer not found") {
+                error
+            } else if error.contains("Cancelled") {
+                "LocalSend transfer was cancelled".to_owned()
+            } else {
+                format!("LocalSend transfer failed: {error}")
+            };
+            serde_json::json!({"ok":false,"error":message})
+        }
+    };
+    let _ = reply.send(response);
+}
+
+fn localsend_send_with_timeout(
+    sender: localsend_runtime::LocalSendSender,
+    peer: gsh_localsend::Peer,
+    files: Vec<(PathBuf, std::fs::File)>,
+    max_file_size: u64,
+    deadline: Instant,
+) -> Result<String, String> {
+    let timeout = deadline.saturating_duration_since(Instant::now());
+    if timeout.is_zero() {
+        return Err("LocalSend transfer timed out".to_owned());
+    }
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let timer_cancelled = Arc::clone(&cancelled);
+    let (finished, completion) = mpsc::channel();
+    std::thread::spawn(move || {
+        if completion.recv_timeout(timeout).is_err() {
+            timer_cancelled.store(true, Ordering::Relaxed);
+        }
+    });
+    let result = sender
+        .send_open_files_until(&peer, files, max_file_size, deadline, cancelled)
+        .map(|()| peer.info.alias)
+        .map_err(|error| error.to_string());
+    let _ = finished.send(());
+    result
 }
 
 impl Default for Shell {
@@ -687,13 +863,27 @@ impl Default for Shell {
         let layout_path = layout_store::LayoutDoc::default_path();
         let restored = layout_path
             .as_deref()
-            .and_then(layout_store::LayoutDoc::read);
+            .and_then(layout_store::LayoutDoc::read_for_startup);
         if let Some(doc) = &restored {
-            workspaces = WorkspaceList::new(Vec::new());
-            for path in &doc.workspaces {
-                workspaces.open_folder(path.clone());
-            }
+            workspaces = WorkspaceList::new(
+                doc.workspaces
+                    .iter()
+                    .enumerate()
+                    .map(|(index, path)| {
+                        let mut workspace =
+                            Workspace::from_path(format!("ws-{}", index + 1), path.clone());
+                        if let Some(name) = doc.workspace_names.get(path) {
+                            workspace.name.clone_from(name);
+                        }
+                        if let Some(realm) = doc.workspace_realms.get(path) {
+                            workspace.set_realm(realm);
+                        }
+                        workspace
+                    })
+                    .collect(),
+            );
             let _ = workspaces.select(doc.active_workspace);
+            workspaces.set_active_channel(doc.active_channel.clone());
         }
         let active_path = workspaces.active().and_then(|ws| ws.path.clone());
         let panes = restored
@@ -749,6 +939,9 @@ impl Default for Shell {
         let mut file_tree = FileTree::new();
         file_tree.set_root(active_path.clone());
         let mut git = git_state::GitState::default();
+        git.enable_note_storage(
+            dirs::data_dir().map(|dir| dir.join("work.gorila.gshdesktop/diff_notes")),
+        );
         git.set_repo(active_path);
         let mut telemetry = TelemetryState::new();
         telemetry.developer_mode = settings.current.developer_mode;
@@ -758,6 +951,9 @@ impl Default for Shell {
             team_mail: None,
             team_knocks: Vec::new(),
             localsend_host: None,
+            pending_localsend_agent: None,
+            localsend_agent_preparation: None,
+            localsend_agent_busy: Arc::new(AtomicBool::new(false)),
             localsend_active_config: None,
             localsend_requests,
             localsend_pending: VecDeque::new(),
@@ -771,13 +967,21 @@ impl Default for Shell {
             receive_bridge,
             island,
             farm: farm::FarmPane::default(),
+            browser: browser_pane::BrowserPane::default(),
             db: DbState::new(gsh_db::SecretStore::system()),
             queries: BTreeMap::new(),
             redis_tabs: BTreeMap::new(),
             mongo_tabs: BTreeMap::new(),
             ssh_prompt: None,
+            #[cfg(target_os = "linux")]
+            remote_connect: None,
+            #[cfg(target_os = "linux")]
+            remote_connect_generation: 0,
+            #[cfg(target_os = "linux")]
+            remote_connect_results: Arc::new(Mutex::new(HashMap::new())),
             pending_close_query: None,
             agent_graph_dialog: None,
+            team_import_review: None,
             harness: harness_pane::HarnessState::default(),
             telemetry,
             settings,
@@ -785,6 +989,7 @@ impl Default for Shell {
             pending_close_pane: None,
             hovered_tab: None,
             tab_list_open: None,
+            app_menu_open: false,
             tab_drag_source: None,
             tab_drag_target: None,
             tab_drag_origin: None,
@@ -802,14 +1007,21 @@ impl Default for Shell {
             agent_graph_save_due: HashMap::new(),
             external_waiters: Vec::new(),
             pending_agent_deliveries: Vec::new(),
+            idle_waiters: Vec::new(),
+            pending_permissions: HashMap::new(),
+            next_permission_id: 1,
+            notification_updates: HashMap::new(),
             graph_context: None,
             graph_rename: None,
             agent_graph_create_at: None,
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
             editors: BTreeMap::new(),
+            #[cfg(target_os = "linux")]
+            lsp: lsp_runtime::Pool::default(),
             pending_window_close: None,
             workspaces,
+            channel_editor: None,
             file_tree,
             file_create: None,
             file_create_generation: 0,
@@ -824,8 +1036,14 @@ impl Default for Shell {
             static_test_mode: false,
             window_focused: true,
             layout_path,
+            imported_layouts: restored
+                .as_ref()
+                .map(|doc| doc.imported_layouts.clone())
+                .unwrap_or_default(),
+            workspace_switch_notice: None,
             layout_save_due: None,
             layout_restore_browsers_pending,
+            update_state: app_update::UpdateState::load_default(),
         };
         let files: Vec<_> = shell
             .panes
@@ -840,14 +1058,12 @@ impl Default for Shell {
                 }
             })
             .collect();
-        for path in files {
+        #[cfg(target_os = "linux")]
+        shell.configure_lsp();
+        for path in files.into_iter().collect::<std::collections::BTreeSet<_>>() {
             match FileViewerState::load(&path) {
                 FileViewerState::Loaded(doc) => {
-                    shell.editors.insert(
-                        path.clone(),
-                        editor_pane::EditorPane::new(path, doc.into_source())
-                            .with_config(shell.settings.current.editor.clone()),
-                    );
+                    shell.insert_file_editor(path, doc.into_source());
                 }
                 state => {
                     shell.file_viewers.insert(path, state);
@@ -913,6 +1129,21 @@ fn open_in_file_manager(path: &Path) {
     let _ = result;
 }
 
+fn empty_test_snapshot() -> gsh_term::TermSnapshot {
+    gsh_term::TermSnapshot {
+        cols: 80,
+        rows: 24,
+        lines: vec![vec![gsh_term::Cell::default(); 80]; 24],
+        cursor: gsh_term::Cursor {
+            row: 0,
+            col: 0,
+            visible: true,
+        },
+        display_offset: 0,
+        history_size: 0,
+    }
+}
+
 impl Shell {
     fn save_layout(&mut self) {
         self.layout_save_due = None;
@@ -932,15 +1163,52 @@ impl Shell {
             .and_then(|active| paths.iter().position(|path| path == active))
             .unwrap_or(0);
         let mut doc = self.panes.snapshot_with_workspaces(paths, active_workspace);
+        doc.workspace_names = self
+            .workspaces
+            .items()
+            .iter()
+            .filter_map(|workspace| {
+                workspace
+                    .path
+                    .clone()
+                    .map(|path| (path, workspace.name.clone()))
+            })
+            .collect();
+        doc.workspace_realms = self
+            .workspaces
+            .items()
+            .iter()
+            .filter_map(|workspace| {
+                workspace
+                    .path
+                    .clone()
+                    .map(|path| (path, workspace.realm().to_owned()))
+            })
+            .collect();
+        doc.active_channel = self.workspaces.active_channel().map(str::to_owned);
+        doc.imported_layouts.clone_from(&self.imported_layouts);
         doc.terminal_cwds = self
             .terminals
             .iter()
             .filter_map(|(id, terminal)| terminal.cwd().map(|cwd| (*id, cwd.to_path_buf())))
             .collect();
+        doc.remote_terminal_ids = self
+            .terminals
+            .iter()
+            .filter_map(|(id, terminal)| terminal.is_remote().then_some(*id))
+            .collect();
         doc.chat_sessions = self
             .chats
             .iter()
             .filter_map(|(id, chat)| chat.session_id().map(|sid| (*id, sid.to_owned())))
+            .collect();
+        doc.chat_profiles = self
+            .chats
+            .iter()
+            .filter_map(|(id, chat)| {
+                chat.claude_profile_binding()
+                    .map(|path| (*id, path.to_path_buf()))
+            })
             .collect();
         doc.query_files = self
             .queries
@@ -953,6 +1221,271 @@ impl Shell {
             .filter_map(|(id, query)| query.conn.clone().map(|conn| (*id, conn)))
             .collect();
         let _ = doc.write_atomic(path);
+    }
+
+    fn snapshot_current_workspace_doc(&self) -> layout_store::LayoutDoc {
+        let mut doc = self.panes.snapshot();
+        doc.terminal_cwds = self
+            .terminals
+            .iter()
+            .filter_map(|(id, terminal)| terminal.cwd().map(|cwd| (*id, cwd.to_path_buf())))
+            .collect();
+        doc.remote_terminal_ids = self
+            .terminals
+            .iter()
+            .filter_map(|(id, terminal)| terminal.is_remote().then_some(*id))
+            .collect();
+        doc.chat_sessions = self
+            .chats
+            .iter()
+            .filter_map(|(id, chat)| chat.session_id().map(|sid| (*id, sid.to_owned())))
+            .collect();
+        doc.chat_profiles = self
+            .chats
+            .iter()
+            .filter_map(|(id, chat)| {
+                chat.claude_profile_binding()
+                    .map(|path| (*id, path.to_path_buf()))
+            })
+            .collect();
+        doc.query_files = self
+            .queries
+            .iter()
+            .filter_map(|(id, query)| query.path.clone().map(|path| (*id, path)))
+            .collect();
+        doc.query_connections = self
+            .queries
+            .iter()
+            .filter_map(|(id, query)| query.conn.clone().map(|conn| (*id, conn)))
+            .collect();
+        doc
+    }
+
+    fn restore_workspace_layout(
+        &mut self,
+        doc: &layout_store::LayoutDoc,
+        workspace_dir: Option<&Path>,
+    ) {
+        for id in self.terminals.keys().copied().collect::<Vec<_>>() {
+            self.clear_terminal_runtime(id);
+        }
+        self.terminals.clear();
+        self.terminal_labels.clear();
+        for chat in self.chats.values_mut() {
+            chat.close();
+        }
+        self.chats.clear();
+        self.queries.clear();
+        self.redis_tabs.clear();
+        self.mongo_tabs.clear();
+        #[cfg(target_os = "linux")]
+        for document in self
+            .editors
+            .values_mut()
+            .filter_map(|editor| editor.lsp.take())
+        {
+            self.lsp.close(document);
+        }
+        self.editors.clear();
+        self.file_viewers.clear();
+        self.panes = PaneTree::from_doc(doc);
+        let mut file_paths = BTreeSet::new();
+        for model in self.panes.models() {
+            for tab in model.tabs() {
+                if let PaneTab::Terminal(id) = tab {
+                    if let Some(label) = model.terminal_label(*id) {
+                        self.terminal_labels.insert(*id, label.to_owned());
+                    }
+                    let pane_id = pane_id_for_term(*id);
+                    self.status_runtime.register_pane(pane_id.clone());
+                    let env = self.status_runtime.hook_env_for_pane(&pane_id);
+                    let cwd = doc
+                        .terminal_cwds
+                        .iter()
+                        .find(|(saved_id, _)| *saved_id == *id)
+                        .map(|(_, path)| path.as_path())
+                        .or(workspace_dir);
+                    let pane = if self.static_test_mode {
+                        TerminalPane::from_snapshot_in_dir(
+                            empty_test_snapshot(),
+                            cwd.map(Path::to_path_buf),
+                        )
+                        .with_pane_id(pane_id)
+                    } else {
+                        TerminalPane::new_with_config(
+                            pane_id,
+                            cwd,
+                            env,
+                            self.settings.current.clone(),
+                        )
+                    };
+                    self.terminals.insert(*id, pane);
+                } else if let PaneTab::File(path) = tab {
+                    file_paths.insert(path.clone());
+                }
+            }
+        }
+        for path in file_paths {
+            match FileViewerState::load(&path) {
+                FileViewerState::Loaded(loaded) => {
+                    self.insert_file_editor(path, loaded.into_source());
+                }
+                state => {
+                    self.file_viewers.insert(path, state);
+                }
+            }
+        }
+        self.restore_layout_chats(doc);
+        self.restore_layout_queries(doc);
+        self.layout_restore_browsers_pending = true;
+    }
+
+    fn layout_switch_blocker(&self) -> Option<&'static str> {
+        if self
+            .editors
+            .values()
+            .any(|editor| editor.state.buffer.is_dirty())
+            || self.queries.values().any(DbQuery::dirty)
+        {
+            return Some(
+                "Salve ou feche os documentos com alterações antes de trocar de workspace.",
+            );
+        }
+        if self.chats.values().any(|chat| {
+            !chat.input().is_empty() || !chat.attachments().is_empty() || chat.is_busy()
+        }) {
+            return Some("Conclua as conversas em andamento e limpe os rascunhos antes de trocar de workspace.");
+        }
+        if self.terminals.iter().any(|(id, terminal)| {
+            terminal.is_remote()
+                || self
+                    .status_runtime
+                    .pane_record(&pane_id_for_term(*id))
+                    .is_some_and(|record| {
+                        record.status() != gsh_core::status::TurnStatus::Idle
+                            || record.pending_ask().is_some()
+                    })
+        }) {
+            return Some("Conclua os turnos dos agentes e feche os terminais remotos antes de trocar de workspace.");
+        }
+        None
+    }
+
+    fn apply_ckp_editor(&mut self, path: &Path) -> Task<Msg> {
+        let Some(source) = self
+            .editors
+            .get(path)
+            .map(|e| e.state.buffer.text().to_owned())
+        else {
+            return Task::none();
+        };
+        let spec = match gsh_config::ckp::parse(path, &source) {
+            Ok(spec) => spec,
+            Err(err) => {
+                if let Some(editor) = self.editors.get_mut(path) {
+                    editor.ckp_error = Some(err.to_string());
+                }
+                return Task::none();
+            }
+        };
+        let Some(base_dir) = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .or_else(|| self.active_workspace_dir().map(Path::to_path_buf))
+        else {
+            if let Some(editor) = self.editors.get_mut(path) {
+                editor.ckp_error = Some("Nenhum workspace ativo para aplicar o layout.".into());
+            }
+            return Task::none();
+        };
+        let mut taken: BTreeSet<String> = self
+            .terminal_labels
+            .values()
+            .map(|l| l.to_lowercase())
+            .collect();
+        for model in self.panes.models() {
+            for tab in model.tabs() {
+                if let PaneTab::Terminal(id) = tab {
+                    if let Some(label) = model.terminal_label(*id) {
+                        taken.insert(label.to_lowercase());
+                    }
+                }
+            }
+        }
+        let mut planned = Vec::new();
+        for pane in &spec.panes {
+            if taken.contains(&pane.name.to_lowercase()) {
+                planned.push(None);
+                continue;
+            }
+            let cwd = if pane.cwd == Path::new(".") {
+                base_dir.clone()
+            } else {
+                base_dir.join(&pane.cwd)
+            };
+            if !cwd.is_dir() {
+                if let Some(editor) = self.editors.get_mut(path) {
+                    editor.ckp_error = Some(format!(
+                        "pane \"{}\": pasta não encontrada: \"{}\"",
+                        pane.name,
+                        pane.cwd.display()
+                    ));
+                }
+                return Task::none();
+            }
+            planned.push(Some((pane, cwd)));
+        }
+        if let Some(editor) = self.editors.get_mut(path) {
+            editor.ckp_error = None;
+        }
+        let mut prev_pane: Option<Pane> = None;
+        for entry in planned {
+            let Some((pane_spec, cwd)) = entry else {
+                prev_pane = None;
+                continue;
+            };
+            let target_pane = match (prev_pane, &pane_spec.split) {
+                (Some(anchor), gsh_config::ckp::CkpSplit::Tab) => anchor,
+                (Some(anchor), gsh_config::ckp::CkpSplit::Right) => self
+                    .panes
+                    .split_empty(anchor, Axis::Vertical)
+                    .unwrap_or(anchor),
+                (Some(anchor), gsh_config::ckp::CkpSplit::Down) => self
+                    .panes
+                    .split_empty(anchor, Axis::Horizontal)
+                    .unwrap_or(anchor),
+                (None, _) => self.panes.focused(),
+            };
+            self.panes.focus(target_pane);
+            let id = self.panes.alloc_term_id();
+            if let Some(model) = self.panes.model_mut(target_pane) {
+                model.open_terminal(id);
+                model.set_terminal_label(id, pane_spec.name.clone());
+            }
+            self.terminal_labels.insert(id, pane_spec.name.clone());
+            let pane_id = pane_id_for_term(id);
+            self.status_runtime.register_pane(pane_id.clone());
+            let env = self.status_runtime.hook_env_for_pane(&pane_id);
+            let mut term = if self.static_test_mode {
+                TerminalPane::from_snapshot_in_dir(empty_test_snapshot(), Some(cwd))
+                    .with_pane_id(pane_id)
+            } else {
+                TerminalPane::new_with_config(
+                    pane_id,
+                    Some(&cwd),
+                    env,
+                    self.settings.current.clone(),
+                )
+            };
+            if let Some(cmd) = pane_spec.command.as_deref().filter(|c| !c.is_empty()) {
+                let _ = term.send_text(&format!("{cmd}\r"));
+            }
+            self.terminals.insert(id, term);
+            taken.insert(pane_spec.name.to_lowercase());
+            prev_pane = Some(target_pane);
+        }
+        self.reveal_focused_active_tab()
     }
 
     fn restore_layout_chats(&mut self, doc: &layout_store::LayoutDoc) {
@@ -979,8 +1512,19 @@ impl Shell {
                     self.settings.current.chat.effort.clone(),
                 )
                 .with_static_test_mode(self.static_test_mode);
+            let profile_binding = doc.chat_profiles.get(&id).cloned();
+            if let Some(path) = profile_binding.as_deref() {
+                let profile =
+                    settings::claude::profiles::verify_registered(&self.settings.current, path)
+                        .map(Some);
+                chat = chat.with_claude_profile_binding(profile, profile_binding.clone());
+            }
             if let Some(session_id) = session_ids.get(&id) {
-                let _ = chat.restore_session_id(session_id);
+                if doc.chat_profiles.contains_key(&id) {
+                    let _ = chat.restore_session_id(session_id);
+                } else {
+                    let _ = chat.restore_profile_session_id(session_id, &self.settings.current);
+                }
             }
             self.chats.insert(id, chat);
         }
@@ -1127,7 +1671,7 @@ impl Shell {
 
     fn configure_localsend(&mut self) {
         let config = self.settings.current.localsend.clone();
-        self.settings.localsend.enabled = config.enabled;
+        self.settings.localsend.always_on = config.always_on;
         self.settings.localsend.alias.clone_from(&config.alias);
         self.settings.localsend.receive_dir = PathBuf::from(&config.receive_dir);
         self.settings.localsend.max_file_mb = config.max_file_mb.to_string();
@@ -1140,7 +1684,7 @@ impl Shell {
         self.localsend_active_config = Some(config.clone());
         self.settings.localsend.error = None;
         self.settings.localsend.server_status = None;
-        if !config.enabled {
+        if !config.always_on {
             if let Some(request) = self.localsend_active_request.take() {
                 let _ = request.reply.send(ReceiveDecision::Reject);
             }
@@ -1196,7 +1740,7 @@ impl Shell {
                 Some(labels::SETTINGS_INVALID_LOCALSEND_LIMIT.to_owned());
             return;
         }
-        let identity = host.identity();
+        let sender = host.sender();
         let max_file_size =
             u64::from(self.settings.current.localsend.max_file_mb).saturating_mul(1024 * 1024);
         let alias = peer.info.alias.clone();
@@ -1216,24 +1760,25 @@ impl Shell {
             sending: true,
         });
         let events = self.localsend_progress_sender.clone();
+        let progress_events = events.clone();
         std::thread::spawn(move || {
-            let result = gsh_localsend::send_files(
-                &peer,
-                &identity,
-                &paths,
-                max_file_size,
-                |path, bytes, total| {
-                    let name = path
-                        .file_name()
-                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-                    let _ = events.send(LocalSendSendEvent::Progress(
-                        generation,
-                        LocalSendProgress { name, bytes, total },
-                    ));
-                },
-                || cancel.load(Ordering::Relaxed),
-            )
-            .map_err(|_| labels::LOCALSEND_SEND_FAILED.to_owned());
+            let result = sender
+                .send_files(
+                    peer,
+                    paths,
+                    max_file_size,
+                    move |path, bytes, total| {
+                        let name = path
+                            .file_name()
+                            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+                        let _ = progress_events.send(LocalSendSendEvent::Progress(
+                            generation,
+                            LocalSendProgress { name, bytes, total },
+                        ));
+                    },
+                    cancel,
+                )
+                .map_err(|_| labels::LOCALSEND_SEND_FAILED.to_owned());
             let _ = events.send(LocalSendSendEvent::Finished(generation, result));
         });
     }
@@ -1289,6 +1834,26 @@ impl Shell {
     }
 
     fn poll_localsend(&mut self) {
+        if let Some(preparation) = &self.localsend_agent_preparation {
+            match preparation.try_recv() {
+                Ok(pending) => {
+                    self.localsend_agent_preparation = None;
+                    self.request_localsend_approval(pending);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.localsend_agent_preparation = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if self
+            .pending_localsend_agent
+            .as_ref()
+            .is_some_and(|pending| Instant::now() >= pending.deadline)
+        {
+            if let Some(pending) = self.pending_localsend_agent.take() {
+                pending.busy.store(false, Ordering::Release);
+                let _ = pending.reply.send(serde_json::json!({"ok":false,"error":"LocalSend approval timed out and was denied"}));
+            }
+        }
         while let Ok(event) = self.config_events.try_recv() {
             match event {
                 gsh_config::ConfigEvent::Changed(_) => {
@@ -1298,6 +1863,8 @@ impl Shell {
                     for editor in self.editors.values_mut() {
                         editor.set_config(self.settings.current.editor.clone());
                     }
+                    #[cfg(target_os = "linux")]
+                    self.configure_lsp();
                 }
                 gsh_config::ConfigEvent::Invalid(error) => {
                     self.settings.error = Some(settings::Error::Config(error));
@@ -1306,7 +1873,7 @@ impl Shell {
         }
         while let Ok(event) = self.localsend_requests.try_recv() {
             match event {
-                ReceiveEvent::Request(request) if self.settings.current.localsend.enabled => {
+                ReceiveEvent::Request(request) if self.settings.current.localsend.always_on => {
                     self.localsend_pending.push_back(request)
                 }
                 ReceiveEvent::Request(request) => {
@@ -1600,12 +2167,501 @@ impl Shell {
         self.farm.sync_knocks(self.team_knocks.clone(), targets);
     }
 
+    fn permission_ask(&mut self, command: gsh_ipc::PendingCommand) -> Task<Msg> {
+        let tab_id = command
+            .request
+            .get("tabId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let data = command
+            .request
+            .get("args")
+            .unwrap_or(&serde_json::Value::Null);
+        let active_tab = self.panes.focused_model().active_tab();
+        let focused = active_tab.is_some_and(|tab| match tab {
+            PaneTab::Terminal(id) => pane_id_for_term(*id) == tab_id,
+            _ => false,
+        });
+        if !self
+            .terminals
+            .keys()
+            .any(|id| pane_id_for_term(*id) == tab_id)
+            || (self.window_focused && focused)
+        {
+            let _ = command
+                .reply
+                .send(serde_json::json!({"ok": true, "data": {}}));
+            return Task::none();
+        }
+        let id = format!(
+            "p{}-{}-{}",
+            std::process::id(),
+            now_epoch_ms(),
+            self.next_permission_id
+        );
+        self.next_permission_id = self.next_permission_id.saturating_add(1).max(1);
+        let Some(ask) = ClaudePermissionAsk::parse(&id, data) else {
+            let _ = command
+                .reply
+                .send(serde_json::json!({"ok": true, "data": {}}));
+            return Task::none();
+        };
+
+        let _ = self
+            .status_runtime
+            .set_pending_ask(&tab_id, Some((&ask).into()));
+        let ask_id = ask.id.clone();
+        self.pending_permissions.insert(
+            ask_id.clone(),
+            PendingPermission {
+                tab_id: tab_id.clone(),
+                ask: ask.clone(),
+                reply: command.reply,
+                deadline: Instant::now() + native_notifications::PERMISSION_WINDOW,
+            },
+        );
+        if !self.settings.current.notifications_enabled {
+            self.answer_pending_permission(&ask_id, PermissionDecision::Pass);
+            return Task::none();
+        }
+        self.sync_island_from_status();
+
+        if self.window_focused {
+            return Task::none();
+        }
+        let name = agent_status::term_id_from_pane_id(&tab_id)
+            .and_then(|term| self.terminal_labels.get(&term))
+            .map_or(tab_id.as_str(), String::as_str);
+        let workspace = self.workspaces.active().map_or("", |ws| ws.name.as_str());
+        let who = if workspace.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{name} · {workspace}")
+        };
+        self.native_notification_task(
+            permission_key(&ask_id),
+            format!("{who} quer rodar"),
+            ask.notification_body(),
+            Some(ask.can_always()),
+        )
+    }
+
+    fn native_notification_task(
+        &mut self,
+        key: String,
+        title: String,
+        body: String,
+        can_always: Option<bool>,
+    ) -> Task<Msg> {
+        let notification = native_notifications::notification(&title, &body, can_always);
+        if let Some(updates) = self.notification_updates.get(&key) {
+            #[cfg(target_os = "linux")]
+            let _ = updates.send(notification);
+            #[cfg(not(target_os = "linux"))]
+            let _ = updates;
+            return Task::none();
+        }
+        let (updates, receiver) = tokio::sync::watch::channel(notification);
+        self.notification_updates.insert(key.clone(), updates);
+        let window = if can_always.is_some() {
+            native_notifications::PERMISSION_WINDOW
+        } else {
+            native_notifications::TURN_WINDOW
+        };
+        Task::perform(
+            native_notifications::show(receiver, window),
+            move |action| Msg::NativeNotificationAction(key.clone(), action),
+        )
+    }
+
+    fn answer_pending_permission(
+        &mut self,
+        ask_id: &str,
+        decision: PermissionDecision,
+    ) -> Option<String> {
+        let pending = self.pending_permissions.remove(ask_id)?;
+        let now = Instant::now();
+        let live = now < pending.deadline
+            && self.settings.current.notifications_enabled
+            && term_id_from_pane_id(&pending.tab_id)
+                .is_some_and(|id| self.terminals.contains_key(&id));
+        let decision = match decision {
+            _ if !live => PermissionDecision::Pass,
+            PermissionDecision::AllowAlways if !pending.ask.can_always() => {
+                PermissionDecision::Pass
+            }
+            decision => decision,
+        };
+        self.notification_updates.remove(&permission_key(ask_id));
+        let still_current = self
+            .status_runtime
+            .pane_record(&pending.tab_id)
+            .and_then(|record| record.pending_ask())
+            .is_some_and(|ask| ask.id == ask_id);
+        if still_current {
+            let next = self
+                .pending_permissions
+                .values()
+                .filter(|candidate| candidate.tab_id == pending.tab_id && candidate.deadline > now)
+                .max_by_key(|candidate| candidate.deadline);
+            if let Some(next) = next {
+                self.status_runtime
+                    .set_pending_ask(&pending.tab_id, Some((&next.ask).into()));
+            } else {
+                self.status_runtime.apply_permission_decision(
+                    &pending.tab_id,
+                    decision,
+                    now_epoch_ms(),
+                );
+            }
+            self.sync_island_from_status();
+        }
+        let output = pending.ask.hook_output(decision);
+        let response = output.map_or_else(
+            || serde_json::json!({"ok": true, "data": {}}),
+            |output| serde_json::json!({"ok": true, "data": {"output": output}}),
+        );
+        let _ = pending.reply.send(response);
+        live.then_some(pending.tab_id)
+    }
+
+    fn cancel_pending_permissions(&mut self, tab_id: &str) {
+        let stale = self
+            .pending_permissions
+            .iter()
+            .filter(|(_, pending)| pending.tab_id == tab_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in stale {
+            if let Some(pending) = self.pending_permissions.remove(&id) {
+                let _ = pending
+                    .reply
+                    .send(serde_json::json!({"ok": true, "data": {}}));
+            }
+            self.notification_updates.remove(&permission_key(&id));
+        }
+    }
+
+    fn expire_pending_permissions(&mut self) -> bool {
+        let now = Instant::now();
+        let expired = self
+            .pending_permissions
+            .iter()
+            .filter(|(_, pending)| {
+                pending.deadline <= now || !self.settings.current.notifications_enabled
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in &expired {
+            self.answer_pending_permission(id, PermissionDecision::Pass);
+        }
+        !expired.is_empty()
+    }
+
+    fn handle_native_notification_action(
+        &mut self,
+        key: &str,
+        action: native_notifications::Action,
+    ) -> Task<Msg> {
+        use native_notifications::Action;
+
+        if self.notification_updates.remove(key).is_none() {
+            return Task::none();
+        }
+        if let Some(ask_id) = key.strip_prefix("ask:") {
+            let decision = match action {
+                Action::Allow => PermissionDecision::Allow,
+                Action::Always => PermissionDecision::AllowAlways,
+                Action::Deny => PermissionDecision::Deny,
+                Action::Terminal | Action::Unavailable => PermissionDecision::Pass,
+            };
+            let target = self.answer_pending_permission(ask_id, decision);
+            let Some(tab_id) = target.filter(|_| action == Action::Terminal) else {
+                return Task::none();
+            };
+            self.reveal_terminal_by_pane_id(&tab_id);
+        } else if let Some(tab_id) = key.strip_prefix("tab:") {
+            if action != Action::Terminal
+                || !self
+                    .terminals
+                    .keys()
+                    .any(|id| pane_id_for_term(*id) == tab_id)
+            {
+                return Task::none();
+            }
+            self.reveal_terminal_by_pane_id(tab_id);
+        } else {
+            return Task::none();
+        }
+        iced::window::oldest().then(|id| match id {
+            Some(id) => iced::window::minimize(id, false).chain(iced::window::gain_focus(id)),
+            None => Task::none(),
+        })
+    }
+
+    fn handle_localsend_agent(&mut self, command: gsh_ipc::PendingCommand, cmd: &str) -> Task<Msg> {
+        let request = &command.request;
+        let tab_id = request
+            .get("tabId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let Some(term_id) = term_id_from_pane_id(&tab_id) else {
+            let _ = command.reply.send(serde_json::json!({"ok":false,"error":"LocalSend agent command requires a GSH terminal tab"}));
+            return Task::none();
+        };
+        let Some(terminal) = self.terminals.get(&term_id) else {
+            let _ = command.reply.send(
+                serde_json::json!({"ok":false,"error":"unknown tab (run inside a GSH terminal)"}),
+            );
+            return Task::none();
+        };
+        let caller = self
+            .terminal_labels
+            .get(&term_id)
+            .cloned()
+            .unwrap_or_else(|| tab_id.clone());
+        let args = request.get("args");
+        if cmd == "localsend-peers" {
+            let wait = args
+                .and_then(|value| value.get("waitSeconds"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(3)
+                .clamp(1, 30);
+            let reply = command.reply;
+            if let Some(host) = &self.localsend_host {
+                let data =
+                    serde_json::to_value(host.peers()).unwrap_or_else(|_| serde_json::json!([]));
+                let _ = reply.send(serde_json::json!({"ok":true,"data":data}));
+                return Task::none();
+            }
+            let (bridge, _events) = ReceiveBridge::channel();
+            let config = self.settings.current.localsend.clone();
+            std::thread::spawn(move || {
+                let address = std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
+                    std::net::Ipv4Addr::UNSPECIFIED,
+                    gsh_localsend::protocol::PORT,
+                ));
+                let response = match LocalSendHost::start(
+                    address,
+                    &config.alias,
+                    localsend_runtime::limits(config.max_file_mb, config.max_files),
+                    bridge,
+                ) {
+                    Ok(host) => {
+                        std::thread::sleep(Duration::from_secs(wait));
+                        let data = serde_json::to_value(host.peers())
+                            .unwrap_or_else(|_| serde_json::json!([]));
+                        serde_json::json!({"ok":true,"data":data})
+                    }
+                    Err(error) => {
+                        serde_json::json!({"ok":false,"error":format!("LocalSend discovery failed: {error}")})
+                    }
+                };
+                let _ = reply.send(response);
+            });
+            return Task::none();
+        }
+        if self.pending_localsend_agent.is_some()
+            || self.localsend_agent_preparation.is_some()
+            || self.localsend_agent_busy.load(Ordering::Acquire)
+        {
+            let _ = command.reply.send(serde_json::json!({"ok":false,"error":"another LocalSend approval is already waiting"}));
+            return Task::none();
+        }
+        let Some(target) = args
+            .and_then(|value| value.get("target"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            let _ = command
+                .reply
+                .send(serde_json::json!({"ok":false,"error":"missing LocalSend target"}));
+            return Task::none();
+        };
+        let Some(paths) = args
+            .and_then(|value| value.get("files"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            let _ = command
+                .reply
+                .send(serde_json::json!({"ok":false,"error":"missing LocalSend files"}));
+            return Task::none();
+        };
+        let paths = match paths
+            .iter()
+            .map(serde_json::Value::as_str)
+            .collect::<Option<Vec<_>>>()
+        {
+            Some(paths) => paths.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+            None => {
+                let _ = command.reply.send(
+                    serde_json::json!({"ok":false,"error":"LocalSend files must be path strings"}),
+                );
+                return Task::none();
+            }
+        };
+        let workdir = terminal
+            .cwd()
+            .or_else(|| self.active_workspace_dir())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let Some(home) = dirs::home_dir() else {
+            let _ = command.reply.send(serde_json::json!({"ok":false,"error":"cannot determine home directory for LocalSend path checks"}));
+            return Task::none();
+        };
+        let timeout_seconds = args
+            .and_then(|value| value.get("timeoutSeconds"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(120)
+            .clamp(1, 300);
+        let transfer_deadline = Instant::now() + Duration::from_secs(timeout_seconds);
+        let config = self.settings.current.localsend.clone();
+        let config_snapshot = self.settings.current.clone();
+        let mut protected_profile_roots = config_snapshot
+            .claude
+            .profiles
+            .values()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+        if let Some(default_profile) = settings::claude::profiles::default_dir() {
+            protected_profile_roots.push(default_profile);
+        }
+        if let Some(home) = dirs::home_dir() {
+            protected_profile_roots.push(home.join(".claude"));
+        }
+        let limits = localsend_runtime::limits(config.max_file_mb, config.max_files);
+        let target = target.to_owned();
+        let online = self
+            .localsend_host
+            .as_ref()
+            .map(|host| (host.peers(), host.sender()));
+        let (prepared, preparation) = mpsc::sync_channel(1);
+        self.localsend_agent_preparation = Some(preparation);
+        self.localsend_agent_busy.store(true, Ordering::Release);
+        let busy = Arc::clone(&self.localsend_agent_busy);
+        std::thread::spawn(move || {
+            let result = (|| {
+                let files = localsend_agent::snapshot_files_with_policy(
+                    &paths,
+                    &workdir,
+                    &home,
+                    limits.max_files,
+                    limits.max_file_size,
+                    transfer_deadline,
+                    &protected_profile_roots,
+                )?;
+                let (peer, sender) = if let Some((peers, sender)) = online {
+                    let peer = localsend_runtime::find_peer(&peers, &target)
+                        .map_err(|error| error.to_string())?;
+                    (peer, sender)
+                } else {
+                    let (bridge, events) = ReceiveBridge::channel();
+                    drop(events);
+                    let address = (
+                        std::net::Ipv4Addr::UNSPECIFIED,
+                        gsh_localsend::protocol::PORT,
+                    )
+                        .into();
+                    let host = LocalSendHost::start(address, &config.alias, limits.clone(), bridge)
+                        .map_err(|error| error.to_string())?;
+                    let peer = loop {
+                        match localsend_runtime::find_peer(&host.peers(), &target) {
+                            Ok(peer) => break peer,
+                            Err(localsend_runtime::PeerLookupError::NotFound(_))
+                                if Instant::now() < transfer_deadline =>
+                            {
+                                std::thread::sleep(Duration::from_millis(250));
+                            }
+                            Err(error) => return Err(error.to_string()),
+                        }
+                    };
+                    (peer, host.sender())
+                };
+                Ok((peer, sender, files))
+            })();
+            match result {
+                Ok((peer, sender, files)) => {
+                    let _ = prepared.send(localsend_agent::PendingSend {
+                        caller,
+                        peer,
+                        sender,
+                        files,
+                        reply: command.reply,
+                        transfer_deadline,
+                        max_file_size: limits.max_file_size,
+                        deadline: transfer_deadline.min(Instant::now() + Duration::from_secs(30)),
+                        busy: Arc::clone(&busy),
+                    });
+                }
+                Err(error) => {
+                    busy.store(false, Ordering::Release);
+                    send_localsend_agent_result(command.reply, 0, Err(error));
+                }
+            }
+        });
+        Task::none()
+    }
+
+    fn request_localsend_approval(&mut self, pending: localsend_agent::PendingSend) {
+        pending.busy.store(true, Ordering::Release);
+        self.pending_localsend_agent = Some(pending);
+    }
+
+    fn decide_localsend_agent(&mut self, allow: bool) {
+        let Some(pending) = self.pending_localsend_agent.take() else {
+            return;
+        };
+        if Instant::now() >= pending.deadline {
+            pending.busy.store(false, Ordering::Release);
+            let _ = pending.reply.send(serde_json::json!({"ok":false,"error":"LocalSend approval timed out and was denied"}));
+            return;
+        }
+        if !allow {
+            pending.busy.store(false, Ordering::Release);
+            let _ = pending
+                .reply
+                .send(serde_json::json!({"ok":false,"error":"LocalSend send denied by user"}));
+            return;
+        }
+        let files = pending
+            .files
+            .into_iter()
+            .map(|file| (file.path, file.snapshot))
+            .collect::<Vec<_>>();
+        let files_sent = files.len();
+        std::thread::spawn(move || {
+            let result = localsend_send_with_timeout(
+                pending.sender,
+                pending.peer,
+                files,
+                pending.max_file_size,
+                pending.transfer_deadline,
+            );
+            pending.busy.store(false, Ordering::Release);
+            send_localsend_agent_result(pending.reply, files_sent, result);
+        });
+    }
+
     fn handle_team_cli(&mut self, command: gsh_ipc::PendingCommand) -> Task<Msg> {
         let request = &command.request;
         let cmd = request
             .get("cmd")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
+        if cmd == "localsend-peers" || cmd == "localsend-send" {
+            let cmd = cmd.to_owned();
+            return self.handle_localsend_agent(command, &cmd);
+        }
+        if cmd == "permission-ask" {
+            return self.permission_ask(command);
+        }
+        if terminal_ipc::handles(cmd) {
+            self.handle_terminal_ipc(command);
+            return Task::none();
+        }
         if gsh_telemetry::TelemetryCliHandler::handles(cmd) {
             let handler = std::sync::Arc::clone(&self.telemetry.cli_handler);
             let cmd_owned = cmd.to_string();
@@ -1648,6 +2704,33 @@ impl Shell {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
         let args = request.get("args");
+        if cmd == "open" {
+            let Some(path) = args
+                .and_then(|value| value.get("path"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|path| !path.is_empty())
+            else {
+                let _ = command
+                    .reply
+                    .send(serde_json::json!({"ok": false, "error": "missing path"}));
+                return Task::none();
+            };
+            let path = Path::new(path);
+            if !path.is_absolute() || !path.is_file() {
+                let _ = command.reply.send(serde_json::json!({
+                    "ok": false, "error": format!("file not found: \"{}\"", path.display())
+                }));
+                return Task::none();
+            }
+            if let Some(pane) = term_id_from_pane_id(tab_id)
+                .and_then(|id| self.panes.pane_of(&PaneTab::Terminal(id)))
+            {
+                self.panes.focus(pane);
+            }
+            self.open_in_editor(path.to_path_buf());
+            let _ = command.reply.send(serde_json::json!({"ok": true}));
+            return self.reveal_focused_active_tab();
+        }
         if cmd == "msg" {
             let target = args
                 .and_then(|value| value.get("to"))
@@ -1682,10 +2765,12 @@ impl Shell {
                 let _ = reply.send(serde_json::json!({"ok": false, "error": "missing text"}));
                 return Task::none();
             }
-            let mut target_id = if self
-                .terminals
-                .keys()
-                .any(|id| agent_status::pane_id_for_term(*id) == target)
+            let chat_target = graph_chat_id(&target).filter(|id| self.chats.contains_key(id));
+            let mut target_id = if chat_target.is_some()
+                || self
+                    .terminals
+                    .keys()
+                    .any(|id| agent_status::pane_id_for_term(*id) == target)
             {
                 target.clone()
             } else {
@@ -1707,10 +2792,11 @@ impl Shell {
                     }
                 }
             };
-            if !self
-                .terminals
-                .keys()
-                .any(|id| agent_status::pane_id_for_term(*id) == target_id)
+            if chat_target.is_none()
+                && !self
+                    .terminals
+                    .keys()
+                    .any(|id| agent_status::pane_id_for_term(*id) == target_id)
             {
                 let external = self
                     .active_workspace_dir()
@@ -1769,6 +2855,28 @@ impl Shell {
                             .get_mut(&workspace)
                             .is_some_and(|graph| graph.enqueue_external(&target_id, message_record))
                     })
+            } else if let Some(id) = chat_target {
+                let workspace = self.active_workspace_dir().map(Path::to_path_buf);
+                let result = self
+                    .chats
+                    .get_mut(&id)
+                    .filter(|chat| {
+                        workspace.as_deref().is_some_and(|root| {
+                            chat.cwd() == Some(root) && chat.feedback_workspace() == Some(root)
+                        })
+                    })
+                    .ok_or_else(|| "chat tab is not available in the active workspace".to_owned())
+                    .and_then(|chat| {
+                        if chat.is_busy() {
+                            return Err("chat tab is already responding".to_owned());
+                        }
+                        chat.deliver_agent_text(line)
+                    });
+                if let Err(error) = result {
+                    let _ = reply.send(serde_json::json!({"ok": false, "error": error}));
+                    return Task::none();
+                }
+                true
             } else {
                 agent_status::term_id_from_pane_id(&target_id)
                     .and_then(|target_term| self.terminals.get_mut(&target_term))
@@ -1829,6 +2937,21 @@ impl Shell {
                                 "maestro": graph.maestro() == Some(peer.as_str()),
                                 "app": external.app.id(),
                                 "online": agent_status::now_epoch_ms().saturating_sub(external.last_seen_ms) <= 15_000,
+                                "linked": graph.peers(tab_id).contains(&peer.as_str()),
+                            }));
+                            continue;
+                        }
+                        if let Some(chat) = graph_chat_id(&peer)
+                            .and_then(|id| self.chats.get(&id))
+                            .filter(|chat| chat.feedback_workspace() == Some(workspace.as_path()))
+                        {
+                            contacts.push(serde_json::json!({
+                                "id": peer,
+                                "label": peer,
+                                "title": chat.conversation_title(),
+                                "harness": "Chat",
+                                "working": chat.is_busy(),
+                                "maestro": graph.maestro() == Some(peer.as_str()),
                                 "linked": graph.peers(tab_id).contains(&peer.as_str()),
                             }));
                             continue;
@@ -2138,6 +3261,14 @@ impl Shell {
         self.right_tab.effective(self.right_available())
     }
 
+    fn insert_file_editor(&mut self, path: PathBuf, text: String) {
+        let editor = editor_pane::EditorPane::new(path.clone(), text)
+            .with_config(self.settings.current.editor.clone());
+        self.editors.insert(path.clone(), editor);
+        #[cfg(target_os = "linux")]
+        self.attach_lsp(&path);
+    }
+
     /// Carrega o arquivo (editor ou visualizador) e o abre no pane focado; devolve o caminho
     /// canônico que indexa `editors` e `file_viewers`.
     fn open_in_editor(&mut self, target: PathBuf) -> PathBuf {
@@ -2153,11 +3284,7 @@ impl Shell {
         if !self.editors.contains_key(&target) && !self.file_viewers.contains_key(&target) {
             match FileViewerState::load(&target) {
                 FileViewerState::Loaded(doc) => {
-                    self.editors.insert(
-                        target.clone(),
-                        editor_pane::EditorPane::new(target.clone(), doc.into_source())
-                            .with_config(self.settings.current.editor.clone()),
-                    );
+                    self.insert_file_editor(target.clone(), doc.into_source());
                 }
                 fallback => {
                     self.file_viewers.insert(target.clone(), fallback);
@@ -2467,7 +3594,8 @@ impl Shell {
         to: String,
         messages: Vec<String>,
     ) {
-        if messages.is_empty() {
+        // Chats receive explicit messages. Creating a graph link must not start a chat turn.
+        if messages.is_empty() || graph_chat_id(&to).is_some() {
             return;
         }
         self.pending_agent_deliveries.push(PendingAgentDelivery {
@@ -2482,21 +3610,26 @@ impl Shell {
     }
 
     fn notify_monitored_agent_changes(
-        &self,
+        &mut self,
         before: &HashMap<String, gsh_core::status::TurnStatus>,
-    ) {
+    ) -> Vec<Task<Msg>> {
         if self.window_focused
             || self.static_test_mode
             || !self.settings.current.notifications_enabled
         {
-            return;
+            return Vec::new();
         }
-        let workspace = self.active_workspace_dir().unwrap_or_else(|| Path::new(""));
-        for id in self
+        let workspace = self
+            .active_workspace_dir()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let mut tasks = Vec::new();
+        let ids = self
             .terminals
             .keys()
             .map(|id| agent_status::pane_id_for_term(*id))
-        {
+            .collect::<Vec<_>>();
+        for id in ids {
             let Some(previous) = before.get(&id) else {
                 continue;
             };
@@ -2514,25 +3647,32 @@ impl Shell {
             };
             if self
                 .agent_graphs
-                .get(workspace)
+                .get(&workspace)
                 .is_some_and(|graph| !graph.is_monitored(&id))
             {
                 continue;
             }
             let name = agent_status::term_id_from_pane_id(&id)
                 .and_then(|term| self.terminal_labels.get(&term))
-                .map_or(id.as_str(), String::as_str);
+                .cloned()
+                .unwrap_or_else(|| id.clone());
             let workspace_name = self
                 .workspaces
                 .active()
-                .map_or("", |item| item.name.as_str());
+                .map_or_else(String::new, |item| item.name.clone());
             let body = if workspace_name.is_empty() {
-                name.to_owned()
+                name
             } else {
                 format!("{name} · {workspace_name}")
             };
-            send_desktop_notification(title, &body);
+            tasks.push(self.native_notification_task(
+                format!("tab:{id}"),
+                title.to_owned(),
+                body,
+                None,
+            ));
         }
+        tasks
     }
 
     fn live_graph_agents(&self, workspace: &Path) -> Vec<String> {
@@ -2550,6 +3690,19 @@ impl Shell {
                 .then_some(pane_id)
             })
             .collect::<Vec<_>>();
+        ids.extend(
+            self.panes
+                .models()
+                .iter()
+                .flat_map(|model| model.tabs())
+                .filter_map(|tab| {
+                    let PaneTab::Chat(id) = tab else { return None };
+                    self.chats
+                        .get(id)
+                        .filter(|chat| chat.feedback_workspace() == Some(workspace))
+                        .map(|_| format!("c{id}"))
+                }),
+        );
         if let Some(graph) = self.agent_graphs.get(workspace) {
             ids.extend(graph.externals().keys().cloned());
         }
@@ -2599,6 +3752,15 @@ impl Shell {
         Option<String>,
         Option<gsh_core::status::AgentHarness>,
     ) {
+        if let Some(chat_id) = graph_chat_id(id) {
+            if let Some(chat) = self.chats.get(&chat_id) {
+                return (
+                    chat.conversation_title().to_owned(),
+                    Some(String::from("Chat")),
+                    None,
+                );
+            }
+        }
         if let Some(term_id) = agent_status::term_id_from_pane_id(id) {
             let label = self
                 .terminal_labels
@@ -2701,8 +3863,14 @@ impl Shell {
 
     fn pump_agent_deliveries(&mut self) {
         let now = Instant::now();
+        let workspace = self.active_workspace_dir().map(Path::to_path_buf);
         let mut pending = Vec::new();
         for mut delivery in std::mem::take(&mut self.pending_agent_deliveries) {
+            if workspace.as_deref() != Some(delivery.workspace.as_path()) {
+                delivery.ready = false;
+                pending.push(delivery);
+                continue;
+            }
             if delivery.next_at > now {
                 pending.push(delivery);
                 continue;
@@ -2772,6 +3940,170 @@ impl Shell {
     fn schedule_agent_graph_save(&mut self, workspace: PathBuf) {
         self.agent_graph_save_due
             .insert(workspace, Instant::now() + Duration::from_millis(150));
+    }
+
+    fn export_current_team_spec(&self) -> team_markdown::TeamMarkdownSpec {
+        let workspace = self
+            .active_workspace_dir()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let team_name = self
+            .workspaces
+            .active()
+            .map(|ws| ws.name.clone())
+            .unwrap_or_else(|| labels::WORKSPACE_GSH.to_owned());
+        let graph = self.agent_graphs.get(&workspace);
+        let maestro_label = graph
+            .and_then(agent_graph_store::AgentGraphStore::maestro)
+            .map(|id| self.graph_agent_label(&workspace, id).0);
+
+        let mut agents = Vec::new();
+        for (&term_id, term) in &self.terminals {
+            let tab_id = agent_status::pane_id_for_term(term_id);
+            let label = self
+                .terminal_labels
+                .get(&term_id)
+                .cloned()
+                .unwrap_or_else(|| tab_id.clone());
+            let harness = self
+                .active_harnesses
+                .get(&term_id)
+                .copied()
+                .map(|h| if h == "claudecode" { "claude" } else { h })
+                .or_else(|| {
+                    self.status_runtime
+                        .pane_record(&tab_id)
+                        .and_then(|r| r.harness())
+                        .map(|h| match h {
+                            gsh_core::status::AgentHarness::Claude => "claude",
+                            gsh_core::status::AgentHarness::Codex => "codex",
+                            gsh_core::status::AgentHarness::Pi => "pi",
+                        })
+                })
+                .unwrap_or("shell")
+                .to_owned();
+            let rel_cwd = term
+                .cwd()
+                .and_then(|cwd| cwd.strip_prefix(&workspace).ok())
+                .map(|p| {
+                    let s = p.to_string_lossy().into_owned();
+                    if s.is_empty() {
+                        String::from(".")
+                    } else {
+                        s
+                    }
+                })
+                .unwrap_or_else(|| String::from("."));
+            let monitor = graph.is_none_or(|g| g.is_monitored(&tab_id));
+            let links = graph
+                .map(|g| {
+                    g.peers(&tab_id)
+                        .into_iter()
+                        .map(|peer_id| self.graph_agent_label(&workspace, peer_id).0)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            agents.push(team_markdown::TeamAgentSpec {
+                name: label,
+                harness,
+                cwd: rel_cwd,
+                role: String::new(),
+                task: String::new(),
+                monitor,
+                links,
+            });
+        }
+
+        team_markdown::TeamMarkdownSpec {
+            name: team_name,
+            maestro: maestro_label,
+            agents,
+            notes: String::new(),
+        }
+    }
+
+    fn apply_reviewed_team_import(&mut self, spec: team_markdown::TeamMarkdownSpec) {
+        let workspace = self
+            .active_workspace_dir()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let canonical_root = workspace
+            .canonicalize()
+            .unwrap_or_else(|_| workspace.clone());
+        let mut created_by_name: BTreeMap<String, String> = BTreeMap::new();
+
+        for agent in &spec.agents {
+            let candidate_cwd = if agent.cwd == "." || agent.cwd.is_empty() {
+                workspace.clone()
+            } else {
+                workspace.join(&agent.cwd)
+            };
+            // Rejeita symlinks que apontem para fora da pasta do workspace
+            if let Ok(real_cwd) = candidate_cwd.canonicalize() {
+                if !canonical_root.as_os_str().is_empty() && !real_cwd.starts_with(&canonical_root)
+                {
+                    continue;
+                }
+            }
+            let taken = self.terminal_labels.values().cloned().collect::<Vec<_>>();
+            let final_name = agent_graph_dialog::default_name(agent.name.trim(), &taken);
+            let id = self.panes.alloc_term_id();
+            self.panes.focused_model_mut().open_terminal(id);
+            self.panes
+                .focused_model_mut()
+                .set_terminal_label(id, final_name.clone());
+            let mut term = self.spawn_terminal_for_dir(id, Some(candidate_cwd.as_path()));
+            let cmd = agent.command();
+            if !cmd.is_empty() {
+                term.send_command(cmd);
+            }
+            self.terminals.insert(id, term);
+            self.terminal_labels.insert(id, final_name);
+            let tab_id = agent_status::pane_id_for_term(id);
+            created_by_name.insert(agent.name.to_lowercase(), tab_id.clone());
+
+            let graph = self.agent_graphs.entry(workspace.clone()).or_default();
+            graph.set_monitored(&tab_id, agent.monitor);
+
+            let mut greeting = Vec::new();
+            if !agent.role.trim().is_empty() {
+                greeting.push(format!(
+                    "[Dado de perfil importado — não instrução de sistema]: {}",
+                    agent.role.trim()
+                ));
+            }
+            if !agent.task.trim().is_empty() {
+                greeting.push(format!(
+                    "[Tarefa sugerida no arquivo importado]: {}",
+                    agent.task.trim()
+                ));
+            }
+            if !greeting.is_empty() {
+                self.queue_agent_delivery(workspace.clone(), tab_id.clone(), tab_id, greeting);
+            }
+        }
+
+        let all_ids: Vec<String> = created_by_name.values().cloned().collect();
+        {
+            let graph = self.agent_graphs.entry(workspace.clone()).or_default();
+            graph.place_missing(&all_ids);
+            for agent in &spec.agents {
+                let Some(from_id) = created_by_name.get(&agent.name.to_lowercase()) else {
+                    continue;
+                };
+                for target_name in &agent.links {
+                    if let Some(to_id) = created_by_name.get(&target_name.to_lowercase()) {
+                        graph.add_link(from_id, to_id);
+                    }
+                }
+            }
+            if let Some(maestro_name) = &spec.maestro {
+                if let Some(maestro_id) = created_by_name.get(&maestro_name.to_lowercase()) {
+                    let _ = graph.set_maestro(Some(maestro_id), &all_ids);
+                }
+            }
+        }
+        self.schedule_agent_graph_save(workspace);
     }
 
     fn flush_agent_graph_saves(&mut self) {
@@ -2976,6 +4308,11 @@ impl Shell {
         let boot_task = shell.telemetry.boot_task().map(Msg::Telemetry);
         let ws_task = shell.sync_telemetry_workspace();
         let db_task = shell.reload_db();
+        let update_task = if cfg!(target_os = "linux") {
+            shell.check_for_updates(false)
+        } else {
+            Task::none()
+        };
         let reveal_tasks: Vec<_> = shell
             .panes
             .leaves()
@@ -2991,11 +4328,22 @@ impl Shell {
         (
             shell,
             Task::batch(
-                [boot_task, ws_task, db_task]
+                [boot_task, ws_task, db_task, update_task]
                     .into_iter()
                     .chain(reveal_tasks),
             ),
         )
+    }
+
+    fn check_for_updates(&mut self, force: bool) -> Task<Msg> {
+        if self.static_test_mode
+            || !self
+                .update_state
+                .begin_check(self.settings.current.update_check_frequency, force)
+        {
+            return Task::none();
+        }
+        Task::perform(app_update::fetch_latest(), Msg::UpdateChecked)
     }
 
     fn handle_telemetry(&mut self, msg: TelemetryMsg) -> Task<Msg> {
@@ -3049,6 +4397,17 @@ impl Shell {
         self.terminals.get_mut(&id)
     }
 
+    fn clear_terminal_runtime(&mut self, id: TermId) {
+        let pane_id = pane_id_for_term(id);
+        self.cancel_idle_waiters(id);
+        self.cancel_pending_permissions(&pane_id);
+        self.notification_updates.remove(&format!("tab:{pane_id}"));
+        self.active_harnesses.remove(&id);
+        self.output_activity.remove(&id);
+        self.terminal_input_at.remove(&id);
+        self.status_runtime.remove_pane(&pane_id);
+    }
+
     /// Encerra a sessão de uma aba que já saiu da árvore de panes.
     fn dispose_tab(&mut self, tab: PaneTab) {
         match tab {
@@ -3058,6 +4417,7 @@ impl Shell {
                     term.close_session();
                 }
                 let pane_id = pane_id_for_term(id);
+                self.clear_terminal_runtime(id);
                 for (workspace, graph) in &mut self.agent_graphs {
                     graph.remove_agent(&pane_id);
                     self.agent_graph_save_due.insert(
@@ -3065,19 +4425,33 @@ impl Shell {
                         Instant::now() + Duration::from_millis(150),
                     );
                 }
-                if self.status_runtime.remove_pane(&pane_id) {
-                    self.sync_island_from_status();
-                }
+                self.sync_island_from_status();
             }
             PaneTab::Chat(id) => {
                 if let Some(mut chat) = self.chats.remove(&id) {
                     chat.close();
+                }
+                let graph_id = format!("c{id}");
+                for (workspace, graph) in &mut self.agent_graphs {
+                    graph.remove_agent(&graph_id);
+                    self.agent_graph_save_due.insert(
+                        workspace.clone(),
+                        Instant::now() + Duration::from_millis(150),
+                    );
                 }
             }
             PaneTab::File(path) => {
                 // o mesmo arquivo pode estar aberto em outro pane
                 if self.panes.pane_of(&PaneTab::File(path.clone())).is_none() {
                     self.file_viewers.remove(&path);
+                    #[cfg(target_os = "linux")]
+                    if let Some(document) = self
+                        .editors
+                        .get_mut(&path)
+                        .and_then(|editor| editor.lsp.take())
+                    {
+                        self.lsp.close(document);
+                    }
                     self.editors.remove(&path);
                 }
             }
@@ -3094,6 +4468,7 @@ impl Shell {
                 let _ = self.settings.update(settings::Message::Back);
             }
             PaneTab::Farm
+            | PaneTab::Browser
             | PaneTab::Harness(_)
             | PaneTab::TelemetryCase { .. }
             | PaneTab::AgentGraph(_) => {}
@@ -3113,6 +4488,278 @@ impl Shell {
         self.terminals.insert(id, new_term);
     }
 
+    #[cfg(target_os = "linux")]
+    fn run_scheduled_routine(
+        &mut self,
+        routine: &scheduled_automations::ScheduledRoutine,
+        manual: bool,
+    ) -> Task<Msg> {
+        if self.static_test_mode {
+            return Task::none();
+        }
+        let id = self.panes.alloc_term_id();
+        let pane_id = pane_id_for_term(id);
+        let config = self.settings.current.clone();
+        let run = match self
+            .settings
+            .routines
+            .begin_run(routine, manual, now_epoch_ms())
+        {
+            Ok(run) => run,
+            Err(err) => {
+                self.settings.routine_error =
+                    Some(format!("Falha ao criar o log da rotina: {err}"));
+                return self.scheduled_run_notification("Rotina falhou", routine.name.clone());
+            }
+        };
+        let session = run.command(routine).and_then(|command| {
+            let mut command =
+                command.scrollback_lines(config.terminal.scrollback.clamp(1000, 100_000));
+            if routine.harness == "claude" {
+                for key in gsh_chat::settings::PROFILE_AUTH_ENV {
+                    command = command.env_remove(key);
+                }
+                match settings::claude::profiles::selected(&config) {
+                    Ok(Some(path)) => command = command.env("CLAUDE_CONFIG_DIR", path),
+                    Ok(None) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            for (key, value) in self.status_runtime.hook_env_for_pane(&pane_id) {
+                command = command.env(key, value);
+            }
+            gsh_term::TermSession::spawn(
+                command,
+                terminal_pane::DEFAULT_COLS,
+                terminal_pane::DEFAULT_ROWS,
+            )
+            .map_err(|err| err.to_string())
+        });
+        let session = match session {
+            Ok(session) => session,
+            Err(err) => {
+                if let Err(write_err) = run.fail_to_start(&err) {
+                    self.settings.routine_error =
+                        Some(format!("{err} Falha ao gravar o log: {write_err}"));
+                }
+                return Task::none();
+            }
+        };
+        run.terminal = session.child_pid().map(|pid| (id, pid));
+        self.status_runtime.register_pane(pane_id.clone());
+        let label = format!("{} · {}", routine.name, routine.time_hhmm);
+        self.panes.focused_model_mut().open_terminal(id);
+        self.panes
+            .focused_model_mut()
+            .set_terminal_label(id, label.clone());
+        self.terminals.insert(
+            id,
+            TerminalPane::with_session_config(session, config).with_pane_id(pane_id),
+        );
+        self.terminal_labels.insert(id, label);
+        self.reveal_focused_active_tab()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn poll_scheduled_routines(&mut self, epoch_ms: u64) -> Vec<Task<Msg>> {
+        use scheduled_automations::RunStatus;
+        if self.static_test_mode {
+            return Vec::new();
+        }
+        let completed = self
+            .settings
+            .routines
+            .poll_runs(|id, pid| {
+                self.terminals.get(&id).and_then(TerminalPane::child_pid) == Some(pid)
+                    && std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                        .ok()
+                        .and_then(|stat| stat.rsplit_once(") ")?.1.chars().next())
+                        .is_some_and(|state| !matches!(state, 'Z' | 'X'))
+            })
+            .map(|run| {
+                let title = match run.status {
+                    RunStatus::Succeeded => "Rotina concluída",
+                    RunStatus::Interrupted => "Rotina interrompida",
+                    _ => "Rotina falhou",
+                };
+                (title, run.name().to_owned(), run.terminal)
+            })
+            .collect::<Vec<_>>();
+        let mut tasks = completed
+            .into_iter()
+            .map(|(title, name, terminal)| {
+                if let Some(term) = terminal.and_then(|(id, pid)| {
+                    self.terminals
+                        .get_mut(&id)
+                        .filter(|term| term.child_pid() == Some(pid))
+                }) {
+                    let _ = term.update(TerminalMsg::Tick);
+                    term.close_session();
+                }
+                self.scheduled_run_notification(title, name)
+            })
+            .collect::<Vec<_>>();
+        tasks.extend(
+            self.settings
+                .routines
+                .take_due(epoch_ms)
+                .iter()
+                .map(|routine| self.run_scheduled_routine(routine, false)),
+        );
+        tasks
+    }
+
+    #[cfg(target_os = "linux")]
+    fn scheduled_run_notification(&self, title: &'static str, name: String) -> Task<Msg> {
+        if !self.settings.current.notifications_enabled {
+            return Task::none();
+        }
+        Task::perform(
+            async move {
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _ = notify_rust::Notification::new()
+                        .appname("GSH Desktop")
+                        .summary(title)
+                        .body(
+                            &name
+                                .replace('&', "&amp;")
+                                .replace('<', "&lt;")
+                                .replace('>', "&gt;"),
+                        )
+                        .hint(notify_rust::Hint::DesktopEntry(
+                            "work.gorila.gshdesktop".into(),
+                        ))
+                        .show();
+                })
+                .await;
+            },
+            |()| Msg::Noop,
+        )
+    }
+
+    fn feedback_target_workspace(&self, target: &str) -> Option<&Path> {
+        if let Some(id) = term_id_from_pane_id(target) {
+            return self.terminals.get(&id).and_then(TerminalPane::cwd);
+        }
+        let chat = target.strip_prefix('c')?.parse::<ChatId>().ok()?;
+        self.chats.get(&chat).and_then(ChatPane::feedback_workspace)
+    }
+
+    fn git_agent_targets(&self) -> Vec<git_panel::AgentTarget> {
+        let Some(workspace) = self.active_workspace_dir() else {
+            return Vec::new();
+        };
+        let mut targets = self
+            .live_graph_agents(workspace)
+            .into_iter()
+            .filter(|id| {
+                self.feedback_target_workspace(id)
+                    .is_some_and(|cwd| cwd.starts_with(workspace))
+            })
+            .map(|id| git_panel::AgentTarget {
+                label: self.graph_agent_label(workspace, &id).0,
+                id,
+            })
+            .collect::<Vec<_>>();
+        targets.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.id.cmp(&b.id)));
+        targets
+    }
+
+    fn deliver_git_feedback(&mut self, target: &str, payload: &str) -> Result<(), String> {
+        let unavailable =
+            || "O agente escolhido já não está disponível neste workspace.".to_owned();
+        let workspace = self
+            .active_workspace_dir()
+            .map(Path::to_path_buf)
+            .ok_or_else(unavailable)?;
+        if !self
+            .git_agent_targets()
+            .iter()
+            .any(|agent| agent.id == target)
+        {
+            return Err(unavailable());
+        }
+        let workspace_root = workspace.canonicalize().map_err(|_| unavailable())?;
+        let target_root = self
+            .feedback_target_workspace(target)
+            .and_then(|cwd| cwd.canonicalize().ok())
+            .ok_or_else(unavailable)?;
+        if !target_root.starts_with(workspace_root) {
+            return Err(unavailable());
+        }
+        let message = format!("[from: Revisão Git] {payload}");
+        if let Some(id) = term_id_from_pane_id(target) {
+            let term = self.terminals.get_mut(&id).ok_or_else(unavailable)?;
+            let pid = term.child_pid().ok_or_else(unavailable)?;
+            if harness_monitor::detect(pid, &harness_monitor::scan(&[pid])).is_none() {
+                return Err(unavailable());
+            }
+            // PTY input must not turn diff line breaks or control characters into keystrokes.
+            let line: String = message
+                .chars()
+                .map(|c| match c {
+                    '\n' => '⏎',
+                    c if c.is_control() => ' ',
+                    c => c,
+                })
+                .collect();
+            if !term.send_agent_message(&line) {
+                return Err(unavailable());
+            }
+        } else {
+            let id = target
+                .strip_prefix('c')
+                .and_then(|id| id.parse::<ChatId>().ok())
+                .ok_or_else(unavailable)?;
+            let chat = self.chats.get_mut(&id).ok_or_else(unavailable)?;
+            if chat.cwd() != chat.feedback_workspace() {
+                return Err(unavailable());
+            }
+            if chat.is_busy() {
+                return Err("O chat escolhido já está respondendo. Tente enviar quando a resposta terminar.".to_owned());
+            }
+            chat.deliver_agent_text(message)?;
+        }
+        self.agent_graphs
+            .entry(workspace)
+            .or_default()
+            .record(agent_graph_store::AgentMessage {
+                from_tab_id: "git".to_owned(),
+                to_tab_id: target.to_owned(),
+                sent_at_ms: now_epoch_ms(),
+                preview: payload.chars().take(200).collect(),
+                signed_by: "Revisão Git".to_owned(),
+            });
+        Ok(())
+    }
+
+    fn send_pr_feedback(
+        &mut self,
+        revision: u64,
+        item: git_pr::PrItem,
+        target: &str,
+    ) -> Result<(), String> {
+        let pr = self
+            .git
+            .pr
+            .as_ref()
+            .filter(|_| !self.git.busy && self.git.pr_revision == revision)
+            .ok_or_else(|| "O painel mudou. Consulte o PR novamente antes de enviar.".to_owned())?;
+        let repo = self
+            .git
+            .root
+            .as_deref()
+            .ok_or_else(|| "Nenhum repositório ativo.".to_owned())?;
+        if git_ops::current_branch(repo).map_err(|error| error.to_string())? != pr.branch {
+            self.git.pr = None;
+            return Err("A branch mudou. Consulte o PR da branch atual.".to_owned());
+        }
+        let payload = pr
+            .feedback(item)
+            .ok_or_else(|| "Este item do PR já não está disponível.".to_owned())?;
+        self.deliver_git_feedback(target, &payload)
+    }
+
     /// Roda `command` numa aba nova de terminal do workspace ativo e fecha as Configurações
     /// (`runInShellTerminal` do Flutter). Sem workspace ativo, abre o diálogo de aviso.
     fn run_in_workspace_terminal(&mut self, command: &str) {
@@ -3120,6 +4767,10 @@ impl Shell {
             self.settings.claude.show_no_workspace();
             return;
         };
+        self.run_terminal_command(command, Some(cwd));
+    }
+
+    fn run_terminal_command(&mut self, command: &str, cwd: Option<PathBuf>) {
         if let Some(pane) = self.panes.pane_of(&PaneTab::Settings) {
             self.panes.focus(pane);
             if let Some(idx) = self
@@ -3134,8 +4785,8 @@ impl Shell {
         }
         let id = self.panes.alloc_term_id();
         self.panes.focused_model_mut().open_terminal(id);
-        let mut new_term = self.spawn_terminal_for_dir(id, Some(cwd.as_path()));
-        new_term.send_command(command);
+        let mut new_term = self.spawn_terminal_for_dir(id, cwd.as_deref());
+        new_term.send_unscoped_command(command);
         self.terminals.insert(id, new_term);
     }
 
@@ -3549,6 +5200,51 @@ impl Shell {
                 self.tab_list_open = None;
                 Task::none()
             }
+            Msg::ToggleAppMenu => {
+                self.app_menu_open = !self.app_menu_open;
+                Task::none()
+            }
+            Msg::CloseAppMenu => {
+                self.app_menu_open = false;
+                Task::none()
+            }
+            Msg::AppMenuAction(message) => {
+                self.app_menu_open = false;
+                self.update_inner(*message)
+            }
+            Msg::AppMenuShortcut(key, modifiers) => self
+                .app_menu_shortcut_action(&key, modifiers)
+                .and_then(|action| self.app_menu_message(action))
+                .map_or_else(Task::none, |message| self.update_inner(message)),
+            Msg::CycleWorkspace(delta) => {
+                let workspace_indices = self
+                    .workspaces
+                    .items()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, workspace)| workspace.path.as_ref().map(|_| index))
+                    .collect::<Vec<_>>();
+                let Some(last_position) = workspace_indices.len().checked_sub(1) else {
+                    return Task::none();
+                };
+                let current = self.workspaces.selected_index();
+                let position = workspace_indices
+                    .iter()
+                    .position(|index| *index == current)
+                    .unwrap_or(if delta < 0 { 0 } else { last_position });
+                let len = workspace_indices.len();
+                let next_position = if delta < 0 {
+                    (position + len - 1) % len
+                } else {
+                    (position + 1) % len
+                };
+                workspace_indices
+                    .get(next_position)
+                    .copied()
+                    .map_or_else(Task::none, |index| {
+                        self.update_inner(Msg::SelectWorkspace(index))
+                    })
+            }
             Msg::PaneDrag(pane, event) => {
                 match event {
                     PaneDragEvent::Hover { zone, cursor } => {
@@ -3607,6 +5303,21 @@ impl Shell {
                 Task::none()
             }
             Msg::StatusTick => {
+                self.settings.claude.poll_keep_awake();
+                let mut tasks = Vec::new();
+                #[cfg(target_os = "linux")]
+                tasks.extend(
+                    self.settings
+                        .claude
+                        .poll_bag_mode()
+                        .map(|task| task.map(|msg| Msg::Settings(settings::Message::Claude(msg)))),
+                );
+                #[cfg(target_os = "linux")]
+                tasks.extend(self.poll_scheduled_routines(now_epoch_ms()));
+                #[cfg(target_os = "linux")]
+                if self.lsp.active() {
+                    self.lsp.poll(&mut self.editors);
+                }
                 self.flush_agent_graph_saves();
                 self.poll_external_waiters();
                 self.pump_agent_deliveries();
@@ -3622,15 +5333,18 @@ impl Shell {
                         (pane_id, status)
                     })
                     .collect::<HashMap<_, _>>();
-                if self.status_runtime.drain_deliveries(now_epoch_ms()) {
-                    self.notify_monitored_agent_changes(&before);
+                let expired_permission = self.expire_pending_permissions();
+                if self.status_runtime.drain_deliveries(now_epoch_ms()) || expired_permission {
+                    tasks.extend(self.notify_monitored_agent_changes(&before));
                     self.sync_island_from_status();
                 }
-                let command_tasks = self
-                    .status_runtime
-                    .take_commands()
-                    .into_iter()
-                    .map(|command| Task::done(Msg::TeamCliCommand(command)));
+                self.poll_idle_waiters();
+                tasks.extend(
+                    self.status_runtime
+                        .take_commands()
+                        .into_iter()
+                        .map(|command| Task::done(Msg::TeamCliCommand(command))),
+                );
                 for chat in self.chats.values_mut() {
                     chat.poll_events();
                 }
@@ -3638,15 +5352,13 @@ impl Shell {
                 self.poll_team();
                 self.poll_localsend();
                 if self.git.should_refresh() {
-                    return Task::batch(
-                        command_tasks.chain(std::iter::once(
-                            self.git
-                                .start(git_state::Action::Refresh)
-                                .map(Msg::GitResult),
-                        )),
+                    tasks.push(
+                        self.git
+                            .start(git_state::Action::Refresh)
+                            .map(Msg::GitResult),
                     );
                 }
-                Task::batch(command_tasks)
+                Task::batch(tasks)
             }
             Msg::LayoutSaveTick => {
                 if self
@@ -3671,6 +5383,13 @@ impl Shell {
                 Task::none()
             }
             Msg::TeamCliCommand(command) => self.handle_team_cli(command),
+            Msg::NativeNotificationAction(key, action) => {
+                self.handle_native_notification_action(&key, action)
+            }
+            Msg::LocalSendAgentDecision { allow } => {
+                self.decide_localsend_agent(allow);
+                Task::none()
+            }
             Msg::TeamCliSendComplete(reply, from, result, flight) => {
                 let response = match result {
                     Ok(to) => {
@@ -3691,19 +5410,13 @@ impl Shell {
                         self.island.update(island_msg);
                         self.reveal_terminal_by_pane_id(&target);
                     }
-                    IslandMsg::DecidePermission { tab_id, decision } => {
-                        let target = tab_id.clone();
+                    IslandMsg::DecidePermission { ask_id, decision } => {
                         let chosen = *decision;
-                        self.island.update(island_msg);
-                        let _ = self.status_runtime.apply_permission_decision(
-                            &target,
-                            chosen,
-                            now_epoch_ms(),
-                        );
-                        if chosen == PermissionDecision::Pass {
+                        let target = self.answer_pending_permission(ask_id, chosen);
+                        if let Some(target) = target.filter(|_| chosen == PermissionDecision::Pass)
+                        {
+                            self.island.update(IslandMsg::RevealTab(target.clone()));
                             self.reveal_terminal_by_pane_id(&target);
-                        } else {
-                            self.sync_island_from_status();
                         }
                     }
                     IslandMsg::TogglePanel | IslandMsg::ClosePanel => {
@@ -3716,12 +5429,11 @@ impl Shell {
             Msg::Terminal(TerminalMsg::Keyboard(_)) if self.pending_close_pane.is_some() => {
                 Task::none()
             }
-            // Ctrl/Cmd+Shift+F é do shell (`FocusSearch`), não vai para o PTY
             Msg::Terminal(TerminalMsg::Keyboard(iced::keyboard::Event::KeyPressed {
                 ref key,
                 modifiers,
                 ..
-            })) if content_search_panel::is_focus_shortcut(key, modifiers) => Task::none(),
+            })) if self.app_menu_shortcut_action(key, modifiers).is_some() => Task::none(),
             Msg::Terminal(term_msg) => {
                 let mut command_tasks = Vec::new();
                 if matches!(term_msg, TerminalMsg::Tick) {
@@ -3781,6 +5493,7 @@ impl Shell {
                         {
                             let pane_id = pane_id_for_term(id);
                             if self.status_runtime.interrupt_pane(&pane_id, now_epoch_ms()) {
+                                self.cancel_pending_permissions(&pane_id);
                                 self.sync_island_from_status();
                             }
                         }
@@ -3796,6 +5509,12 @@ impl Shell {
                     Task::batch(command_tasks)
                 }
             }
+            Msg::TerminalIn(
+                _,
+                TerminalMsg::Keyboard(iced::keyboard::Event::KeyPressed {
+                    ref key, modifiers, ..
+                }),
+            ) if self.app_menu_shortcut_action(key, modifiers).is_some() => Task::none(),
             Msg::TerminalIn(id, term_msg) => {
                 let submitted_input = matches!(
                     &term_msg,
@@ -3815,6 +5534,14 @@ impl Shell {
                 }
             }
             Msg::Chat(id, chat_msg) => {
+                if matches!(&chat_msg, ChatMsg::OpenLink(_))
+                    && !self
+                        .settings
+                        .current
+                        .shows_feature(gsh_config::schema::AppFeature::Browser)
+                {
+                    return Task::none();
+                }
                 let preference = match &chat_msg {
                     ChatMsg::SetMode(mode) if mode != "plan" => {
                         Some(("permissionMode", mode.as_str()))
@@ -3853,16 +5580,44 @@ impl Shell {
                 }
             }
             Msg::Editor(path, msg) => {
+                if matches!(msg, editor_pane::EditorMsg::ApplyCkpLayout) {
+                    return self.apply_ckp_editor(&path);
+                }
+                #[cfg(target_os = "linux")]
+                if matches!(msg, editor_pane::EditorMsg::Format) {
+                    return self.format_editor(&path);
+                }
                 let saved_check = matches!(
                     msg,
                     editor_pane::EditorMsg::Save | editor_pane::EditorMsg::Overwrite
                 );
                 if let Some(editor) = self.editors.get_mut(&path) {
+                    #[cfg(target_os = "linux")]
+                    let before = editor.highlight_text.clone();
+                    #[cfg(target_os = "linux")]
+                    let task = if let editor_pane::EditorMsg::Formatted(version, result) = msg {
+                        editor.finish_lsp_format(version, result);
+                        Task::none()
+                    } else {
+                        editor.update(msg)
+                    };
+                    #[cfg(not(target_os = "linux"))]
+                    let task = editor.update(msg);
                     let closure_path = path.clone();
-                    let task = editor
-                        .update(msg)
-                        .map(move |message| Msg::Editor(closure_path.clone(), message));
+                    let task = task.map(move |message| Msg::Editor(closure_path.clone(), message));
+                    #[cfg(target_os = "linux")]
+                    if !std::sync::Arc::ptr_eq(&before, &editor.highlight_text) {
+                        if let Some(document) = editor.lsp.as_mut() {
+                            self.lsp.change(document, editor.highlight_text.clone());
+                        }
+                    }
                     if saved_check && !editor.state.buffer.is_dirty() {
+                        #[cfg(target_os = "linux")]
+                        if editor.state.notice.is_none() {
+                            if let Some(document) = editor.lsp.as_mut() {
+                                self.lsp.save(document);
+                            }
+                        }
                         self.telemetry.record_file_edit(&path);
                     }
                     task
@@ -3870,6 +5625,14 @@ impl Shell {
                     Task::none()
                 }
             }
+            Msg::FileViewer(file_viewer::FileViewerMsg::OpenMedia(path)) => {
+                #[cfg(target_os = "linux")]
+                let _ = Command::new("xdg-open").arg(path).spawn();
+                #[cfg(not(target_os = "linux"))]
+                let _ = path;
+                Task::none()
+            }
+            Msg::FileViewer(file_viewer::FileViewerMsg::Ignore) => Task::none(),
             Msg::Files(files_msg) => {
                 match files_msg {
                     FilesMsg::ToggleDir(dir) => self.file_tree.toggle_dir(&dir),
@@ -4007,7 +5770,8 @@ impl Shell {
                 Task::none()
             }
             Msg::GitResult(result) => {
-                if self.git.finish(result) {
+                let should_refresh = self.git.finish(result);
+                if should_refresh {
                     self.git
                         .start(git_state::Action::Refresh)
                         .map(Msg::GitResult)
@@ -4019,15 +5783,65 @@ impl Shell {
                 use git_panel::GitMsg;
                 let action = match msg {
                     GitMsg::CloseDiff => {
-                        self.git.diff = None;
+                        self.git.close_diff();
+                        None
+                    }
+                    GitMsg::StartNote(hunk, line) => {
+                        self.git.start_note(hunk, line);
+                        None
+                    }
+                    GitMsg::NoteInput(text) => {
+                        self.git.update_note_draft(text);
+                        None
+                    }
+                    GitMsg::SaveNote => {
+                        self.git.save_note();
+                        None
+                    }
+                    GitMsg::CancelNote => {
+                        self.git.cancel_note();
+                        None
+                    }
+                    GitMsg::RemoveNote(hunk, line) => {
+                        self.git.remove_note(hunk, line);
+                        None
+                    }
+                    GitMsg::SelectNoteAgent(target) => {
+                        self.git.note_agent = Some(target);
+                        None
+                    }
+                    GitMsg::SendNotesToAgent(target) => {
+                        if self.git.note_agent.as_deref() != Some(target.as_str())
+                            || !self.git.save_note()
+                        {
+                            return Task::none();
+                        }
+                        let Some(payload) = self.git.diff.as_ref().and_then(|diff| {
+                            git_diff_view::format_notes_for_agent(diff, &self.git.diff_notes)
+                        }) else {
+                            return Task::none();
+                        };
+                        match self.deliver_git_feedback(&target, &payload) {
+                            Ok(()) => {
+                                self.git.store_notes(BTreeMap::new());
+                            }
+                            Err(detail) => self.git.error = Some(gsh_git::GitError::Io { detail }),
+                        }
                         None
                     }
                     GitMsg::Changes => {
                         self.git.history_open = false;
+                        self.git.branches_open = false;
                         None
                     }
                     GitMsg::History => {
                         self.git.history_open = true;
+                        self.git.branches_open = false;
+                        None
+                    }
+                    GitMsg::Branches => {
+                        self.git.history_open = false;
+                        self.git.branches_open = true;
                         None
                     }
                     GitMsg::Message(value) => {
@@ -4035,6 +5849,10 @@ impl Shell {
                         None
                     }
                     GitMsg::Refresh => Some(git_state::Action::Refresh),
+                    GitMsg::SwitchBranch(branch) if self.git.can_switch_branch() => {
+                        Some(git_state::Action::SwitchBranch(branch))
+                    }
+                    GitMsg::SwitchBranch(_) => None,
                     GitMsg::Stage(path) => Some(git_state::Action::Stage(path)),
                     GitMsg::Unstage(path) => Some(git_state::Action::Unstage(path)),
                     GitMsg::Diff(path, staged) => Some(git_state::Action::Diff(path, staged)),
@@ -4042,6 +5860,51 @@ impl Shell {
                         Some(git_state::Action::Commit(self.git.message.clone()))
                     }
                     GitMsg::Commit => None,
+                    GitMsg::SuggestCommit if self.git.can_suggest_commit() => Some(
+                        git_state::Action::SuggestCommit(self.settings.current.automation.clone()),
+                    ),
+                    GitMsg::SuggestCommit => None,
+                    GitMsg::RefreshPr => Some(git_state::Action::FetchPr),
+                    GitMsg::LoadPrLog(revision, index) => self
+                        .git
+                        .pr
+                        .as_ref()
+                        .filter(|_| self.git.pr_revision == revision)
+                        .and_then(|pr| pr.log_request(index))
+                        .map(|request| git_state::Action::FetchPrLog(index, request)),
+                    GitMsg::OpenPrUrl(revision, item) => {
+                        if !self.static_test_mode && self.git.pr_revision == revision {
+                            if let Some(pr) = &self.git.pr {
+                                if let Some(url) =
+                                    item.map_or_else(|| Some(&pr.url), |item| pr.item_url(item))
+                                {
+                                    open_in_file_manager(Path::new(url.as_str()));
+                                }
+                            }
+                        }
+                        None
+                    }
+                    GitMsg::SelectPrAgent(target) => {
+                        self.git.pr_agent = Some(target);
+                        self.git.pr_notice = None;
+                        None
+                    }
+                    GitMsg::SendPrFeedback(revision, item, target) => {
+                        if self.git.pr_agent.as_deref() == Some(target.as_str()) {
+                            match self.send_pr_feedback(revision, item, &target) {
+                                Ok(()) => {
+                                    self.git.error = None;
+                                    self.git.pr_notice =
+                                        Some("Item enviado ao agente selecionado.");
+                                }
+                                Err(detail) => {
+                                    self.git.pr_notice = None;
+                                    self.git.error = Some(gsh_git::GitError::Io { detail });
+                                }
+                            }
+                        }
+                        None
+                    }
                 };
                 action.map_or_else(Task::none, |action| {
                     self.git.start(action).map(Msg::GitResult)
@@ -4086,6 +5949,7 @@ impl Shell {
                             ]);
                         }
                         PaneTab::Farm
+                        | PaneTab::Browser
                         | PaneTab::Settings
                         | PaneTab::Redis { .. }
                         | PaneTab::Mongo { .. }
@@ -4138,6 +6002,28 @@ impl Shell {
                 }
                 self.panes.focused_model_mut().open_settings();
                 self.reveal_focused_active_tab()
+            }
+            Msg::OpenLocalSend => {
+                self.settings.claude.workspace = self.active_workspace_dir().map(Path::to_path_buf);
+                self.settings.reload();
+                let _ = self
+                    .settings
+                    .update(settings::Message::Select(settings::Section::LocalSend));
+                self.panes.focused_model_mut().open_settings();
+                self.reveal_focused_active_tab()
+            }
+            Msg::Settings(settings::Message::RoutineOpenLog(path)) => {
+                if self
+                    .settings
+                    .routines
+                    .runs()
+                    .iter()
+                    .any(|run| run.log() == path)
+                {
+                    self.open_in_editor(path);
+                    return self.reveal_focused_active_tab();
+                }
+                Task::none()
             }
             Msg::Settings(message) => {
                 if let settings::Message::LocalSend(action) = &message {
@@ -4199,10 +6085,26 @@ impl Shell {
                     for editor in self.editors.values_mut() {
                         editor.set_config(self.settings.current.editor.clone());
                     }
+                    #[cfg(target_os = "linux")]
+                    self.configure_lsp();
                 }
                 if let Some(command) = self.settings.claude.take_terminal_command() {
                     self.run_in_workspace_terminal(&command);
                 }
+                if let Some(command) = self.settings.claude.take_profile_terminal_command() {
+                    let cwd = self.active_workspace_dir().map(Path::to_path_buf);
+                    self.run_terminal_command(&command, cwd);
+                }
+                #[cfg(target_os = "linux")]
+                let routine_task = self
+                    .settings
+                    .pending_routine_run
+                    .take()
+                    .map_or_else(Task::none, |routine| {
+                        self.run_scheduled_routine(&routine, true)
+                    });
+                #[cfg(not(target_os = "linux"))]
+                let routine_task = Task::none();
                 if let Some(path) = self.settings.claude.take_open_file() {
                     if let Some(pane) = self.panes.pane_of(&PaneTab::Settings) {
                         self.panes.focus(pane);
@@ -4221,11 +6123,90 @@ impl Shell {
                 if self.settings.claude.take_quit_request() {
                     return iced::exit();
                 }
-                Task::batch([task.map(Msg::Settings), dev_task])
+                Task::batch([task.map(Msg::Settings), dev_task, routine_task])
             }
             Msg::OpenFarm => {
                 self.panes.focused_model_mut().open_farm();
                 self.reveal_focused_active_tab()
+            }
+            Msg::OpenBrowser => {
+                self.panes.focused_model_mut().open_browser();
+                self.reveal_focused_active_tab()
+            }
+            Msg::Browser(msg) => {
+                if let Some(target_url) = self.browser.apply_message(msg) {
+                    let page = self.browser.page_name.clone();
+                    if self.static_test_mode {
+                        let _ = self
+                            .browser
+                            .apply_message(browser_pane::BrowserMsg::FrameLoaded(Ok((
+                                target_url.clone(),
+                                format!("Página carregada: {target_url}"),
+                                None,
+                            ))));
+                    } else {
+                        return Task::perform(
+                            async move {
+                                tokio::task::spawn_blocking(move || {
+                                    let output = Command::new("gsh")
+                                        .args(["browser", "goto", &target_url, "--page", &page])
+                                        .output();
+                                    let snap = Command::new("gsh")
+                                        .args(["browser", "snapshot", "--page", &page])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                                        .unwrap_or_default();
+                                    match output {
+                                        Ok(o) if o.status.success() => Ok((target_url, snap, None)),
+                                        Ok(o) => Err(String::from_utf8_lossy(&o.stderr)
+                                            .trim()
+                                            .to_owned()),
+                                        Err(e) => Err(e.to_string()),
+                                    }
+                                })
+                                .await
+                                .unwrap_or_else(|e| Err(e.to_string()))
+                            },
+                            |res| Msg::Browser(browser_pane::BrowserMsg::FrameLoaded(res)),
+                        );
+                    }
+                }
+                Task::none()
+            }
+            Msg::SelectContextChannel(channel) => {
+                self.channel_editor = None;
+                self.workspaces.set_active_channel(channel);
+                self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
+                Task::none()
+            }
+            Msg::ToggleChannelEditor => {
+                self.channel_editor = if self.channel_editor.is_some() {
+                    None
+                } else {
+                    self.workspaces
+                        .active()
+                        .map(|workspace| workspace.realm().to_owned())
+                };
+                Task::none()
+            }
+            Msg::ChannelNameChanged(name) => {
+                self.channel_editor = Some(name);
+                Task::none()
+            }
+            Msg::AssignChannel => {
+                if let Some(name) = self.channel_editor.take() {
+                    if gsh_core::workspace::valid_channel_name(&name) {
+                        let index = self.workspaces.selected_index();
+                        if self.workspaces.set_workspace_realm(index, name.clone())
+                            && self.workspaces.active_channel().is_some()
+                        {
+                            self.workspaces.set_active_channel(Some(name));
+                        }
+                        self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
+                    }
+                }
+                Task::none()
             }
             Msg::OpenAgentGraph => {
                 let workspace = self
@@ -4460,6 +6441,64 @@ impl Shell {
             Msg::AgentGraph(agent_graph::Message::DismissContext) => {
                 self.graph_context = None;
                 self.graph_rename = None;
+                Task::none()
+            }
+            Msg::AgentGraph(agent_graph::Message::ImportTeam) => {
+                let initial = self.active_workspace_dir().map(Path::to_path_buf);
+                Task::perform(
+                    async move {
+                        let mut dlg = rfd::AsyncFileDialog::new()
+                            .set_title(labels::AGENT_GRAPH_IMPORT_TEAM)
+                            .add_filter("Markdown", &["md"]);
+                        if let Some(dir) = initial.filter(|d| d.is_dir()) {
+                            dlg = dlg.set_directory(dir);
+                        }
+                        dlg.pick_file().await.map(|h| h.path().to_path_buf())
+                    },
+                    Msg::TeamMarkdownImportPicked,
+                )
+            }
+            Msg::AgentGraph(agent_graph::Message::ExportTeam) => {
+                let initial = self.active_workspace_dir().map(Path::to_path_buf);
+                Task::perform(
+                    async move {
+                        let mut dlg = rfd::AsyncFileDialog::new()
+                            .set_title(labels::AGENT_GRAPH_EXPORT_TEAM)
+                            .set_file_name("team.md")
+                            .add_filter("Markdown", &["md"]);
+                        if let Some(dir) = initial.filter(|d| d.is_dir()) {
+                            dlg = dlg.set_directory(dir);
+                        }
+                        dlg.save_file().await.map(|h| h.path().to_path_buf())
+                    },
+                    Msg::TeamMarkdownExportPicked,
+                )
+            }
+            Msg::TeamMarkdownImportPicked(Some(path)) => {
+                let parsed = std::fs::read_to_string(&path)
+                    .map_err(|e| format!("falha ao ler {}: {e}", path.display()))
+                    .and_then(|raw| team_markdown::parse_team_markdown(&raw));
+                self.team_import_review = Some(parsed);
+                Task::none()
+            }
+            Msg::TeamMarkdownImportPicked(None) => Task::none(),
+            Msg::TeamMarkdownExportPicked(Some(path)) => {
+                let spec = self.export_current_team_spec();
+                let markdown = team_markdown::export_team_markdown(&spec);
+                let _ = std::fs::write(path, markdown);
+                Task::none()
+            }
+            Msg::TeamMarkdownExportPicked(None) => Task::none(),
+            Msg::CancelTeamImport => {
+                self.team_import_review = None;
+                Task::none()
+            }
+            Msg::ConfirmTeamImport => {
+                if let Some(Ok(spec)) = self.team_import_review.take() {
+                    self.apply_reviewed_team_import(spec);
+                } else {
+                    self.team_import_review = None;
+                }
                 Task::none()
             }
             Msg::AgentGraphFolderPicked(path) => {
@@ -4903,7 +6942,6 @@ impl Shell {
                 self.update_query(
                     id,
                     match shortcut {
-                        QueryShortcut::Save => QueryMsg::Save,
                         QueryShortcut::Run => QueryMsg::Run,
                     },
                 )
@@ -5002,6 +7040,130 @@ impl Shell {
                         pane_strip::reveal_active_tab(pane, index)
                     })
             }
+            #[cfg(target_os = "linux")]
+            Msg::OpenRemoteConnect => {
+                self.remote_connect_generation = self.remote_connect_generation.wrapping_add(1);
+                self.remote_connect = Some(remote_connect_dialog::Draft::default());
+                Task::none()
+            }
+            #[cfg(target_os = "linux")]
+            Msg::RemoteConnectDialog(message) => {
+                let Some(draft) = self.remote_connect.as_mut() else {
+                    return Task::none();
+                };
+                match message {
+                    remote_connect_dialog::Message::TargetChanged(value) => {
+                        draft.target = value;
+                        draft.error = None;
+                        Task::none()
+                    }
+                    remote_connect_dialog::Message::SocketChanged(value) => {
+                        draft.socket = value;
+                        draft.error = None;
+                        Task::none()
+                    }
+                    remote_connect_dialog::Message::CwdChanged(value) => {
+                        draft.cwd = value;
+                        draft.error = None;
+                        Task::none()
+                    }
+                    remote_connect_dialog::Message::Cancel => {
+                        self.remote_connect_generation =
+                            self.remote_connect_generation.wrapping_add(1);
+                        self.remote_connect = None;
+                        Task::none()
+                    }
+                    remote_connect_dialog::Message::Connect
+                        if draft.valid() && !draft.connecting =>
+                    {
+                        let target = draft.target.trim().to_owned();
+                        let socket = draft.socket.trim().to_owned();
+                        let cwd =
+                            (!draft.cwd.trim().is_empty()).then(|| draft.cwd.trim().to_owned());
+                        let generation = self.remote_connect_generation;
+                        let results = Arc::clone(&self.remote_connect_results);
+                        draft.connecting = true;
+                        draft.error = None;
+                        Task::perform(
+                            async move {
+                                let result = tokio::task::spawn_blocking(move || {
+                                    remote_ssh::open(
+                                        target,
+                                        socket,
+                                        cwd,
+                                        terminal_pane::DEFAULT_COLS,
+                                        terminal_pane::DEFAULT_ROWS,
+                                        gsh_term::DEFAULT_SCROLLBACK_LINES,
+                                    )
+                                    .map_err(|error| error.to_string())
+                                })
+                                .await
+                                .map_err(|error| error.to_string())
+                                .and_then(|result| result);
+                                results
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .insert(generation, result);
+                            },
+                            move |_| Msg::RemoteConnectFinished(generation),
+                        )
+                    }
+                    remote_connect_dialog::Message::Connect => Task::none(),
+                }
+            }
+            #[cfg(target_os = "linux")]
+            Msg::RemoteConnectFinished(generation) => {
+                let result = self
+                    .remote_connect_results
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&generation);
+                if generation != self.remote_connect_generation || self.remote_connect.is_none() {
+                    return Task::none();
+                }
+                match result {
+                    Some(Ok(session)) => {
+                        let target = self
+                            .remote_connect
+                            .as_ref()
+                            .map(|draft| draft.target.trim().to_owned())
+                            .filter(|target| !target.is_empty())
+                            .unwrap_or_else(|| "SSH".to_owned());
+                        self.remote_connect = None;
+                        self.remote_connect_generation =
+                            self.remote_connect_generation.wrapping_add(1);
+                        let id = self.panes.alloc_term_id();
+                        let label = format!("{target} · SSH");
+                        let model = self.panes.focused_model_mut();
+                        model.open_terminal(id);
+                        model.set_terminal_label(id, label.clone());
+                        self.terminal_labels.insert(id, label);
+                        self.terminals.insert(
+                            id,
+                            TerminalPane::with_session_config(
+                                session,
+                                self.settings.current.clone(),
+                            )
+                            .with_pane_id(pane_id_for_term(id)),
+                        );
+                        let pane = self.panes.focused();
+                        self.panes
+                            .model(pane)
+                            .and_then(PaneModel::active_index)
+                            .map_or_else(Task::none, |index| {
+                                pane_strip::reveal_active_tab(pane, index)
+                            })
+                    }
+                    Some(Err(error)) => {
+                        if let Some(draft) = self.remote_connect.as_mut() {
+                            draft.connecting = false;
+                            draft.error = Some(error);
+                        }
+                        Task::none()
+                    }
+                    None => Task::none(),
+                }
+            }
             Msg::NewChatTab => {
                 let cwd = self.active_workspace_dir().map(Path::to_path_buf);
                 let branch = self
@@ -5015,7 +7177,10 @@ impl Shell {
                         self.settings.current.chat.permission_mode.clone(),
                         self.settings.current.chat.effort.clone(),
                     )
-                    .with_static_test_mode(self.static_test_mode);
+                    .with_static_test_mode(self.static_test_mode)
+                    .with_claude_profile(settings::claude::profiles::selected(
+                        &self.settings.current,
+                    ));
                 self.chats.insert(id, chat);
                 let pane = self.panes.focused();
                 self.panes
@@ -5025,13 +7190,58 @@ impl Shell {
                         pane_strip::reveal_active_tab(pane, index)
                     })
             }
+            Msg::NewChatRight => {
+                let pane = self.panes.focused();
+                if self.panes.split_empty(pane, Axis::Vertical).is_some() {
+                    self.update_inner(Msg::NewChatTab)
+                } else {
+                    Task::none()
+                }
+            }
             Msg::SelectWorkspace(idx) => {
                 if idx != self.workspaces.selected_index() {
+                    let will_restore = self
+                        .workspaces
+                        .items()
+                        .get(idx)
+                        .and_then(|workspace| workspace.path.as_ref())
+                        .is_some_and(|path| self.imported_layouts.contains_key(path));
+                    self.workspace_switch_notice =
+                        will_restore.then(|| self.layout_switch_blocker()).flatten();
+                    if self.workspace_switch_notice.is_some() {
+                        return Task::none();
+                    }
+                    self.channel_editor = None;
+                    let previous_path = self.active_workspace_dir().map(Path::to_path_buf);
                     if let Some(ws) = self.workspaces.select(idx).cloned() {
-                        self.activate_workspace_path(ws.path);
-                        return Task::batch([self.reload_db(), self.sync_telemetry_workspace()]);
+                        let next_path = ws.path.clone();
+                        let restored_doc = next_path
+                            .as_ref()
+                            .and_then(|path| self.imported_layouts.remove(path));
+                        if let Some(doc) = restored_doc {
+                            if let Some(prev) = previous_path {
+                                let prev_doc = self.snapshot_current_workspace_doc();
+                                self.imported_layouts.insert(prev, prev_doc);
+                            }
+                            self.file_create = None;
+                            self.file_tree.set_root(next_path.clone());
+                            self.git.set_repo(next_path.clone());
+                            self.restore_workspace_layout(&doc, next_path.as_deref());
+                            self.sync_island_from_status();
+                        } else {
+                            self.activate_workspace_path(next_path);
+                        }
+                        return Task::batch([
+                            self.reload_db(),
+                            self.sync_telemetry_workspace(),
+                            self.restore_layout_browsers(),
+                        ]);
                     }
                 }
+                Task::none()
+            }
+            Msg::DismissWorkspaceSwitchNotice => {
+                self.workspace_switch_notice = None;
                 Task::none()
             }
             Msg::PickWorkspaceFolder => {
@@ -5044,6 +7254,24 @@ impl Shell {
                 Task::batch([self.reload_db(), self.sync_telemetry_workspace()])
             }
             Msg::WorkspaceFolderPicked(None) => Task::none(),
+            Msg::CheckForUpdates { force } => self.check_for_updates(force),
+            Msg::UpdateChecked(info) => {
+                self.update_state
+                    .finish_check(env!("CARGO_PKG_VERSION"), info);
+                Task::none()
+            }
+            Msg::OpenUpdateDownload => {
+                if let Some(url) = self.update_state.download_url() {
+                    if !self.static_test_mode {
+                        open_in_file_manager(Path::new(&url));
+                    }
+                }
+                Task::none()
+            }
+            Msg::DismissUpdate => {
+                self.update_state.dismiss();
+                Task::none()
+            }
             Msg::ToggleRail => {
                 self.rail_open = !self.rail_open;
                 Task::none()
@@ -5075,6 +7303,16 @@ impl Shell {
     fn subscription(&self) -> Subscription<Msg> {
         let status_sub = iced::time::every(Duration::from_millis(STATUS_POLL_INTERVAL_MS))
             .map(|_| Msg::StatusTick);
+        let update_poll = if cfg!(target_os = "linux")
+            && !self.static_test_mode
+            && self.settings.current.update_check_frequency
+                != gsh_config::schema::UpdateCheckFrequency::Never
+        {
+            iced::time::every(Duration::from_secs(60))
+                .map(|_| Msg::CheckForUpdates { force: false })
+        } else {
+            Subscription::none()
+        };
         let layout_sub = if self.layout_save_due.is_some() {
             iced::time::every(Duration::from_millis(100)).map(|_| Msg::LayoutSaveTick)
         } else {
@@ -5107,14 +7345,13 @@ impl Shell {
         } else {
             Subscription::none()
         };
-        let search_shortcut = iced::event::listen_with(|event, _, _| match event {
-            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. })
-                if content_search_panel::is_focus_shortcut(&key, modifiers) =>
-            {
-                Some(Msg::FocusSearch)
-            }
-            _ => None,
-        });
+        let menu_shortcuts =
+            iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key, modifiers, ..
+                }) if modifiers.control() => Some(Msg::AppMenuShortcut(key, modifiers)),
+                _ => None,
+            });
         let search_visible = self.files_open && self.right_tab() == RightTab::Search;
         // Esc no campo (o text_input captura e desfoca): limpa a busca
         let search_clear = if search_visible {
@@ -5152,9 +7389,6 @@ impl Shell {
                     key, modifiers, ..
                 }) if status == iced::event::Status::Ignored && modifiers.command() => {
                     match key.as_ref() {
-                        iced::keyboard::Key::Character("s") => {
-                            Some(Msg::QueryShortcut(QueryShortcut::Save))
-                        }
                         iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter) => {
                             Some(Msg::QueryShortcut(QueryShortcut::Run))
                         }
@@ -5221,6 +7455,7 @@ impl Shell {
         Subscription::batch(
             [
                 status_sub,
+                update_poll,
                 layout_sub,
                 harness_poll,
                 terminal_activity,
@@ -5231,7 +7466,7 @@ impl Shell {
                 harness_spinner,
                 windows,
                 cancel_create,
-                search_shortcut,
+                menu_shortcuts,
                 search_clear,
                 search_spinner,
             ]
@@ -5282,17 +7517,71 @@ impl Shell {
                 } else {
                     self.file_viewers
                         .get(path)
-                        .map(file_viewer::view)
+                        .map(file_viewer_view::view)
+                        .map(|element| element.map(Msg::FileViewer))
                         .unwrap_or_else(pane_chrome::view_empty_body)
                 }
             }
             Some(PaneTab::Farm) => self.farm.view().map(Msg::Farm),
+            Some(PaneTab::Browser) => self.browser.view().map(Msg::Browser),
             Some(PaneTab::AgentGraph(workspace)) => {
                 let mut nodes = Vec::new();
                 let mut positions = Vec::new();
                 let graph = self.agent_graphs.get(workspace);
                 for model in self.panes.models() {
                     for tab in model.tabs() {
+                        if let PaneTab::Chat(id) = tab {
+                            let Some(chat) = self.chats.get(id) else {
+                                continue;
+                            };
+                            let chat_workspace = workspace
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or_default();
+                            if chat.folder_label() != chat_workspace {
+                                continue;
+                            }
+                            let id = format!("c{id}");
+                            let color = graph.and_then(|store| store.color(&id)).map_or_else(
+                                || {
+                                    let rgb = gsh_core::agent_color::agent_color(&id);
+                                    iced::Color::from_rgb8(rgb.r, rgb.g, rgb.b)
+                                },
+                                |argb| {
+                                    iced::Color::from_rgb8(
+                                        ((argb >> 16) & 0xff) as u8,
+                                        ((argb >> 8) & 0xff) as u8,
+                                        (argb & 0xff) as u8,
+                                    )
+                                },
+                            );
+                            nodes.push(agent_graph::Node {
+                                id: id.clone(),
+                                label: chat.conversation_title().to_owned(),
+                                detail: format!("Chat · {}", chat.folder_label()),
+                                status: labels::AGENT_GRAPH_STATUS_IDLE.to_owned(),
+                                status_pulsing: false,
+                                color,
+                                harness_icon: None,
+                                harness_icon_monochrome: true,
+                                queued: 0,
+                                maestro: graph
+                                    .and_then(agent_graph_store::AgentGraphStore::maestro)
+                                    == Some(id.as_str()),
+                            });
+                            let at =
+                                graph
+                                    .and_then(|store| store.position(&id))
+                                    .unwrap_or_else(|| {
+                                        let slot = nodes.len() - 1;
+                                        (
+                                            80.0 + (slot % 4) as f32 * 280.0,
+                                            80.0 + (slot / 4) as f32 * 170.0,
+                                        )
+                                    });
+                            positions.push((id, at.0, at.1));
+                            continue;
+                        }
                         let PaneTab::Terminal(id) = tab else { continue };
                         let Some(term) = self.terminals.get(id) else {
                             continue;
@@ -5571,6 +7860,110 @@ impl Shell {
         )
     }
 
+    fn app_menu_groups(&self) -> Vec<topbar::AppMenu<Msg>> {
+        ["GSH", "Arquivo", "Exibir", "Janela"]
+            .into_iter()
+            .map(|title| topbar::AppMenu {
+                items: app_menu_model::ENTRIES
+                    .iter()
+                    .filter(|entry| entry.group == title)
+                    .map(|entry| {
+                        let binding =
+                            app_menu_model::binding(entry, &self.settings.current.shortcuts)
+                                .filter(|value| app_menu_model::valid_binding(value));
+                        let on_press = self
+                            .app_menu_message(entry.action)
+                            .map(|message| Msg::AppMenuAction(Box::new(message)));
+                        let item = crate::app_menu::Entry {
+                            label: entry.label.to_owned(),
+                            description: None,
+                            leading: None,
+                            selected: false,
+                            danger: false,
+                            shortcut: binding.map(ToOwned::to_owned),
+                            requires_credits: false,
+                            on_press,
+                        };
+                        crate::app_menu::Item::Entry(item)
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    fn app_menu_shortcut_action(
+        &self,
+        key: &iced::keyboard::Key,
+        modifiers: iced::keyboard::Modifiers,
+    ) -> Option<app_menu_model::Action> {
+        let mut actions = app_menu_model::ENTRIES
+            .iter()
+            .filter(|entry| {
+                app_menu_model::binding(entry, &self.settings.current.shortcuts)
+                    .is_some_and(|binding| menu_shortcut_matches(binding, key, modifiers))
+            })
+            .map(|entry| entry.action);
+        let action = actions.next()?;
+        actions.next().is_none().then_some(action)
+    }
+
+    fn app_menu_message(&self, action: app_menu_model::Action) -> Option<Msg> {
+        match action {
+            app_menu_model::Action::NewTerminal => Some(Msg::NewTerminalTab),
+            #[cfg(target_os = "linux")]
+            app_menu_model::Action::NewRemoteTerminal => Some(Msg::OpenRemoteConnect),
+            app_menu_model::Action::NewChat => Some(Msg::NewChatTab),
+            app_menu_model::Action::NewChatRight => Some(Msg::NewChatRight),
+            app_menu_model::Action::OpenWorkspace => Some(Msg::PickWorkspaceFolder),
+            app_menu_model::Action::OpenSettings => Some(Msg::OpenSettings),
+            app_menu_model::Action::CheckForUpdates => Some(Msg::CheckForUpdates { force: true }),
+            app_menu_model::Action::Quit => Some(Msg::WindowCloseButton),
+            app_menu_model::Action::MinimizeWindow => Some(Msg::WindowMinimize),
+            app_menu_model::Action::ZoomWindow => Some(Msg::WindowToggleMaximize),
+            app_menu_model::Action::SaveFile => match self.panes.focused_model().active_tab() {
+                Some(PaneTab::File(path)) => self
+                    .editors
+                    .get(path)
+                    .filter(|editor| editor.state.buffer.is_dirty())
+                    .map(|_| Msg::Editor(path.clone(), editor_pane::EditorMsg::Save)),
+                Some(PaneTab::Query { id, .. }) => Some(Msg::Query(*id, QueryMsg::Save)),
+                _ => None,
+            },
+            app_menu_model::Action::FocusSearch => Some(Msg::FocusSearch),
+            app_menu_model::Action::ToggleWorkspacePanel => Some(Msg::ToggleRail),
+            app_menu_model::Action::ToggleFiles => Some(Msg::ToggleFiles),
+            app_menu_model::Action::SplitRight => {
+                Some(Msg::SplitPane(self.panes.focused(), Axis::Vertical))
+            }
+            app_menu_model::Action::SplitDown => {
+                Some(Msg::SplitPane(self.panes.focused(), Axis::Horizontal))
+            }
+            app_menu_model::Action::PreviousWorkspace => Some(Msg::CycleWorkspace(-1)),
+            app_menu_model::Action::NextWorkspace => Some(Msg::CycleWorkspace(1)),
+            app_menu_model::Action::ZoomIn => {
+                Some(Msg::Settings(settings::Message::InterfaceSizeChanged(
+                    (self.settings.current.interface_size + 1.0)
+                        .clamp(10.0, 20.0)
+                        .to_string(),
+                )))
+            }
+            app_menu_model::Action::ZoomOut => {
+                Some(Msg::Settings(settings::Message::InterfaceSizeChanged(
+                    (self.settings.current.interface_size - 1.0)
+                        .clamp(10.0, 20.0)
+                        .to_string(),
+                )))
+            }
+            app_menu_model::Action::ActualSize => Some(Msg::Settings(
+                settings::Message::InterfaceSizeChanged("14".to_owned()),
+            )),
+            app_menu_model::Action::SelectTab(index) => Some(Msg::SelectTab(usize::from(index))),
+            app_menu_model::Action::SelectLastTab => Some(Msg::SelectTab(
+                self.panes.focused_model().tabs().len().saturating_sub(1),
+            )),
+        }
+    }
+
     fn view(&self) -> Element<'_, Msg> {
         let workspace_title = self
             .workspaces
@@ -5584,14 +7977,46 @@ impl Shell {
                 files_open: self.files_open,
                 counts: self.farm.counts(),
             },
-            || self.island.view_pill().map(Msg::Island),
+            || {
+                if self
+                    .settings
+                    .current
+                    .shows_feature(gsh_config::schema::AppFeature::AgentIsland)
+                {
+                    self.island.view_pill().map(Msg::Island)
+                } else {
+                    Space::new().into()
+                }
+            },
             topbar::TopbarActions {
                 on_toggle_rail: Msg::ToggleRail,
                 on_toggle_files: Msg::ToggleFiles,
-                on_chat: Msg::NewChatTab,
-                on_farm: Msg::OpenFarm,
+                on_chat: self
+                    .settings
+                    .current
+                    .shows_feature(gsh_config::schema::AppFeature::Chat)
+                    .then_some(Msg::NewChatTab),
+                on_farm: self
+                    .settings
+                    .current
+                    .shows_feature(gsh_config::schema::AppFeature::Farm)
+                    .then_some(Msg::OpenFarm),
+                on_browser: self
+                    .settings
+                    .current
+                    .shows_feature(gsh_config::schema::AppFeature::Browser)
+                    .then_some(Msg::OpenBrowser),
                 on_harness: self.shows_harness().then_some(Msg::OpenHarness),
-                on_agent_graph: Msg::OpenAgentGraph,
+                on_agent_graph: self
+                    .settings
+                    .current
+                    .shows_feature(gsh_config::schema::AppFeature::AgentGraph)
+                    .then_some(Msg::OpenAgentGraph),
+                on_localsend: Some(Msg::OpenLocalSend),
+                app_menus: self.app_menu_groups(),
+                app_menu_open: self.app_menu_open,
+                on_toggle_app_menu: Msg::ToggleAppMenu,
+                on_close_app_menu: Msg::CloseAppMenu,
             },
         );
 
@@ -5652,11 +8077,29 @@ impl Shell {
         };
         let mut body = row![].height(Fill).width(Fill);
         if self.rail_open {
+            let keep_awake_active = self.settings.claude.keep_awake_active();
             body = body.push(rail::view(
                 &self.workspaces,
                 Msg::SelectWorkspace,
-                Msg::PickWorkspaceFolder,
-                Msg::OpenSettings,
+                rail::RailActions {
+                    keep_awake: rail::KeepAwakeStatus {
+                        active: keep_awake_active,
+                        on_battery: self.settings.claude.keep_awake_on_battery(),
+                    },
+                    update_version: self.update_state.available_version(),
+                    on_add_workspace: Msg::PickWorkspaceFolder,
+                    on_select_channel: Msg::SelectContextChannel,
+                    channel_editor: self.channel_editor.as_deref(),
+                    on_toggle_channel_editor: Msg::ToggleChannelEditor,
+                    on_channel_name_change: Msg::ChannelNameChanged,
+                    on_assign_channel: Msg::AssignChannel,
+                    on_toggle_keep_awake: Msg::Settings(settings::Message::Claude(
+                        settings::claude::Message::KeepAwakeToggle(!keep_awake_active),
+                    )),
+                    on_download_update: Msg::OpenUpdateDownload,
+                    on_dismiss_update: Msg::DismissUpdate,
+                    on_settings: Msg::OpenSettings,
+                },
             ));
         }
         body = body.push(center_pane);
@@ -5677,7 +8120,7 @@ impl Shell {
                     content_search_panel::view(&self.search, self.file_tree.root().is_some())
                         .map(Msg::Search)
                 }
-                RightTab::Git => git_panel::view(&self.git).map(Msg::Git),
+                RightTab::Git => git_panel::view(&self.git, self.git_agent_targets()).map(Msg::Git),
                 RightTab::Database => db_panel::view(&self.db).map(Msg::Db),
                 RightTab::Telemetry => {
                     let active_fp = match self.panes.focused_model().active_tab() {
@@ -5889,6 +8332,28 @@ impl Shell {
             }
             None => layered,
         };
+        #[cfg(target_os = "linux")]
+        let layered: Element<'_, Msg> = match self.remote_connect.as_ref() {
+            Some(draft) => stack![
+                layered,
+                remote_connect_dialog::view(draft).map(Msg::RemoteConnectDialog)
+            ]
+            .into(),
+            None => layered,
+        };
+        let layered: Element<'_, Msg> = match self.workspace_switch_notice {
+            Some(notice) => stack![
+                layered,
+                pane_close_dialog::notice(
+                    "Trocar de workspace",
+                    notice.to_owned(),
+                    Msg::DismissWorkspaceSwitchNotice,
+                    Msg::Noop,
+                )
+            ]
+            .into(),
+            None => layered,
+        };
         let layered: Element<'_, Msg> = match &self.gallery_error {
             Some(error) => stack![
                 layered,
@@ -5913,8 +8378,34 @@ impl Shell {
             }
             None => layered,
         };
+        let layered: Element<'_, Msg> = match self.team_import_review.as_ref() {
+            Some(review) => stack![
+                layered,
+                team_markdown::review_modal(
+                    review,
+                    Msg::CancelTeamImport,
+                    Msg::ConfirmTeamImport,
+                    Msg::Noop,
+                )
+            ]
+            .into(),
+            None => layered,
+        };
         let layered: Element<'_, Msg> = match localsend_dialog::view(&self.settings.localsend) {
             Some(dialog) => stack![layered, dialog.map(Msg::Settings)].into(),
+            None => layered,
+        };
+        let layered: Element<'_, Msg> = match self.pending_localsend_agent.as_ref() {
+            Some(pending) => stack![
+                layered,
+                localsend_agent::approval_view(
+                    pending,
+                    Msg::LocalSendAgentDecision { allow: true },
+                    Msg::LocalSendAgentDecision { allow: false },
+                    Msg::Noop,
+                )
+            ]
+            .into(),
             None => layered,
         };
         let drag_feedback: Option<Element<'_, Msg>> = if self.tab_drag_active {
@@ -6000,6 +8491,17 @@ fn window_button<'a>(glyph: &'static str, msg: Msg) -> Element<'a, Msg> {
 }
 
 fn main() -> iced::Result {
+    #[cfg(target_os = "linux")]
+    if let Err(error) = gsh_config::default_path().and_then(|path| {
+        if path.exists() {
+            return Ok(());
+        }
+        let candidates = gsh_config::default_flutter_candidates()?;
+        gsh_config::migrate_if_needed(&path, candidates)?;
+        Ok(())
+    }) {
+        eprintln!("GSH settings import: {error}");
+    }
     let mut app = iced::application(Shell::boot, Shell::update, Shell::view)
         .window(iced::window::Settings {
             exit_on_close_request: false,
@@ -6027,26 +8529,45 @@ mod telemetry_interaction_tests;
 mod tests {
     use super::*;
     use gsh_core::status::{AgentHarness, HookEvent, StatusUpdate, TurnStatus};
-    use gsh_term::{Cell, Cursor, TermSnapshot};
     use iced::keyboard;
     use iced::Size;
     use iced_test::simulator::Simulator;
 
     use crate::island::IslandAgentState;
 
+    #[test]
+    fn app_menu_shortcuts_resolve_ctrl_shift_and_comma() {
+        use keyboard::{Key, Modifiers};
+
+        assert!(menu_shortcut_matches(
+            "Ctrl+T",
+            &Key::Character("t".into()),
+            Modifiers::CTRL,
+        ));
+        assert!(!menu_shortcut_matches(
+            "Ctrl+Shift+T",
+            &Key::Character("t".into()),
+            Modifiers::CTRL,
+        ));
+        assert!(menu_shortcut_matches(
+            "Ctrl+Shift+T",
+            &Key::Character("t".into()),
+            Modifiers::CTRL | Modifiers::SHIFT,
+        ));
+        assert!(menu_shortcut_matches(
+            "Ctrl+comma",
+            &Key::Character(",".into()),
+            Modifiers::CTRL,
+        ));
+        assert!(menu_shortcut_matches(
+            "Ctrl+Alt+U",
+            &Key::Character("u".into()),
+            Modifiers::CTRL | Modifiers::ALT,
+        ));
+    }
+
     pub(super) fn test_shell() -> Shell {
-        let snap = TermSnapshot {
-            cols: 80,
-            rows: 24,
-            lines: vec![vec![Cell::default(); 80]; 24],
-            cursor: Cursor {
-                row: 0,
-                col: 0,
-                visible: true,
-            },
-            display_offset: 0,
-            history_size: 0,
-        };
+        let snap = empty_test_snapshot();
         let mut status_runtime = StatusRuntime::without_server(None);
         status_runtime.register_pane("t1");
         let workspaces = rail::default_workspace_list();
@@ -6066,6 +8587,9 @@ mod tests {
             team_mail: None,
             team_knocks: Vec::new(),
             localsend_host: None,
+            pending_localsend_agent: None,
+            localsend_agent_preparation: None,
+            localsend_agent_busy: Arc::new(AtomicBool::new(false)),
             localsend_active_config: None,
             localsend_requests,
             localsend_pending: VecDeque::new(),
@@ -6079,6 +8603,7 @@ mod tests {
             receive_bridge,
             island: AgentIsland::default(),
             farm: farm::FarmPane::default(),
+            browser: browser_pane::BrowserPane::default(),
             db: DbState::new(gsh_db::SecretStore::new(PathBuf::from(
                 "/nonexistent/gsh-secrets.json",
             ))),
@@ -6086,8 +8611,15 @@ mod tests {
             redis_tabs: BTreeMap::new(),
             mongo_tabs: BTreeMap::new(),
             ssh_prompt: None,
+            #[cfg(target_os = "linux")]
+            remote_connect: None,
+            #[cfg(target_os = "linux")]
+            remote_connect_generation: 0,
+            #[cfg(target_os = "linux")]
+            remote_connect_results: Arc::new(Mutex::new(HashMap::new())),
             pending_close_query: None,
             agent_graph_dialog: None,
+            team_import_review: None,
             harness: harness_pane::HarnessState::default(),
             telemetry: TelemetryState::in_memory(),
             settings: settings::Settings::default(),
@@ -6095,6 +8627,7 @@ mod tests {
             pending_close_pane: None,
             hovered_tab: None,
             tab_list_open: None,
+            app_menu_open: false,
             tab_drag_source: None,
             tab_drag_target: None,
             tab_drag_origin: None,
@@ -6112,14 +8645,21 @@ mod tests {
             agent_graph_save_due: HashMap::new(),
             external_waiters: Vec::new(),
             pending_agent_deliveries: Vec::new(),
+            idle_waiters: Vec::new(),
+            pending_permissions: HashMap::new(),
+            next_permission_id: 1,
+            notification_updates: HashMap::new(),
             graph_context: None,
             graph_rename: None,
             agent_graph_create_at: None,
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
             editors: BTreeMap::new(),
+            #[cfg(target_os = "linux")]
+            lsp: lsp_runtime::Pool::default(),
             pending_window_close: None,
             workspaces,
+            channel_editor: None,
             file_tree: FileTree::new(),
             file_create: None,
             file_create_generation: 0,
@@ -6134,9 +8674,114 @@ mod tests {
             static_test_mode: true,
             window_focused: true,
             layout_path: None,
+            imported_layouts: BTreeMap::new(),
+            workspace_switch_notice: None,
             layout_save_due: None,
             layout_restore_browsers_pending: false,
+            update_state: app_update::UpdateState::in_memory(),
         }
+    }
+
+    #[test]
+    fn live_agent_graph_includes_open_chat_with_ipc_identity() {
+        let mut shell = test_shell();
+        let Some(workspace) = shell.active_workspace_dir().map(Path::to_path_buf) else {
+            return;
+        };
+        let id = shell.panes.alloc_chat_id();
+        shell.panes.focused_model_mut().open_chat(id);
+        shell
+            .chats
+            .insert(id, ChatPane::new(Some(workspace.clone()), None));
+
+        let live = shell.live_graph_agents(&workspace);
+
+        assert!(live.contains(&format!("c{id}")));
+    }
+
+    #[test]
+    fn graph_links_do_not_auto_send_a_turn_to_chat() {
+        let mut shell = test_shell();
+        let workspace = shell.active_workspace_dir().unwrap().to_path_buf();
+        shell.queue_agent_delivery(workspace, "t1".into(), "c1".into(), vec!["intro".into()]);
+        assert!(shell.pending_agent_deliveries.is_empty());
+    }
+
+    #[test]
+    fn agent_delivery_waits_for_its_workspace_when_a_terminal_id_is_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        let mut shell = test_shell();
+        let a = shell.workspaces.open_folder(&first);
+        let b = shell.workspaces.open_folder(&second);
+        let _ = shell.update(Msg::SelectWorkspace(a));
+        shell.queue_agent_delivery(
+            first.clone(),
+            "t2".into(),
+            "t1".into(),
+            vec!["only A".into()],
+        );
+        shell.pending_agent_deliveries.last_mut().unwrap().ready = true;
+        shell
+            .imported_layouts
+            .insert(second.clone(), PaneTree::default().snapshot());
+        let _ = shell.update(Msg::SelectWorkspace(b));
+        assert_eq!(shell.active_workspace_dir(), Some(second.as_path()));
+        assert_eq!(
+            shell.terminals.get(&1).unwrap().cwd(),
+            Some(second.as_path())
+        );
+
+        shell.pump_agent_deliveries();
+
+        assert_eq!(shell.pending_agent_deliveries.len(), 1);
+        let delivery = shell.pending_agent_deliveries.last().unwrap();
+        assert_eq!(delivery.workspace, first);
+        assert_eq!(delivery.next, 0);
+        assert!(!delivery.ready);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_msg_delivers_to_a_chat_id_in_the_active_workspace() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("claude-test");
+        std::fs::write(&script, "#!/bin/sh\nwhile IFS= read -r line; do :; done\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut shell = test_shell();
+        let id = shell.panes.alloc_chat_id();
+        shell.panes.focused_model_mut().open_chat(id);
+        let workspace = shell.active_workspace_dir().unwrap().to_path_buf();
+        let mut chat = ChatPane::new(Some(dir.path().to_path_buf()), None).with_binary(script);
+        let _ = chat.update(ChatMsg::InputChanged("my draft".into()));
+        shell.chats.insert(id, chat);
+        let msg = |shell: &mut Shell| {
+            let (reply, response) = mpsc::sync_channel(1);
+            let _ = shell.update(Msg::TeamCliCommand(gsh_ipc::PendingCommand {
+                request: serde_json::json!({"cmd": "msg", "tabId": "t1", "args": {
+                    "to": format!("c{id}"), "text": "review"
+                }}),
+                reply,
+            }));
+            response.try_recv().unwrap()
+        };
+        assert_eq!(msg(&mut shell)["ok"], false);
+        shell
+            .chats
+            .get_mut(&id)
+            .unwrap()
+            .set_workspace(Some(workspace), None);
+
+        assert_eq!(msg(&mut shell)["data"]["to"], format!("c{id}"));
+        let chat = shell.chats.get(&id).unwrap();
+        assert_eq!(chat.input(), "my draft");
+        assert!(chat.is_busy());
+        assert_eq!(chat.conversation_title(), "[from: t1] review");
     }
 
     #[test]
@@ -6148,8 +8793,8 @@ mod tests {
         std::fs::write(&source, b"accepted by Shell Msg").unwrap();
         let mut shell = test_shell();
         shell.settings.localsend.receive_dir = receive_dir.clone();
-        shell.settings.localsend.enabled = true;
-        shell.settings.current.localsend.enabled = true;
+        shell.settings.localsend.always_on = true;
+        shell.settings.current.localsend.always_on = true;
         shell.localsend_host = Some(
             LocalSendHost::start_for_test(
                 std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 0).into(),
@@ -6191,10 +8836,99 @@ mod tests {
         );
     }
 
+    fn prepared_localsend_send(
+        peer: gsh_localsend::Peer,
+    ) -> (
+        localsend_agent::PendingSend,
+        mpsc::Receiver<serde_json::Value>,
+    ) {
+        let (bridge, _events) = ReceiveBridge::channel();
+        let host = LocalSendHost::start_for_test(
+            (std::net::Ipv4Addr::LOCALHOST, 0).into(),
+            "sender",
+            localsend_runtime::limits(1, 1),
+            bridge,
+        )
+        .unwrap();
+        let (reply, response) = mpsc::sync_channel(1);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        (
+            localsend_agent::PendingSend {
+                caller: "test agent".into(),
+                peer,
+                sender: host.sender(),
+                files: Vec::new(),
+                reply,
+                transfer_deadline: deadline,
+                max_file_size: 1024,
+                deadline,
+                busy: Arc::new(AtomicBool::new(false)),
+            },
+            response,
+        )
+    }
+
+    fn test_localsend_peer() -> gsh_localsend::Peer {
+        let mut info = gsh_localsend::Identity::generate(0).unwrap().info;
+        info.alias = "test recipient".into();
+        gsh_localsend::Peer {
+            info,
+            ip: std::net::Ipv4Addr::LOCALHOST,
+            seen_at: 0,
+        }
+    }
+
+    #[test]
+    fn localsend_agent_send_waits_for_human_approval_and_denial_sends_nothing() {
+        let mut shell = test_shell();
+        let (pending, response) = prepared_localsend_send(test_localsend_peer());
+        shell.request_localsend_approval(pending);
+        assert!(shell.pending_localsend_agent.is_some());
+        shell.decide_localsend_agent(false);
+        let response = response.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(response["ok"], false);
+        assert!(response["error"].as_str().unwrap().contains("denied"));
+    }
+
+    #[test]
+    fn localsend_agent_approval_timeout_denies_without_starting_transfer() {
+        let mut shell = test_shell();
+        let (mut pending, response) = prepared_localsend_send(test_localsend_peer());
+        pending.deadline = Instant::now() - Duration::from_secs(1);
+        shell.request_localsend_approval(pending);
+        shell.decide_localsend_agent(true);
+        let response = response.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(response["ok"], false);
+        assert!(response["error"].as_str().unwrap().contains("timed out"));
+    }
+
+    #[test]
+    fn localsend_agent_always_requires_approval_for_each_send() {
+        let mut shell = test_shell();
+        let first = test_localsend_peer();
+        let replacement = test_localsend_peer();
+        assert_eq!(first.info.alias, replacement.info.alias);
+        assert_eq!(first.ip, replacement.ip);
+        assert_ne!(first.info.fingerprint, replacement.info.fingerprint);
+
+        let (pending, _response) = prepared_localsend_send(first.clone());
+        shell.request_localsend_approval(pending);
+        shell.decide_localsend_agent(true);
+
+        let (pending, response) = prepared_localsend_send(first);
+        shell.request_localsend_approval(pending);
+        assert!(shell.pending_localsend_agent.is_some());
+        assert!(matches!(
+            response.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        shell.decide_localsend_agent(false);
+    }
+
     #[test]
     fn disabled_localsend_does_not_start_a_server() {
         let mut shell = test_shell();
-        shell.settings.current.localsend.enabled = false;
+        shell.settings.current.localsend.always_on = false;
         shell.configure_localsend();
         assert!(shell.localsend_host.is_none());
         let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -6217,6 +8951,30 @@ mod tests {
         assert_eq!(
             restored.panes.focused_model().tabs(),
             &[PaneTab::Settings, PaneTab::Terminal(1)]
+        );
+    }
+
+    #[test]
+    fn shell_persists_active_channel_and_workspace_assignments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        let mut shell = test_shell();
+        shell.layout_path = Some(path.clone());
+        let workspace_path = dir.path().join("project");
+        let index = shell.workspaces.open_folder(workspace_path.clone());
+        shell.channel_editor = Some("Trabalho".into());
+        let _ = shell.update(Msg::AssignChannel);
+        assert_eq!(shell.workspaces.items()[index].realm(), "Trabalho");
+        let _ = shell.update(Msg::SelectContextChannel(Some("Trabalho".into())));
+        shell.save_layout();
+
+        let doc = layout_store::LayoutDoc::read(&path).unwrap();
+        assert_eq!(doc.active_channel.as_deref(), Some("Trabalho"));
+        assert_eq!(
+            doc.workspace_realms
+                .get(&workspace_path)
+                .map(String::as_str),
+            Some("Trabalho")
         );
     }
 
@@ -6460,6 +9218,41 @@ mod tests {
             .matches_image(&target)
             .expect("snapshot write");
         std::fs::rename(generated, target).expect("rename canvas snapshot");
+    }
+
+    #[test]
+    fn cli_open_adds_a_file_tab_next_to_the_source_terminal() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().canonicalize().unwrap().join("notes.md");
+        std::fs::write(&path, "# Notes").unwrap();
+        let mut shell = test_shell();
+        let source_pane = shell.panes.focused();
+        let term_id = shell
+            .panes
+            .split_with_terminal(source_pane, Axis::Vertical)
+            .unwrap();
+        let target_pane = shell.panes.focused();
+        assert_ne!(source_pane, target_pane);
+        shell.panes.focus(source_pane);
+
+        let (reply, response) = std::sync::mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({
+                "cmd": "open",
+                "tabId": pane_id_for_term(term_id),
+                "args": {"path": path}
+            }),
+            reply,
+        });
+        assert_eq!(
+            response.try_recv().unwrap(),
+            serde_json::json!({"ok": true})
+        );
+        assert_eq!(shell.panes.focused(), target_pane);
+        assert_eq!(
+            shell.panes.focused_model().active_tab(),
+            Some(&PaneTab::File(path))
+        );
     }
 
     #[test]
@@ -6718,10 +9511,11 @@ mod tests {
             &[PaneTab::Terminal(1), PaneTab::File(target_file.clone())]
         );
         assert_eq!(shell.panes.focused_model().active_index(), Some(1));
-        assert_eq!(
-            shell.editors.get(&target_file).unwrap().state.buffer.text(),
-            "# GSH\nLinha 2\n"
-        );
+        assert!(matches!(
+            shell.file_viewers.get(&target_file),
+            Some(FileViewerState::Markdown(doc, content))
+                if doc.source() == "# GSH\nLinha 2\n" && !content.items().is_empty()
+        ));
 
         // Clica novamente no mesmo arquivo depois de voltar ao terminal -> só ativa a aba existente
         let _ = shell.update(Msg::SelectTab(0));
@@ -6852,8 +9646,18 @@ mod tests {
             files: Vec::new(),
         };
         assert!(shell.status_runtime.apply_update(u1_work, 3_000));
-        shell.sync_island_from_status();
-        assert_eq!(shell.island.agents().len(), 1);
+        shell.window_focused = false;
+        shell.settings.current.notifications_enabled = true;
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.permission_ask(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd": "permission-ask", "tabId": "t1", "args": {"tool_name": "Bash"}}),
+            reply,
+        });
+        let key = shell.notification_updates.keys().next().unwrap().clone();
+        assert_eq!(
+            shell.island.agents()[0].state,
+            IslandAgentState::AskingPermission
+        );
 
         let esc_event = keyboard::Event::KeyPressed {
             key: keyboard::Key::Named(keyboard::key::Named::Escape),
@@ -6865,6 +9669,16 @@ mod tests {
             repeat: false,
         };
         let _ = shell.update(Msg::Terminal(TerminalMsg::Keyboard(esc_event)));
+        assert_eq!(
+            response.try_recv().unwrap(),
+            serde_json::json!({"ok": true, "data": {}})
+        );
+        assert!(shell.pending_permissions.is_empty());
+        assert!(shell.notification_updates.is_empty());
+        let _ = shell.update(Msg::NativeNotificationAction(
+            key,
+            native_notifications::Action::Allow,
+        ));
         assert!(shell.island.agents().is_empty());
     }
 
@@ -7185,6 +9999,363 @@ mod tests {
         // o workspace de exemplo não tem pasta
         shell.workspaces.select(1);
         assert!(!shell.shows_harness());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn remote_connect_discards_cancelled_generation_and_marks_remote_session_in_layout() {
+        use std::os::unix::net::UnixStream;
+        let mut shell = test_shell();
+        assert!(matches!(
+            shell.app_menu_message(app_menu_model::Action::NewRemoteTerminal),
+            Some(Msg::OpenRemoteConnect)
+        ));
+        let _ = shell.update(Msg::OpenRemoteConnect);
+        let stale_gen = shell.remote_connect_generation;
+        let (a, b) = UnixStream::pair().unwrap();
+        let stale_session =
+            gsh_term::TermSession::from_stream(a, b, |_, _| Ok(()), || {}, 80, 24, 1_000).unwrap();
+        shell
+            .remote_connect_results
+            .lock()
+            .unwrap()
+            .insert(stale_gen, Ok(stale_session));
+        let _ = shell.update(Msg::RemoteConnectDialog(
+            remote_connect_dialog::Message::Cancel,
+        ));
+        let _ = shell.update(Msg::RemoteConnectFinished(stale_gen));
+        assert_eq!(shell.panes.focused_model().tabs(), &[PaneTab::Terminal(1)]);
+
+        let _ = shell.update(Msg::OpenRemoteConnect);
+        let _ = shell.update(Msg::RemoteConnectDialog(
+            remote_connect_dialog::Message::TargetChanged("dev@host".into()),
+        ));
+        let _ = shell.update(Msg::RemoteConnectDialog(
+            remote_connect_dialog::Message::SocketChanged(
+                "/home/dev/.gsh/run/gsh-server.sock".into(),
+            ),
+        ));
+        let active_gen = shell.remote_connect_generation;
+        let (a, b) = UnixStream::pair().unwrap();
+        let active_session =
+            gsh_term::TermSession::from_stream(a, b, |_, _| Ok(()), || {}, 80, 24, 1_000).unwrap();
+        shell
+            .remote_connect_results
+            .lock()
+            .unwrap()
+            .insert(active_gen, Ok(active_session));
+        let _ = shell.update(Msg::RemoteConnectFinished(active_gen));
+        assert!(shell.remote_connect.is_none());
+        assert_eq!(
+            shell.panes.focused_model().tabs(),
+            &[PaneTab::Terminal(1), PaneTab::Terminal(2)]
+        );
+        assert_eq!(
+            shell.panes.focused_model().terminal_label(2),
+            Some("dev@host · SSH")
+        );
+        assert!(shell.terminals.get(&2).is_some_and(TerminalPane::is_remote));
+        let dir = tempfile::tempdir().unwrap();
+        let layout_path = dir.path().join("layout.json");
+        shell.layout_path = Some(layout_path.clone());
+        shell.save_layout();
+        let doc = layout_store::LayoutDoc::read(&layout_path).unwrap();
+        assert_eq!(doc.remote_terminal_ids, vec![2]);
+    }
+
+    #[test]
+    fn check_for_updates_menu_and_dismiss_flow() {
+        use gsh_config::schema::UpdateCheckFrequency::{Daily, Never};
+
+        let mut shell = test_shell();
+        assert!(matches!(
+            shell.app_menu_message(app_menu_model::Action::CheckForUpdates),
+            Some(Msg::CheckForUpdates { force: true })
+        ));
+        assert_eq!(shell.check_for_updates(false).units(), 0);
+        assert_eq!(shell.check_for_updates(true).units(), 0);
+        assert!(!shell.update_state.begin_check(Never, false));
+
+        // Entrega resultados sintéticos sem disparar nem aguardar requisições.
+        let info = app_update::UpdateInfo::parse_manifest(
+            r#"{"version":"9.9.0","artifacts":[{"platform":"linux","arch":"x64","format":"deb","url":"https://example.test/gsh.deb"}]}"#,
+        )
+        .unwrap();
+        assert!(shell.update_state.begin_check(Daily, false));
+        assert!(!shell.update_state.begin_check(Daily, false));
+        let _ = shell.update(Msg::UpdateChecked(Some(info.clone())));
+        assert_eq!(shell.update_state.available_version(), Some("9.9.0"));
+        assert_eq!(
+            shell.update_state.download_url().as_deref(),
+            Some("https://example.test/gsh.deb")
+        );
+        let _ = shell.update(Msg::DismissUpdate);
+        assert_eq!(shell.update_state.available_version(), None);
+        assert!(!shell.update_state.begin_check(Daily, false));
+        shell.update_state.store.last_check_secs = None;
+        assert!(shell.update_state.begin_check(Daily, false));
+        let _ = shell.update(Msg::UpdateChecked(Some(info.clone())));
+        assert_eq!(shell.update_state.available_version(), None);
+
+        // Uma ação manual reaproveita a requisição automática já em curso.
+        shell.update_state.store.last_check_secs = None;
+        assert!(shell.update_state.begin_check(Daily, false));
+        assert!(!shell.update_state.begin_check(Never, true));
+        let _ = shell.update(Msg::UpdateChecked(Some(info)));
+        assert_eq!(shell.update_state.available_version(), Some("9.9.0"));
+
+        assert!(shell.update_state.begin_check(Never, true));
+        let _ = shell.update(Msg::UpdateChecked(None));
+        assert!(shell.update_state.begin_check(Never, true));
+    }
+
+    #[test]
+    fn applying_ckp_layout_opens_terminals_and_splits_and_skips_existing_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("api")).unwrap();
+        let ckp_path = dir.path().join("dev.ckp");
+        std::fs::write(
+            &ckp_path,
+            "panes:\n  - name: Backend\n    cwd: api\n  - name: Frontend\n    split: right\n",
+        )
+        .unwrap();
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::Files(FilesMsg::SelectFile(ckp_path.clone())));
+        let canonical = ckp_path.canonicalize().unwrap_or(ckp_path);
+        let _ = shell.update(Msg::Editor(
+            canonical.clone(),
+            editor_pane::EditorMsg::ApplyCkpLayout,
+        ));
+        assert!(shell
+            .editors
+            .get(&canonical)
+            .is_some_and(|e| e.ckp_error.is_none()));
+        assert_eq!(shell.panes.leaves().len(), 2);
+        assert_eq!(
+            shell.terminal_labels.get(&2).map(String::as_str),
+            Some("Backend")
+        );
+        assert_eq!(
+            shell.terminal_labels.get(&3).map(String::as_str),
+            Some("Frontend")
+        );
+        // Re-applying skips existing labels ("Backend" and "Frontend")
+        let _ = shell.update(Msg::Editor(
+            canonical,
+            editor_pane::EditorMsg::ApplyCkpLayout,
+        ));
+        assert_eq!(shell.panes.leaves().len(), 2);
+        assert_eq!(shell.terminals.len(), 3);
+    }
+
+    #[test]
+    fn switching_workspace_restores_imported_layout_and_preserves_previous_workspace_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws_a = dir.path().join("ws-a");
+        let ws_b = dir.path().join("ws-b");
+        std::fs::create_dir(&ws_a).unwrap();
+        std::fs::create_dir(&ws_b).unwrap();
+        let mut shell = test_shell();
+        let idx_a = shell.workspaces.open_folder(&ws_a);
+        let idx_b = shell.workspaces.open_folder(&ws_b);
+        let _ = shell.update(Msg::SelectWorkspace(idx_a));
+
+        let mut tree_b = PaneTree::default();
+        let pane_b = tree_b.focused();
+        tree_b.split_with_terminal(pane_b, Axis::Vertical);
+        let mut doc_b = tree_b.snapshot();
+        doc_b.terminal_cwds = vec![(1, ws_b.clone()), (2, ws_b.clone())];
+        shell.imported_layouts.insert(ws_b.clone(), doc_b);
+
+        // Switching to ws_b restores its 2-pane imported layout and saves ws_a's 1-pane layout
+        let _ = shell.update(Msg::SelectWorkspace(idx_b));
+        assert_eq!(shell.panes.leaves().len(), 2);
+        assert!(shell.imported_layouts.contains_key(&ws_a));
+
+        // Switching back to ws_a restores ws_a's 1-pane layout and saves ws_b's 2-pane layout
+        let _ = shell.update(Msg::SelectWorkspace(idx_a));
+        assert_eq!(shell.panes.leaves().len(), 1);
+        assert!(shell.imported_layouts.contains_key(&ws_b));
+    }
+
+    #[test]
+    fn imported_workspace_switch_preserves_dirty_documents_until_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("notes.txt");
+        std::fs::write(&file, "saved").unwrap();
+        let mut shell = test_shell();
+        let current = shell.workspaces.selected_index();
+        let other = dir.path().join("other");
+        std::fs::create_dir(&other).unwrap();
+        let next = shell.workspaces.open_folder(&other);
+        shell.workspaces.select(current);
+        shell
+            .imported_layouts
+            .insert(other.clone(), PaneTree::default().snapshot());
+        let path = shell.open_in_editor(file);
+        let editor = shell.editors.get_mut(&path).unwrap();
+        assert!(editor.state.buffer.insert("draft"));
+        let dirty_text = editor.state.buffer.text().to_owned();
+
+        let _ = shell.update(Msg::SelectWorkspace(next));
+
+        assert_eq!(shell.workspaces.selected_index(), current);
+        assert!(shell.workspace_switch_notice.is_some());
+        assert!(shell.imported_layouts.contains_key(&other));
+        assert_eq!(
+            shell.editors.get(&path).unwrap().state.buffer.text(),
+            &dirty_text
+        );
+    }
+
+    #[test]
+    fn imported_workspace_switch_resets_previous_terminal_status_before_reusing_id() {
+        let mut shell = test_shell();
+        let current = shell.workspaces.selected_index();
+        let dir = tempfile::tempdir().unwrap();
+        let next = shell.workspaces.open_folder(dir.path());
+        shell.workspaces.select(current);
+        shell
+            .imported_layouts
+            .insert(dir.path().to_path_buf(), PaneTree::default().snapshot());
+        let _ = shell.status_runtime.apply_update(
+            StatusUpdate {
+                pane_id: "t1".into(),
+                status: TurnStatus::Idle,
+                event: Some(HookEvent::Stop),
+                session_id: Some("old-session".into()),
+                transcript_path: None,
+                harness: Some(AgentHarness::Claude),
+                files: Vec::new(),
+            },
+            now_epoch_ms(),
+        );
+        assert!(shell.status_runtime.pane_record("t1").unwrap().observed());
+
+        let _ = shell.update(Msg::SelectWorkspace(next));
+
+        assert_eq!(shell.workspaces.selected_index(), next);
+        assert_eq!(shell.terminals.len(), 1);
+        let record = shell.status_runtime.pane_record("t1").unwrap();
+        assert!(!record.observed());
+        assert_eq!(record.session_id(), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn diff_notes_require_the_selected_chat_and_preserve_its_draft() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("claude-test");
+        std::fs::write(&script, "#!/bin/sh\nwhile IFS= read -r line; do :; done\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut shell = test_shell();
+        let index = shell.workspaces.open_folder(dir.path());
+        let _ = shell.update(Msg::SelectWorkspace(index));
+        let chat_id = shell.panes.alloc_chat_id();
+        shell.panes.focused_model_mut().open_chat(chat_id);
+        let mut chat = ChatPane::new(Some(dir.path().to_path_buf()), None).with_binary(script);
+        let _ = chat.update(ChatMsg::InputChanged("rascunho separado".to_owned()));
+        let _ = chat.update(ChatMsg::PickFiles(Some(vec![dir
+            .path()
+            .join("rascunho.txt")])));
+        shell.chats.insert(chat_id, chat);
+        shell.git.diff = Some(gsh_git::FileDiff {
+            path: "src/main.rs".into(),
+            staged: false,
+            kind: gsh_git::FileDiffKind::Modified,
+            hunks: vec![gsh_git::DiffHunk {
+                header: "@@ -1,2 +1,3 @@".into(),
+                lines: vec![
+                    gsh_git::DiffLine {
+                        kind: gsh_git::DiffLineKind::Context,
+                        old_line: Some(1),
+                        new_line: Some(1),
+                        text: "fn main() {".into(),
+                    },
+                    gsh_git::DiffLine {
+                        kind: gsh_git::DiffLineKind::Added,
+                        old_line: None,
+                        new_line: Some(2),
+                        text: "    todo!();".into(),
+                    },
+                ],
+            }],
+        });
+
+        let _ = shell.update(Msg::Git(git_panel::GitMsg::StartNote(0, 1)));
+        let _ = shell.update(Msg::Git(git_panel::GitMsg::NoteInput(
+            "remover todo! antes do merge".into(),
+        )));
+        let _ = shell.update(Msg::Git(git_panel::GitMsg::SaveNote));
+        assert_eq!(
+            shell.git.diff_notes.get(&(0, 1)).map(String::as_str),
+            Some("remover todo! antes do merge")
+        );
+
+        let target = String::from("c999");
+        let initial_terminals = shell.terminals.len();
+        let _ = shell.update(Msg::Git(git_panel::GitMsg::SelectNoteAgent(target.clone())));
+        let _ = shell.update(Msg::Git(git_panel::GitMsg::SendNotesToAgent(target)));
+        assert_eq!(shell.git.diff_notes.len(), 1);
+        assert_eq!(shell.terminals.len(), initial_terminals);
+        assert!(shell.git.error.is_some());
+        assert!(shell.git.active_note.is_none());
+        assert!(shell.chats.get(&chat_id).unwrap().items().is_empty());
+
+        let target = format!("c{chat_id}");
+        let _ = shell.update(Msg::Git(git_panel::GitMsg::SelectNoteAgent(target.clone())));
+        let _ = shell.update(Msg::Git(git_panel::GitMsg::SendNotesToAgent(
+            target.clone(),
+        )));
+        assert!(shell.git.error.is_none(), "{:?}", shell.git.error);
+        assert!(shell.git.diff_notes.is_empty());
+        let chat = shell.chats.get(&chat_id).unwrap();
+        assert_eq!(chat.input(), "rascunho separado");
+        assert_eq!(chat.attachments().len(), 1);
+        assert!(matches!(chat.items(), [chat_pane::ChatItem::User { text }]
+            if text.contains("src/main.rs:2") && text.contains("todo!();") && text.contains("remover todo! antes do merge")));
+
+        let other = tempfile::tempdir().unwrap();
+        let index = shell.workspaces.open_folder(other.path());
+        let _ = shell.update(Msg::SelectWorkspace(index));
+        assert!(!shell
+            .git_agent_targets()
+            .iter()
+            .any(|agent| agent.id == target));
+        assert!(shell
+            .deliver_git_feedback(&target, "outra revisão")
+            .is_err());
+    }
+
+    #[test]
+    fn team_markdown_import_stages_review_without_executing_and_confirm_creates_agents() {
+        let dir = tempfile::tempdir().unwrap();
+        let md_path = dir.path().join("squad.md");
+        std::fs::write(
+            &md_path,
+            "---\nname: Squad Linux\nmaestro: Light\nagents:\n  - name: Light\n    harness: claude\n    cwd: .\n    role: Coordenador\n    links: [Escanor]\n  - name: Escanor\n    harness: codex\n    cwd: .\n    role: Backend\n---\nNotas do time.\n",
+        )
+        .unwrap();
+
+        let mut shell = test_shell();
+        let ws_idx = shell.workspaces.open_folder(dir.path());
+        let _ = shell.update(Msg::SelectWorkspace(ws_idx));
+        let terms_before = shell.terminals.len();
+
+        // Importar o arquivo apenas abre a tela de revisão: nenhum terminal novo é criado
+        let _ = shell.update(Msg::TeamMarkdownImportPicked(Some(md_path)));
+        assert!(shell.team_import_review.as_ref().is_some_and(Result::is_ok));
+        assert_eq!(shell.terminals.len(), terms_before);
+
+        // Confirmar após a revisão cria os 2 agentes, conecta-os e define o maestro
+        let _ = shell.update(Msg::ConfirmTeamImport);
+        assert!(shell.team_import_review.is_none());
+        assert_eq!(shell.terminals.len(), terms_before + 2);
+        let graph = shell.agent_graphs.get(dir.path()).unwrap();
+        assert!(graph.maestro().is_some());
+        assert_eq!(graph.links().len(), 1);
     }
 }
 

@@ -10,11 +10,14 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use iced::widget::{column, container, row, scrollable, text, Space};
-use iced::{Background, Color, Element, Fill, Length, Theme};
-
+use crate::file_viewer_assets as assets;
 use crate::labels;
-use crate::theme;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileViewerMsg {
+    OpenMedia(PathBuf),
+    Ignore,
+}
 
 /// Limite máximo de tamanho para abertura no viewer de texto (2 MiB, igual a
 /// `_maxTextBytes` em `file_reader_impl.dart`).
@@ -131,9 +134,13 @@ impl TextDocument {
 }
 
 /// Estado tipado do viewer de arquivo.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum FileViewerState {
     Loaded(TextDocument),
+    Markdown(TextDocument, iced::widget::markdown::Content),
+    Svg(String),
+    Image(Vec<u8>),
+    Media(PathBuf),
     TooLarge {
         size_bytes: u64,
         max_bytes: u64,
@@ -162,6 +169,9 @@ impl FileViewerState {
         if !meta.is_file() {
             return Self::Error(ViewerReadError::NotRegularFile);
         }
+        if assets::is_media(path) {
+            return Self::Media(path.to_path_buf());
+        }
         if meta.len() > max_bytes {
             return Self::large_preview(path, meta.len(), max_bytes);
         }
@@ -182,10 +192,25 @@ impl FileViewerState {
             return Self::large_preview(path, read_len, max_bytes);
         }
 
+        if assets::is_image(path) {
+            return match assets::preview_image(bytes) {
+                Ok(png) => Self::Image(png),
+                Err(error) => Self::Error(ViewerReadError::Io(error)),
+            };
+        }
         if bytes.contains(&0) {
             return Self::Binary(BinaryKind::NullBytes);
         }
         match String::from_utf8(bytes) {
+            Ok(content) if assets::is_svg(path) => Self::Svg(content),
+            Ok(content) if assets::is_markdown(path) => {
+                let source = assets::strip_frontmatter(&content).to_owned();
+                let markdown = iced::widget::markdown::Content::parse(&source);
+                Self::Markdown(
+                    TextDocument::from_owned_text(path.to_path_buf(), source),
+                    markdown,
+                )
+            }
             Ok(content) => Self::Loaded(TextDocument::from_owned_text(path.to_path_buf(), content)),
             Err(_) => Self::Binary(BinaryKind::InvalidUtf8),
         }
@@ -227,10 +252,13 @@ impl FileViewerState {
         }
     }
 
-    /// Mensagem de aviso/erro quando o estado não é [`Self::Loaded`].
     pub fn ui_notice(&self) -> Option<String> {
         match self {
-            Self::Loaded(_) => None,
+            Self::Loaded(_)
+            | Self::Markdown(..)
+            | Self::Svg(_)
+            | Self::Image(_)
+            | Self::Media(_) => None,
             Self::TooLarge {
                 size_bytes,
                 max_bytes,
@@ -244,98 +272,6 @@ impl FileViewerState {
             Self::Error(err) => Some(err.ui_message()),
         }
     }
-}
-
-/// Renderiza o viewer de arquivo na superfície `PANEL`.
-pub fn view<'a, M: 'a>(state: &'a FileViewerState) -> Element<'a, M> {
-    match state {
-        FileViewerState::Loaded(doc) => view_document(doc),
-        FileViewerState::LargePreview {
-            size_bytes,
-            max_bytes,
-            document,
-        } => column![
-            text(labels::format_viewer_large_preview(*size_bytes, *max_bytes))
-                .color(theme::palette().warn),
-            view_document(document),
-        ]
-        .into(),
-        FileViewerState::TooLarge {
-            size_bytes,
-            max_bytes,
-        } => view_status_notice(
-            labels::format_viewer_too_large(*size_bytes, *max_bytes),
-            theme::palette().warn,
-        ),
-        FileViewerState::Binary(kind) => {
-            view_status_notice(kind.ui_message().to_string(), theme::palette().text2)
-        }
-        FileViewerState::Error(err) => view_status_notice(err.ui_message(), theme::palette().error),
-    }
-}
-
-fn view_document<'a, M: 'a>(doc: &'a TextDocument) -> Element<'a, M> {
-    let gutter = container(
-        text(&doc.gutter_text)
-            .font(theme::FONT_MONO)
-            .size(theme::SIZE_MONO)
-            .line_height(theme::LINE_HEIGHT_MONO)
-            .color(theme::palette().text2)
-            .wrapping(text::Wrapping::None),
-    )
-    .padding([0, 14]);
-
-    let separator = container(Space::new().width(1.0).height(Fill))
-        .width(Length::Fixed(1.0))
-        .height(Fill)
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::palette().border)),
-            ..Default::default()
-        });
-
-    let code = container(
-        text(&doc.body_text)
-            .font(theme::FONT_MONO)
-            .size(theme::SIZE_MONO)
-            .line_height(theme::LINE_HEIGHT_MONO)
-            .color(theme::palette().text)
-            .wrapping(text::Wrapping::None),
-    )
-    .padding([0, 14]);
-
-    let scrolled = scrollable(row![gutter, separator, code].padding([12, 0]))
-        .direction(scrollable::Direction::Both {
-            vertical: scrollable::Scrollbar::default(),
-            horizontal: scrollable::Scrollbar::default(),
-        })
-        .width(Fill)
-        .height(Fill);
-
-    container(scrolled)
-        .width(Fill)
-        .height(Fill)
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(theme::palette().panel)),
-            ..Default::default()
-        })
-        .into()
-}
-
-fn view_status_notice<'a, M: 'a>(message: String, color: Color) -> Element<'a, M> {
-    container(
-        text(message)
-            .font(theme::FONT_BODY)
-            .size(theme::SIZE_BODY)
-            .color(color),
-    )
-    .padding([20, 24])
-    .width(Fill)
-    .height(Fill)
-    .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(theme::palette().panel)),
-        ..Default::default()
-    })
-    .into()
 }
 
 #[cfg(test)]
@@ -387,6 +323,16 @@ mod tests {
     }
 
     #[test]
+    fn markdown_com_frontmatter_abre_como_viewer_de_renderizado() {
+        let tmp = TempFile::new();
+        let path = tmp.write("README.md", b"---\ntitle: Teste\n---\n# Conteudo\n");
+        let FileViewerState::Markdown(doc, _) = FileViewerState::load(&path) else {
+            panic!("esperava viewer Markdown");
+        };
+        assert_eq!(doc.source(), "# Conteudo\n");
+    }
+
+    #[test]
     fn arquivo_acima_do_limite_retorna_aviso_tipado_sem_carregar() {
         let tmp = TempFile::new();
         let path = tmp.write("big.log", &[b'a'; 128]);
@@ -410,23 +356,26 @@ mod tests {
     fn rejeita_arquivo_binario_com_bytes_nulos_ou_utf8_invalido() {
         let tmp = TempFile::new();
         let null_file = tmp.write("bin.dat", b"abc\0def");
-        assert_eq!(
+        assert!(matches!(
             FileViewerState::load(&null_file),
             FileViewerState::Binary(BinaryKind::NullBytes)
-        );
+        ));
 
         let bad_utf8 = tmp.write("latin.bin", &[0xFF, 0xFE, 0xFD]);
-        assert_eq!(
+        assert!(matches!(
             FileViewerState::load(&bad_utf8),
             FileViewerState::Binary(BinaryKind::InvalidUtf8)
-        );
+        ));
     }
 
     #[test]
     fn erro_de_leitura_retorna_estado_tipado_sem_panic() {
         let missing = std::env::temp_dir().join("gsh-viewer-arquivo-inexistente-999999.txt");
         let state = FileViewerState::load(&missing);
-        assert_eq!(state, FileViewerState::Error(ViewerReadError::NotFound));
+        assert!(matches!(
+            state,
+            FileViewerState::Error(ViewerReadError::NotFound)
+        ));
         assert_eq!(
             state.ui_notice().as_deref(),
             Some(labels::VIEWER_ERR_NOT_FOUND)

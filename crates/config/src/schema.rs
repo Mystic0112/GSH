@@ -219,12 +219,17 @@ pub struct Config {
     /// Formatador externo por `languageId` (placeholder `%FILE%`).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub lsp_formatters: BTreeMap<String, String>,
+    /// Atalhos do menu por ação (ex.: `newTerminal = "Ctrl+T"`).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub shortcuts: BTreeMap<String, String>,
     pub editor: Editor,
     pub terminal: Terminal,
     pub sound: Sound,
     pub source_control: SourceControl,
     pub automation: Automation,
     pub chat: Chat,
+    #[serde(skip_serializing_if = "ClaudeProfiles::is_empty")]
+    pub claude: ClaudeProfiles,
     pub code: Code,
     pub features: Features,
     pub links: Links,
@@ -256,18 +261,34 @@ impl Default for Config {
             update_check_frequency: UpdateCheckFrequency::default(),
             lsp_commands: BTreeMap::new(),
             lsp_formatters: BTreeMap::new(),
+            shortcuts: BTreeMap::new(),
             editor: Editor::default(),
             terminal: Terminal::default(),
             sound: Sound::default(),
             source_control: SourceControl::default(),
             automation: Automation::default(),
             chat: Chat::default(),
+            claude: ClaudeProfiles::default(),
             code: Code::default(),
             features: Features::default(),
             links: Links::default(),
             farm: Farm::default(),
             localsend: LocalSend::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ClaudeProfiles {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_profile: Option<String>,
+    pub profiles: BTreeMap<String, String>,
+}
+
+impl ClaudeProfiles {
+    fn is_empty(&self) -> bool {
+        self.profiles.is_empty() && self.active_profile.is_none()
     }
 }
 
@@ -450,8 +471,9 @@ pub struct Links {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LocalSend {
-    /// Rede desligada por padrão; ativar também inicia a descoberta multicast.
-    pub enabled: bool,
+    /// Mantém servidor e descoberta ativos mesmo sem uso explícito.
+    #[serde(alias = "enabled")]
+    pub always_on: bool,
     /// Vazio usa o hostname atual.
     pub alias: String,
     /// Destino exclusivo para recebimentos.
@@ -469,7 +491,7 @@ impl Default for LocalSend {
             .map(|path| path.join("GSH").to_string_lossy().into_owned())
             .unwrap_or_else(|| "GSH".to_owned());
         Self {
-            enabled: false,
+            always_on: false,
             alias: String::new(),
             receive_dir,
             max_file_mb: 2048,
@@ -560,6 +582,7 @@ impl fmt::Debug for Config {
             .field("source_control", &self.source_control)
             .field("automation", &self.automation)
             .field("chat", &self.chat)
+            .field("claude", &self.claude)
             .field("code", &self.code)
             .field("features", &self.features)
             .field("links", &self.links)
@@ -726,7 +749,7 @@ mod tests {
         assert_eq!(c.farm.scenery, FarmScenery::Farm);
         assert_eq!(c.farm.team, FarmTeam::default());
         assert!(!c.farm.team.enabled && c.farm.team.secret.is_empty());
-        assert!(!c.localsend.enabled);
+        assert!(!c.localsend.always_on);
         assert!(c.localsend.alias.is_empty());
         assert!(c.localsend.receive_dir.ends_with("GSH"));
         assert_eq!(c.localsend.max_file_mb, 2048);
@@ -742,7 +765,7 @@ mod tests {
     #[test]
     fn localsend_section_deserializes_and_keeps_safe_defaults() {
         let c = from("[localsend]\nenabled = true\nalias = \"Estação\"\nreceiveDir = \"/tmp/recebidos\"\nmaxFileMb = 64\nmaxFiles = 8\n");
-        assert!(c.localsend.enabled);
+        assert!(c.localsend.always_on);
         assert_eq!(c.localsend.alias, "Estação");
         assert_eq!(c.localsend.receive_dir, "/tmp/recebidos");
         assert_eq!(c.localsend.max_file_mb, 64);
@@ -752,7 +775,7 @@ mod tests {
         assert_eq!(
             partial.localsend,
             LocalSend {
-                enabled: true,
+                always_on: true,
                 ..LocalSend::default()
             }
         );

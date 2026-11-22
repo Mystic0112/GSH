@@ -26,6 +26,8 @@ gsh-term = { path = "../term" }
 gsh-team = { path = "../team" }
 iced = { version = "0.14", features = ["advanced", "canvas", "tokio", "svg", "image", "markdown"] }
 iced_runtime = "0.14"
+notify-rust = "4.19"
+base64 = "0.22"
 arboard = { version = "3.7", features = ["wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 pulldown-cmark = "0.12"
@@ -43,6 +45,10 @@ zeroize = { version = "1.9", features = ["derive"] }
 # (alacritty_terminal, dirs-sys), então não traz crate novo ao build.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tempfile = "3.27.0"
+zbus = { version = "6", default-features = false, features = ["proxy"] }
 
 [dev-dependencies]
 iced_test = "0.14"

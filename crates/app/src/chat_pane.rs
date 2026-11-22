@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::settings::claude::profiles;
 use gsh_chat::{
     Attachment, ChatConfig, ChatEngine, ChatError, ChatEvent, CommandOption, LaunchOptions,
     ModelOption, PlanUsage, SessionState, DEFAULT_CLAUDE_BINARY,
@@ -258,6 +259,8 @@ pub struct ChatPane {
     cwd: Option<PathBuf>,
     branch: Option<String>,
     binary: PathBuf,
+    claude_profile: Result<Option<PathBuf>, String>,
+    claude_profile_binding: Option<PathBuf>,
     items: Vec<ChatItem>,
     input: String,
     input_content: iced::widget::text_editor::Content,
@@ -267,6 +270,7 @@ pub struct ChatPane {
     effort: Option<String>,
     cost_usd: f64,
     engine: Option<ChatEngine>,
+    agent_workspace: Option<PathBuf>,
     static_test_mode: bool,
     attachments: Vec<Attachment>,
     models: Vec<ModelOption>,
@@ -307,6 +311,8 @@ impl ChatPane {
             cwd,
             branch,
             binary: PathBuf::from(DEFAULT_CLAUDE_BINARY),
+            claude_profile: Ok(None),
+            claude_profile_binding: None,
             items: Vec::new(),
             input: String::new(),
             input_content: iced::widget::text_editor::Content::new(),
@@ -316,6 +322,7 @@ impl ChatPane {
             effort: Some("high".to_string()),
             cost_usd: 0.0,
             engine: None,
+            agent_workspace: None,
             static_test_mode: false,
             attachments: Vec::new(),
             models: Vec::new(),
@@ -361,6 +368,63 @@ impl ChatPane {
         self
     }
 
+    pub fn with_claude_profile(mut self, profile: Result<Option<PathBuf>, String>) -> Self {
+        self.claude_profile_binding = profile.as_ref().ok().and_then(|path| path.clone());
+        self.claude_profile = profile;
+        self
+    }
+
+    pub fn with_claude_profile_binding(
+        mut self,
+        profile: Result<Option<PathBuf>, String>,
+        binding: Option<PathBuf>,
+    ) -> Self {
+        self.claude_profile = profile;
+        self.claude_profile_binding = binding;
+        self
+    }
+
+    pub fn claude_profile_binding(&self) -> Option<&Path> {
+        self.claude_profile_binding.as_deref()
+    }
+
+    pub fn claude_profile_path(&self) -> Option<&Path> {
+        self.claude_profile.as_ref().ok()?.as_deref()
+    }
+
+    pub fn claude_command(&self, args: &str) -> Result<String, String> {
+        profiles::command(
+            self.claude_profile
+                .as_ref()
+                .map_err(Clone::clone)?
+                .as_deref(),
+            args,
+        )
+    }
+
+    fn claude_env(&self) -> Result<Vec<(String, String)>, String> {
+        match self.claude_profile.as_ref().map_err(Clone::clone)? {
+            Some(path) => profiles::env(path),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn history_root(&self) -> Option<PathBuf> {
+        match self.claude_profile.as_ref().ok()? {
+            Some(path) => profiles::verify(path, false)
+                .ok()
+                .map(|path| path.join("projects")),
+            None => gsh_chat::history::projects_root(),
+        }
+    }
+
+    fn transcript_file(&self, cwd: &str, id: &str) -> Option<PathBuf> {
+        match self.claude_profile.as_ref().ok()? {
+            Some(_) => gsh_chat::history::profile_transcript_file(&self.history_root()?, cwd, id),
+            None => gsh_chat::history::transcript_file(cwd, id),
+        }
+    }
+
     /// Atualiza o diretório e branch quando o workspace ativo muda.
     pub fn set_workspace(&mut self, cwd: Option<PathBuf>, branch: Option<String>) {
         self.cwd = cwd;
@@ -395,8 +459,16 @@ impl ChatPane {
         self.cwd.as_deref()
     }
 
+    pub fn feedback_workspace(&self) -> Option<&Path> {
+        if self.engine.is_some() || self.session_id.is_some() {
+            return self.agent_workspace.as_deref();
+        }
+        self.cwd.as_deref()
+    }
+
     pub fn deliver_agent_text(&mut self, text: String) -> Result<(), String> {
-        self.ensure_engine_and_send(&text)
+        self.ensure_engine()
+            .and_then(|engine| engine.send(&text, &[]))
             .map_err(|error| error.to_string())?;
         self.items.push(ChatItem::User { text });
         self.busy = true;
@@ -556,7 +628,7 @@ impl ChatPane {
             .collect()
     }
     pub fn recent_sessions(&self) -> Vec<gsh_chat::SessionEntry> {
-        gsh_chat::history::projects_root()
+        self.history_root()
             .map(|p| gsh_chat::recent_sessions(&p, Duration::from_secs(7 * 24 * 60 * 60)))
             .unwrap_or_default()
             .into_iter()
@@ -865,16 +937,20 @@ impl ChatPane {
                 if title.is_empty() {
                     return Task::none();
                 }
-                if let (Some(cwd), Some(session_id)) =
-                    (self.cwd.as_ref(), self.session_id.as_deref())
-                {
-                    if let Err(error) =
-                        gsh_chat::write_title(&cwd.to_string_lossy(), session_id, &title)
-                    {
-                        self.items.push(ChatItem::Error {
-                            message: labels::format_chat_title_failed(&error.to_string()),
-                        });
-                        return Task::none();
+                if let Some(session_id) = self.session_id.as_deref() {
+                    let file = self
+                        .cwd
+                        .as_ref()
+                        .and_then(|cwd| self.transcript_file(&cwd.to_string_lossy(), session_id));
+                    if let Some(file) = file.filter(|file| file.is_file()) {
+                        if let Err(error) =
+                            gsh_chat::history::append_title(&file, session_id, &title)
+                        {
+                            self.items.push(ChatItem::Error {
+                                message: labels::format_chat_title_failed(&error.to_string()),
+                            });
+                            return Task::none();
+                        }
                     }
                 }
                 self.title = Some(title);
@@ -917,9 +993,11 @@ impl ChatPane {
             }
             ChatMsg::UsageRefresh => {
                 let binary = self.binary.clone();
+                let env = self.claude_env();
                 Task::perform(
                     async move {
-                        tokio::task::spawn_blocking(move || gsh_chat::probe_account(&binary, &[]))
+                        let env = env?;
+                        tokio::task::spawn_blocking(move || gsh_chat::probe_account(&binary, &env))
                             .await
                             .map_err(|e| e.to_string())
                     },
@@ -1110,10 +1188,7 @@ impl ChatPane {
                 Task::none()
             }
             ChatMsg::OpenLink(url) => {
-                if url.starts_with("https://")
-                    || url.starts_with("http://")
-                    || url.starts_with("mailto:")
-                {
+                if is_supported_external_url(&url) {
                     Task::perform(
                         async move {
                             tokio::task::spawn_blocking(move || open_external_url(&url))
@@ -1439,29 +1514,41 @@ impl ChatPane {
         chat_view::view(self, transcript_width)
     }
 
-    fn ensure_engine_and_send(&mut self, text: &str) -> Result<(), ChatError> {
+    fn ensure_engine(&mut self) -> Result<&ChatEngine, ChatError> {
         if self.engine.is_none() {
+            let env = self.claude_env().map_err(|cause| ChatError::SpawnFailed {
+                program: self.binary.display().to_string(),
+                cause,
+            })?;
             let cfg = ChatConfig {
                 binary: gsh_chat::resolve_executable(&self.binary.to_string_lossy()),
                 cwd: self.cwd.clone(),
-                env: Vec::new(),
+                env,
                 launch: LaunchOptions {
                     resume_session_id: self.session_id.clone(),
                     model: self.model.clone(),
                     effort: self.effort.clone(),
-                    accept_peers: gsh_chat::settings::accept_peers(),
+                    accept_peers: gsh_chat::settings::accept_peers_in(
+                        self.claude_profile.as_ref().ok().and_then(Option::as_deref),
+                    ),
                     ..LaunchOptions::default()
                 },
             };
             self.engine = Some(ChatEngine::spawn(cfg)?);
+            self.agent_workspace = self.cwd.clone();
             if let Some(engine) = &self.engine {
                 engine.set_permission_mode(&self.mode);
             }
         }
-        if let Some(engine) = self.engine.as_mut() {
+        self.engine.as_ref().ok_or(ChatError::SessionClosed)
+    }
+
+    fn ensure_engine_and_send(&mut self, text: &str) -> Result<(), ChatError> {
+        self.ensure_engine()?;
+        if let Some(engine) = &self.engine {
             engine.send(text, &self.attachments)?;
-            self.attachments.clear();
         }
+        self.attachments.clear();
         Ok(())
     }
 
@@ -1589,14 +1676,17 @@ impl ChatPane {
         self.items.clear();
         self.session_id = Some(session.id.clone());
         self.cwd = Some(PathBuf::from(&session.project));
+        self.agent_workspace = self.cwd.clone();
         self.title = Some(session.title);
         let cwd = self
             .cwd
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
-        for event in gsh_chat::read_history(&cwd, &session.id) {
-            self.apply_event(event);
+        if let Some(file) = self.transcript_file(&cwd, &session.id) {
+            for event in gsh_chat::history::read_transcript(&file) {
+                self.apply_event(event);
+            }
         }
         self.history_open = false;
         self.busy = false;
@@ -1619,6 +1709,48 @@ impl ChatPane {
         });
         true
     }
+
+    pub fn restore_profile_session_id(
+        &mut self,
+        session_id: &str,
+        config: &gsh_config::Config,
+    ) -> bool {
+        let Some(cwd) = self.cwd.as_ref() else {
+            return false;
+        };
+        let cwd = cwd.to_string_lossy();
+        if cfg!(target_os = "linux")
+            && !gsh_chat::history::transcript_file(&cwd, session_id)
+                .is_some_and(|file| file.is_file())
+        {
+            let mut matching = config
+                .claude
+                .profiles
+                .keys()
+                .filter_map(|name| profiles::directory(config, name).ok())
+                .filter(|dir| {
+                    gsh_chat::history::profile_transcript_file(
+                        &dir.join("projects"),
+                        &cwd,
+                        session_id,
+                    )
+                    .is_some()
+                });
+            if let Some(path) = matching.next() {
+                if matching.next().is_some() {
+                    self.items.push(ChatItem::Error {
+                        message:
+                            "O histórico desta conversa existe em mais de um perfil do Claude."
+                                .into(),
+                    });
+                    return false;
+                }
+                self.claude_profile_binding = Some(path.clone());
+                self.claude_profile = Ok(Some(path));
+            }
+        }
+        self.restore_session_id(session_id)
+    }
 }
 
 fn open_external_url(url: &str) -> Result<(), String> {
@@ -1633,6 +1765,12 @@ fn open_external_url(url: &str) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+fn is_supported_external_url(url: &str) -> bool {
+    ["https://", "http://", "mailto:"]
+        .iter()
+        .any(|scheme| url.starts_with(scheme))
 }
 
 fn read_clipboard_png() -> Result<Option<Vec<u8>>, String> {
@@ -1686,6 +1824,70 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn links_open_only_in_the_system_browser_for_supported_schemes() {
+        assert!(is_supported_external_url("https://example.com"));
+        assert!(is_supported_external_url("http://localhost:3000"));
+        assert!(is_supported_external_url("mailto:dev@example.com"));
+        assert!(!is_supported_external_url("javascript:alert(1)"));
+        assert!(!is_supported_external_url("file:///etc/passwd"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn profile_history_and_child_environment_follow_the_chat_profile() {
+        use std::fs;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let project = PathBuf::from("/home/dev/project");
+        let profile = root.path().join("Profile one");
+        let projects = profile.join("projects");
+        let file =
+            gsh_chat::history::transcript_in(&projects, "/home/dev/project", "profile-session")
+                .unwrap();
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::set_permissions(&profile, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(
+            &file,
+            r#"{"type":"user","message":{"content":"conteúdo do perfil"}}"#,
+        )
+        .unwrap();
+        crate::settings::claude::profiles::verify(&profile, false).unwrap();
+        let binary = root.path().join("fake-claude");
+        fs::write(
+            &binary,
+            "#!/bin/sh\nprintf '%s' \"$CLAUDE_CONFIG_DIR\" > \"$CLAUDE_CONFIG_DIR/launched\"\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"profile-session\"}'\nwhile IFS= read -r line; do :; done\n",
+        ).unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut pane = ChatPane::new(Some(project), None)
+            .with_binary(&binary)
+            .with_claude_profile(Ok(Some(profile.clone())));
+        assert_eq!(pane.claude_profile_path(), Some(profile.as_path()));
+        assert!(pane.restore_session_id("profile-session"));
+        assert!(pane.items().iter().any(|item| matches!(item,
+            ChatItem::User { text } if text == "conteúdo do perfil"
+        )));
+        let foreign = root.path().join("foreign.jsonl");
+        fs::write(&foreign, "outro perfil").unwrap();
+        symlink(&foreign, file.with_file_name("foreign.jsonl")).unwrap();
+        assert!(pane
+            .transcript_file("/home/dev/project", "foreign")
+            .is_none());
+        assert!(pane
+            .claude_command("--resume profile-session")
+            .unwrap()
+            .contains("Profile one"));
+
+        let engine = pane.ensure_engine().unwrap();
+        let _ = engine.recv_timeout(Duration::from_secs(2));
+        assert_eq!(
+            fs::read_to_string(profile.join("launched")).unwrap(),
+            profile.to_str().unwrap()
+        );
+    }
 
     #[test]
     fn fluxo_de_envio_streaming_tool_call_e_cancelamento_no_chat_pane() {

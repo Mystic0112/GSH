@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{
     point_to_viewport, viewport_to_point, Config as TermConfig, Term, MIN_COLUMNS, MIN_SCREEN_LINES,
@@ -19,6 +19,8 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 
 use crate::error::TermError;
 use crate::snapshot::{convert_cell, is_cursor_shape_visible, Cell, Cursor, Snapshot};
+
+mod stream;
 
 /// Limite padrão de linhas no histórico de scrollback (mesmo valor do Flutter).
 pub const DEFAULT_SCROLLBACK_LINES: usize = 10_000;
@@ -61,6 +63,7 @@ pub struct ShellCommand {
     args: Vec<OsString>,
     cwd: Option<PathBuf>,
     env: Vec<(OsString, OsString)>,
+    env_remove: Vec<OsString>,
     scrollback_lines: usize,
 }
 
@@ -85,6 +88,7 @@ impl ShellCommand {
             args: Vec::new(),
             cwd: None,
             env: Vec::new(),
+            env_remove: Vec::new(),
             scrollback_lines: DEFAULT_SCROLLBACK_LINES,
         }
     }
@@ -117,6 +121,12 @@ impl ShellCommand {
     pub fn env(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
         self.env
             .push((key.as_ref().to_os_string(), value.as_ref().to_os_string()));
+        self
+    }
+
+    /// Remove uma variável herdada do ambiente do processo pai.
+    pub fn env_remove(mut self, key: impl AsRef<OsStr>) -> Self {
+        self.env_remove.push(key.as_ref().to_os_string());
         self
     }
 
@@ -339,13 +349,13 @@ impl EmulatorState {
     }
 }
 
-/// Sessão ativa de terminal combinando processo em PTY (`portable-pty`) e
-/// emulador VT (`alacritty_terminal`).
+/// Emulador VT com um PTY local ou um transporte externo.
 pub struct TermSession {
     state: Arc<(Mutex<EmulatorState>, Condvar)>,
     writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     child: Mutex<Option<Box<dyn Child + Send + Sync>>>,
+    stream: Option<stream::Control>,
     shutdown: Arc<AtomicBool>,
     reader_thread: Option<JoinHandle<()>>,
 }
@@ -391,46 +401,54 @@ impl TermSession {
         // assim que o processo filho encerrar.
         drop(pair.slave);
 
-        let reader = pair
+        let streams = pair
             .master
             .try_clone_reader()
-            .map_err(|err| TermError::PtyStream {
-                cause: err.to_string(),
-            })?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|err| TermError::PtyStream {
-                cause: err.to_string(),
-            })?;
+            .and_then(|reader| pair.master.take_writer().map(|writer| (reader, writer)));
+        let mut session = Self::new(cols, rows, spec.scrollback_lines);
+        session.child = Mutex::new(Some(child));
+        session.master = Mutex::new(Some(pair.master));
 
-        let state = Arc::new((
-            Mutex::new(EmulatorState::new(cols, rows, spec.scrollback_lines)),
-            Condvar::new(),
-        ));
-        let writer_arc: Arc<Mutex<Option<Box<dyn Write + Send>>>> =
-            Arc::new(Mutex::new(Some(writer)));
-        let shutdown = Arc::new(AtomicBool::new(false));
+        let (reader, writer) = streams.map_err(|err| TermError::PtyStream {
+            cause: err.to_string(),
+        })?;
+        session.start_reader(reader, writer)?;
+        Ok(session)
+    }
 
-        let reader_state = Arc::clone(&state);
-        let reader_writer = Arc::clone(&writer_arc);
-        let reader_shutdown = Arc::clone(&shutdown);
+    fn new(cols: u16, rows: u16, scrollback_lines: usize) -> Self {
+        Self {
+            state: Arc::new((
+                Mutex::new(EmulatorState::new(cols, rows, scrollback_lines)),
+                Condvar::new(),
+            )),
+            writer: Arc::new(Mutex::new(None)),
+            master: Mutex::new(None),
+            child: Mutex::new(None),
+            stream: None,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            reader_thread: None,
+        }
+    }
 
-        let reader_thread = thread::Builder::new()
-            .name("gsh-term-reader".to_owned())
-            .spawn(move || {
-                reader_loop(reader, &reader_state, &reader_writer, &reader_shutdown);
-            })
-            .map_err(TermError::ReaderThread)?;
-
-        Ok(Self {
-            state,
-            writer: writer_arc,
-            master: Mutex::new(Some(pair.master)),
-            child: Mutex::new(Some(child)),
-            shutdown,
-            reader_thread: Some(reader_thread),
-        })
+    fn start_reader(
+        &mut self,
+        reader: impl Read + Send + 'static,
+        writer: Box<dyn Write + Send>,
+    ) -> Result<(), TermError> {
+        *lock_unpoisoned(&self.writer) = Some(writer);
+        let reader_state = Arc::clone(&self.state);
+        let reader_writer = Arc::clone(&self.writer);
+        let reader_shutdown = Arc::clone(&self.shutdown);
+        self.reader_thread = Some(
+            thread::Builder::new()
+                .name("gsh-term-reader".to_owned())
+                .spawn(move || {
+                    reader_loop(reader, &reader_state, &reader_writer, &reader_shutdown);
+                })
+                .map_err(TermError::ReaderThread)?,
+        );
+        Ok(())
     }
 
     /// Envia bytes crus (teclas digitadas ou comandos) para a entrada do PTY.
@@ -445,6 +463,14 @@ impl TermSession {
     /// Redimensiona o PTY e o emulador VT simultaneamente para `(cols, rows)`.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), TermError> {
         validate_dimensions(cols, rows)?;
+
+        if let Some(stream) = &self.stream {
+            (stream.resize)(cols, rows).map_err(|err| TermError::Resize {
+                cols,
+                rows,
+                cause: err.to_string(),
+            })?;
+        }
 
         {
             let master_guard = lock_unpoisoned(&self.master);
@@ -483,6 +509,44 @@ impl TermSession {
         let (lock, _) = &*self.state;
         let state = lock_unpoisoned(lock);
         state.snapshot()
+    }
+
+    /// Lê uma página do buffer ativo sem mudar o scroll ou a seleção.
+    pub fn output_page(
+        &self,
+        limit: usize,
+        offset: usize,
+        from_start: bool,
+    ) -> (String, usize, usize) {
+        let (lock, _) = &*self.state;
+        let state = lock_unpoisoned(lock);
+        let grid = state.term.grid();
+        let top = -(grid.history_size() as i32);
+        let last_col = Column(grid.columns().saturating_sub(1));
+        let line_text = |line| {
+            let line = Line(line);
+            let text = state
+                .term
+                .bounds_to_string(Point::new(line, Column(0)), Point::new(line, last_col));
+            text.trim_end_matches(' ').to_owned()
+        };
+        let end = (top..grid.screen_lines() as i32)
+            .rev()
+            .find(|&line| !line_text(line).is_empty())
+            .map_or(top, |line| line + 1);
+        let total = (end - top) as usize;
+        let (start, end) = if from_start {
+            let start = offset.min(total);
+            (start, start.saturating_add(limit).min(total))
+        } else {
+            let end = total.saturating_sub(offset);
+            (end.saturating_sub(limit), end)
+        };
+        let text = (start..end)
+            .map(|row| line_text(top + row as i32))
+            .collect::<Vec<_>>()
+            .join("\n");
+        (text, end - start, total)
     }
 
     /// Último título OSC 0/2 informado pelo programa do terminal.
@@ -577,11 +641,20 @@ impl TermSession {
         let guard = lock_unpoisoned(&self.child);
         guard.as_ref().and_then(|c| c.process_id())
     }
+
+    /// Indica que a sessão usa um transporte externo em vez de um PTY local.
+    pub fn is_remote(&self) -> bool {
+        self.stream.is_some()
+    }
 }
 
 impl Drop for TermSession {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
+
+        if let Some(stream) = self.stream.take() {
+            (stream.close)();
+        }
 
         // Fecha o writer do PTY primeiro para sinalizar EOF ao processo filho.
         {
@@ -646,6 +719,9 @@ fn build_command(spec: &ShellCommand) -> CommandBuilder {
         cmd.env("LANG", "en_US.UTF-8");
     }
 
+    for key in &spec.env_remove {
+        cmd.env_remove(key);
+    }
     for (key, value) in &spec.env {
         cmd.env(key, value);
     }
@@ -654,7 +730,7 @@ fn build_command(spec: &ShellCommand) -> CommandBuilder {
 }
 
 fn reader_loop(
-    mut reader: Box<dyn Read + Send>,
+    mut reader: impl Read,
     state: &Arc<(Mutex<EmulatorState>, Condvar)>,
     writer: &Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     shutdown: &AtomicBool,

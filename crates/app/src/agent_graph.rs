@@ -43,6 +43,8 @@ pub enum Message {
     RenameInput(String),
     RenameCommit,
     DismissContext,
+    ImportTeam,
+    ExportTeam,
 }
 
 pub type Edge = (String, String, bool, usize, Option<String>);
@@ -100,13 +102,17 @@ pub fn view<'a>(
                 .width(Fill)
                 .center(),
             Space::new().height(16),
-            create_button(),
+            row![
+                create_button(),
+                toolbar_button(labels::AGENT_GRAPH_IMPORT_TEAM, Message::ImportTeam),
+            ]
+            .spacing(8),
         ]
         .width(Fill)
         .align_x(Alignment::Center);
         return container(
-            container(content.width(360.0))
-                .width(360.0)
+            container(content.width(420.0))
+                .width(420.0)
                 .center_x(Fill)
                 .center_y(Fill),
         )
@@ -125,28 +131,12 @@ pub fn view<'a>(
     })
     .width(Fill)
     .height(Fill);
-    let add = button(text(labels::AGENT_GRAPH_NEW_AGENT).size(theme::SIZE_LABEL))
-        .padding([7, 12])
-        .on_press(Message::Create)
-        .style(|_: &Theme, status| button::Style {
-            background: Some(Background::Color(
-                if matches!(status, button::Status::Hovered | button::Status::Pressed) {
-                    theme::palette().panel3
-                } else {
-                    theme::palette().panel
-                },
-            )),
-            text_color: theme::palette().text,
-            border: Border {
-                color: theme::palette().border,
-                width: 1.0,
-                radius: theme::RADIUS_BUTTON.into(),
-            },
-            ..Default::default()
-        });
+    let import_btn = toolbar_button(labels::AGENT_GRAPH_IMPORT_TEAM, Message::ImportTeam);
+    let export_btn = toolbar_button(labels::AGENT_GRAPH_EXPORT_TEAM, Message::ExportTeam);
+    let add = toolbar_button(labels::AGENT_GRAPH_NEW_AGENT, Message::Create);
     let mut layers = iced::widget::stack![
         surface,
-        container(row![add].padding(12))
+        container(row![import_btn, export_btn, add].spacing(8).padding(12))
             .align_right(12)
             .align_top(12)
     ];
@@ -233,6 +223,29 @@ fn menu_action<'a>(label: &'static str, message: Message) -> Element<'a, Message
     button(text(label).size(theme::SIZE_LABEL))
         .width(Fill)
         .on_press(message)
+        .into()
+}
+
+fn toolbar_button<'a>(label: &'static str, message: Message) -> Element<'a, Message> {
+    button(text(label).size(theme::SIZE_LABEL))
+        .padding([7, 12])
+        .on_press(message)
+        .style(|_: &Theme, status| button::Style {
+            background: Some(Background::Color(
+                if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                    theme::palette().panel3
+                } else {
+                    theme::palette().panel
+                },
+            )),
+            text_color: theme::palette().text,
+            border: Border {
+                color: theme::palette().border,
+                width: 1.0,
+                radius: theme::RADIUS_BUTTON.into(),
+            },
+            ..Default::default()
+        })
         .into()
 }
 

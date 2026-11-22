@@ -71,3 +71,39 @@ mod reveal_tests {
         assert_eq!(pane.content.cursor().position.line, 1);
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pending_formatter_cannot_overwrite_edit_undo_and_format_is_one_undo_step() {
+    use crate::lsp_runtime::Pool;
+    use iced::widget::text_editor::Edit;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("file.lsptest");
+    std::fs::write(&path, "a\nb\n").unwrap();
+    let mut config = gsh_config::schema::Config::default();
+    config
+        .lsp_formatters
+        .insert("lsptest".into(), "formatter %FILE%".into());
+    let mut pool = Pool::default();
+    assert!(pool.configure(&config));
+    let mut pane = EditorPane::new(path.clone(), "a\nb\n".into());
+    let mut doc = pool.open(&path, Some(dir.path())).unwrap();
+    let stale = doc.version;
+    doc.pending = true;
+    let _ = pane.update(EditorMsg::Action(Action::Edit(Edit::Insert('x'))));
+    pool.change(&mut doc, pane.highlight_text.clone());
+    let _ = pane.update(EditorMsg::Undo);
+    pool.change(&mut doc, pane.highlight_text.clone());
+    let version = doc.version;
+    doc.pending = true;
+    pane.lsp = Some(doc);
+    assert!(!pane.finish_lsp_format(stale, Ok("stale".into())));
+    assert!(pane.finish_lsp_format(version, Ok("A\nB\n".into())));
+    assert_eq!(pane.content.text(), "A\nB\n");
+    let _ = pane.update(EditorMsg::Undo);
+    assert_eq!(pane.content.text(), "a\nb\n");
+    let _ = pane.update(EditorMsg::Redo);
+    assert_eq!(pane.state.buffer.text(), "A\nB\n");
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "a\nb\n");
+}

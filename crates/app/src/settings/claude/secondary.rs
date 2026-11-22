@@ -23,16 +23,38 @@ pub fn usage(s: &Settings) -> El<'_> {
     let c = &s.claude;
     let p = theme::palette();
     let now = cli::now_epoch_secs();
-    let plan_badge: Option<El<'_>> = match &c.usage {
-        Some(Ok(u)) => u.subscription_type.as_deref().map(|plan| {
-            text(labels::usage_plan_label(plan))
-                .font(theme::FONT_BODY)
-                .size(theme::SETTINGS_DESC_SIZE)
-                .color(p.text3)
-                .into()
-        }),
+    let account_email = match &c.account {
+        Some(Ok(acc)) if acc.logged_in => acc.email.as_deref(),
         _ => None,
     };
+    let plan_label = match &c.usage {
+        Some(Ok(u)) => u.subscription_type.as_deref().map(labels::usage_plan_label),
+        _ => None,
+    };
+    let mut header_trailing = row![].spacing(8.0).align_y(Alignment::Center);
+    if let Some(email) = account_email {
+        header_trailing = header_trailing.push(
+            text(email)
+                .font(theme::FONT_BODY)
+                .size(theme::SETTINGS_DESC_SIZE)
+                .color(p.text2),
+        );
+    }
+    if let Some(plan) = plan_label {
+        header_trailing = header_trailing.push(
+            text(plan)
+                .font(theme::FONT_BODY)
+                .size(theme::SETTINGS_DESC_SIZE)
+                .color(p.text3),
+        );
+    }
+    header_trailing = header_trailing.push(small_button(
+        labels::SETTINGS_ACCOUNT_SWITCH,
+        None,
+        Emphasis::Outline,
+        Some(Message::SwitchAccountAsk),
+    ));
+    let plan_badge: Option<El<'_>> = Some(header_trailing.into());
     let session_rows: Vec<El<'_>> = match &c.usage {
         Some(Err(err)) => vec![note(labels::claude_info_error(err), true)],
         None => vec![note(labels::SETTINGS_CLAUDE_LOADING.to_owned(), false)],
@@ -472,77 +494,237 @@ pub fn cowork() -> El<'static> {
     .into()
 }
 
-/// Aba **Extensões** (`placeholder_panel.dart`).
-pub fn extensions() -> El<'static> {
+/// Aba **Extensões** (`placeholder_panel.dart` + varredura segura do Claude Desktop `1dfnhq1n9fd`).
+pub fn extensions(s: &Settings) -> El<'_> {
     let p = theme::palette();
-    column![
-        section_with_desc(
-            labels::SETTINGS_NAV_EXTENSIONS,
-            Some(labels::SETTINGS_PH_EXTENSIONS_DESC),
-            None,
-            true,
-            Vec::new(),
-        ),
-        container(
+    let discovered = crate::claude_desktop_scanner::scan_home(&s.claude.home);
+    let mut rows: Vec<El<'_>> = Vec::new();
+    for ext in &discovered {
+        let kind_label = match ext.kind {
+            crate::claude_desktop_scanner::DiscoveredKind::McpStdio => "MCP stdio",
+            crate::claude_desktop_scanner::DiscoveredKind::McpHttp => "MCP HTTP",
+            crate::claude_desktop_scanner::DiscoveredKind::DesktopBundle => "Bundle (.mcpb/.dxt)",
+        };
+        let mut desc = format!("{kind_label} · {}", ext.command_or_url);
+        if !ext.args.is_empty() {
+            desc.push_str(&format!(" {}", ext.args.join(" ")));
+        }
+        if !ext.env_keys.is_empty() {
+            desc.push_str(&format!(
+                " · env: {} (valores ocultos)",
+                ext.env_keys.join(", ")
+            ));
+        }
+        let trailing: El<'_> = match &ext.verdict {
+            crate::claude_desktop_scanner::SecurityVerdict::SafeToReview => {
+                if let Ok(cmd) = crate::claude_desktop_scanner::approved_claude_mcp_add_command(ext)
+                {
+                    small_button(
+                        "Importar após revisão",
+                        Some(labels::ICON_PLUS),
+                        Emphasis::Outline,
+                        Some(Message::RunInTerminal(cmd)),
+                    )
+                } else {
+                    chip(String::from("Somente revisão"))
+                }
+            }
+            crate::claude_desktop_scanner::SecurityVerdict::Blocked(reason) => {
+                note(format!("Bloqueado: {reason}"), true)
+            }
+        };
+        let item_row = row![
             column![
-                text(labels::ICON_EXTENSION)
-                    .font(theme::FONT_ICON)
-                    .size(theme::SETTINGS_PLACEHOLDER_ICON)
-                    .color(p.text3),
-                Space::new().height(14.0),
-                text(labels::SETTINGS_PH_EXTENSIONS_EMPTY)
+                text(ext.name.clone())
                     .font(theme::FONT_BODY)
-                    .size(14.5)
-                    .color(p.text2),
-                Space::new().height(8.0),
-                text(labels::SETTINGS_PH_EXTENSIONS)
+                    .size(theme::SETTINGS_NAV_TEXT_SIZE)
+                    .color(p.text),
+                Space::new().height(theme::SETTINGS_ROW_TITLE_GAP),
+                text(desc)
                     .font(theme::FONT_BODY)
                     .size(theme::SETTINGS_DESC_SIZE)
                     .color(p.text3),
             ]
-            .align_x(Alignment::Center),
-        )
-        .width(Fill)
-        .center_x(Fill),
-    ]
-    .width(Fill)
-    .into()
+            .width(Fill),
+            Space::new().width(theme::SETTINGS_ROW_GAP),
+            trailing,
+        ]
+        .align_y(Alignment::Center)
+        .padding([theme::SETTINGS_ROW_VERTICAL, 0]);
+        rows.push(item_row.into());
+    }
+    let mut page = column![section_with_desc(
+        labels::SETTINGS_NAV_EXTENSIONS,
+        Some(labels::SETTINGS_PH_EXTENSIONS_DESC),
+        None,
+        true,
+        rows,
+    )];
+    if discovered.is_empty() {
+        page = page.push(
+            container(
+                column![
+                    text(labels::ICON_EXTENSION)
+                        .font(theme::FONT_ICON)
+                        .size(theme::SETTINGS_PLACEHOLDER_ICON)
+                        .color(p.text3),
+                    Space::new().height(14.0),
+                    text(labels::SETTINGS_PH_EXTENSIONS_EMPTY)
+                        .font(theme::FONT_BODY)
+                        .size(14.5)
+                        .color(p.text2),
+                    Space::new().height(8.0),
+                    text(labels::SETTINGS_PH_EXTENSIONS)
+                        .font(theme::FONT_BODY)
+                        .size(theme::SETTINGS_DESC_SIZE)
+                        .color(p.text3),
+                ]
+                .align_x(Alignment::Center),
+            )
+            .width(Fill)
+            .center_x(Fill),
+        );
+    }
+    page.width(Fill).into()
 }
 
 /// Aba **Sistema** (`system_panel.dart`).
 pub fn system(s: &Settings) -> El<'_> {
     let c = &s.claude;
     let cfg = &s.current;
-    let sys_sec = section(
-        labels::SETTINGS_SYSTEM_TITLE,
-        None,
-        vec![
-            setting_row(
-                labels::SETTINGS_SYSTEM_VERSION,
+    let mut sys_rows = vec![
+        setting_row(
+            labels::SETTINGS_SYSTEM_VERSION,
+            None,
+            Some(value(String::from(env!("CARGO_PKG_VERSION")), false)),
+            None,
+        ),
+        setting_row(
+            labels::SETTINGS_SYSTEM_LAUNCH_TITLE,
+            Some(labels::SETTINGS_SYSTEM_LAUNCH_DESC),
+            Some(switch(
+                cfg.launch_at_startup,
+                Message::Pref(Pref::LaunchAtStartup(!cfg.launch_at_startup)),
+            )),
+            None,
+        ),
+        setting_row(
+            labels::SETTINGS_SYSTEM_KEEP_AWAKE_TITLE,
+            Some(labels::SETTINGS_SYSTEM_KEEP_AWAKE_DESC),
+            Some(switch(
+                c.keep_awake_active,
+                Message::KeepAwakeToggle(!c.keep_awake_active),
+            )),
+            None,
+        ),
+    ];
+
+    if cfg!(target_os = "linux") {
+        let mut lid_controls = row![].spacing(6.0).align_y(Alignment::Center);
+        let selected_duration = c.keep_awake.lid_duration();
+        if let Some(remaining_mins) = c.keep_awake.lid_remaining_minutes() {
+            lid_controls = lid_controls
+                .push(chip(labels::settings_lid_active_remaining(remaining_mins)))
+                .push(small_button(
+                    labels::SETTINGS_SYSTEM_LID_STOP,
+                    None,
+                    Emphasis::Outline,
+                    Some(Message::LidSessionStop),
+                ));
+        } else {
+            for duration in themes::LidSessionDuration::ALL {
+                let emphasis = if duration == selected_duration {
+                    Emphasis::Primary
+                } else {
+                    Emphasis::Outline
+                };
+                lid_controls = lid_controls.push(small_button(
+                    duration.label(),
+                    None,
+                    emphasis,
+                    Some(Message::LidSessionDuration(duration)),
+                ));
+            }
+            lid_controls = lid_controls.push(small_button(
+                labels::SETTINGS_SYSTEM_LID_START,
                 None,
-                Some(value(String::from(env!("CARGO_PKG_VERSION")), false)),
+                Emphasis::Outline,
+                Some(Message::LidSessionStart),
+            ));
+        }
+        sys_rows.push(setting_row(
+            labels::SETTINGS_SYSTEM_LID_SESSION_TITLE,
+            Some(labels::SETTINGS_SYSTEM_LID_SESSION_DESC),
+            Some(lid_controls.into()),
+            None,
+        ));
+        if let Some(reason) = c.keep_awake.lid_stop_reason() {
+            let reason_text = match reason {
+                themes::LidSafetyStop::LowBattery(pct) => labels::settings_lid_stopped_battery(pct),
+                themes::LidSafetyStop::HighTemp(temp_c) => {
+                    labels::settings_lid_stopped_temp(temp_c)
+                }
+            };
+            sys_rows.push(note(reason_text, true));
+        }
+
+        let bag_editable = c.bag_mode.is_editable();
+        let hotspot = text_input("SSID do hotspot", &c.bag_mode.config.hotspot_ssid)
+            .font(theme::FONT_BODY)
+            .size(theme::SETTINGS_DROPDOWN_TEXT)
+            .padding([6, 10])
+            .width(Length::Fixed(150.0))
+            .style(field_style(theme::SETTINGS_TEXT_FIELD_RADIUS));
+        let preferred = text_input("Wi-Fi separados por vírgula", &c.bag_mode.preferred_draft)
+            .font(theme::FONT_BODY)
+            .size(theme::SETTINGS_DROPDOWN_TEXT)
+            .padding([6, 10])
+            .width(Length::Fixed(170.0))
+            .style(field_style(theme::SETTINGS_TEXT_FIELD_RADIUS));
+        let (hotspot, preferred) = if bag_editable {
+            (
+                hotspot.on_input(Message::BagHotspotInput),
+                preferred.on_input(Message::BagPreferredInput),
+            )
+        } else {
+            (hotspot, preferred)
+        };
+        let bag_controls = row![
+            hotspot,
+            preferred,
+            small_button(
+                "Aplicar",
                 None,
+                Emphasis::Outline,
+                bag_editable.then_some(Message::BagApplyHotspot),
             ),
-            setting_row(
-                labels::SETTINGS_SYSTEM_LAUNCH_TITLE,
-                Some(labels::SETTINGS_SYSTEM_LAUNCH_DESC),
-                Some(switch(
-                    cfg.launch_at_startup,
-                    Message::Pref(Pref::LaunchAtStartup(!cfg.launch_at_startup)),
-                )),
-                None,
-            ),
-            setting_row(
-                labels::SETTINGS_SYSTEM_KEEP_AWAKE_TITLE,
-                Some(labels::SETTINGS_SYSTEM_KEEP_AWAKE_DESC),
-                Some(switch(
-                    c.keep_awake_active,
-                    Message::KeepAwakeToggle(!c.keep_awake_active),
-                )),
-                None,
-            ),
-        ],
-    );
+        ]
+        .spacing(6.0)
+        .align_y(Alignment::Center);
+        let bag_controls = if bag_editable || c.bag_mode.config.enabled {
+            bag_controls.push(switch(
+                c.bag_mode.config.enabled,
+                Message::BagModeToggle(!c.bag_mode.config.enabled),
+            ))
+        } else {
+            bag_controls
+        };
+
+        sys_rows.push(setting_row(
+            "Modo bolsa (hotspot + Wi-Fi)",
+            Some("Durante a sessão de tampa fechada, monitora a internet e alterna entre o hotspot e as redes Wi-Fi preferidas. Ligue o hotspot no celular e mantenha o notebook ventilado."),
+            Some(bag_controls.into()),
+            None,
+        ));
+        if let Some(status) = &c.bag_mode.status {
+            let text = match status {
+                Ok(text) | Err(text) => text,
+            };
+            sys_rows.push(note(text.clone(), status.is_err()));
+        }
+    }
+
+    let sys_sec = section(labels::SETTINGS_SYSTEM_TITLE, None, sys_rows);
 
     let root = themes::effective_root(&c.home);
     let root_str = if root.as_os_str().is_empty() {

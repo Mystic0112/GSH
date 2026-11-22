@@ -13,7 +13,12 @@ use std::time::Duration;
 
 use gsh_core::status::{AgentHarness, HookEvent, StatusUpdate, TurnStatus};
 use gsh_core::wire;
-use gsh_ipc::{Delivery, Endpoint, ServerConfig, ServerError, StatusServer, Transport};
+#[cfg(unix)]
+use gsh_ipc::ServerError;
+use gsh_ipc::{Delivery, Endpoint, ServerConfig, StatusServer, Transport};
+
+#[path = "server/connections.rs"]
+mod connections;
 
 const WAIT: Duration = Duration::from_secs(5);
 const QUIET: Duration = Duration::from_millis(300);
@@ -94,7 +99,11 @@ impl Fixture {
 }
 
 fn send_to(server: &StatusServer, line: &str) -> String {
-    let mut conn = Conn::connect(server);
+    send_to_endpoint(server.endpoint(), line)
+}
+
+fn send_to_endpoint(endpoint: &Endpoint, line: &str) -> String {
+    let mut conn = Conn::connect_endpoint(endpoint);
     conn.write_all(line.as_bytes()).unwrap();
     let mut reply = String::new();
     conn.read_to_string(&mut reply).unwrap();
@@ -115,7 +124,11 @@ enum Conn {
 
 impl Conn {
     fn connect(server: &StatusServer) -> Conn {
-        match server.endpoint() {
+        Self::connect_endpoint(server.endpoint())
+    }
+
+    fn connect_endpoint(endpoint: &Endpoint) -> Conn {
+        match endpoint {
             #[cfg(unix)]
             Endpoint::Unix(path) => {
                 Conn::Unix(std::os::unix::net::UnixStream::connect(path).unwrap())
@@ -162,7 +175,6 @@ impl Write for Conn {
         }
     }
 }
-
 const FULL: &str = r#"{"ev":"PostToolUse","files":["/r/a.rs"],"hn":"codex","paneId":"t3","sid":"s1","st":"working","tid":"u1","tx":"/t.jsonl"}"#;
 
 fn full_update() -> StatusUpdate {
@@ -178,10 +190,11 @@ fn full_update() -> StatusUpdate {
 }
 
 fn transports() -> Vec<Transport> {
-    let mut all = vec![Transport::Tcp];
-    #[cfg(unix)]
-    all.push(Transport::Unix);
-    all
+    vec![
+        Transport::Tcp,
+        #[cfg(unix)]
+        Transport::Unix,
+    ]
 }
 
 #[test]
@@ -361,8 +374,10 @@ fn tcp_exige_token_e_anuncia_o_endpoint() {
     let fx = Fixture::start(Transport::Tcp);
     let tok = fx.token().unwrap();
     assert_eq!(tok.len(), 32);
-    let Endpoint::Tcp { port } = *fx.server.endpoint() else {
-        panic!("esperava Tcp");
+    let port = match *fx.server.endpoint() {
+        Endpoint::Tcp { port } => port,
+        #[cfg(unix)]
+        Endpoint::Unix(_) => panic!("esperava Tcp"),
     };
     assert_eq!(
         fx.server.hook_env(),
@@ -405,10 +420,18 @@ fn tcp_exige_token_e_anuncia_o_endpoint() {
     );
     // Com o token certo chega na camada de comandos.
     let cmd = wire::with_token(wire::cmd_request("permission-ask", None, None), &tok);
-    assert_eq!(
-        fx.send(&format!("{cmd}\n")),
-        "{\"ok\":false,\"error\":\"commands unavailable\"}\n"
-    );
+    let line = format!("{cmd}\n");
+    let endpoint = fx.server.endpoint().clone();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done_tx.send(send_to_endpoint(&endpoint, &line));
+    });
+    let Delivery::Command(command) = fx.rx.recv_timeout(WAIT).unwrap() else {
+        panic!("permission-ask should reach the app command handler");
+    };
+    assert_eq!(command.request["cmd"], "permission-ask");
+    command.reply.send(serde_json::json!({"ok": true})).unwrap();
+    assert_eq!(done_rx.recv_timeout(WAIT).unwrap(), "{\"ok\":true}\n");
 
     // E o status com o token certo entra.
     fx.send(&format!(
@@ -418,84 +441,4 @@ fn tcp_exige_token_e_anuncia_o_endpoint() {
     let u = fx.status();
     assert_eq!((u.pane_id.as_str(), u.status), ("ok", TurnStatus::Waiting));
     fx.assert_quiet();
-}
-
-#[test]
-fn muitas_conexoes_simultaneas_chegam_todas() {
-    for t in transports() {
-        let fx = Fixture::start(t);
-        let n = 40;
-        let lines: Vec<String> = (0..n)
-            .map(|i| {
-                let msg = serde_json::json!({"paneId": format!("p{i}"), "st": "working"});
-                format!("{}\n", fx.authed(msg))
-            })
-            .collect();
-        std::thread::scope(|s| {
-            for line in &lines {
-                let server = &fx.server;
-                s.spawn(move || send_to(server, line));
-            }
-        });
-        let mut got: Vec<String> = (0..n).map(|_| fx.status().pane_id).collect();
-        got.sort();
-        let mut want: Vec<String> = (0..n).map(|i| format!("p{i}")).collect();
-        want.sort();
-        assert_eq!(got, want, "{t:?}");
-    }
-}
-
-#[test]
-fn flavors_dividem_o_gsh_dir_sem_se_apagar() {
-    // Dev e instalado rodam lado a lado sobre o mesmo `~/.gsh`.
-    let home = unique_dir("gi");
-    let mk = |debug: bool| {
-        let mut c = config(&home, Transport::native());
-        c.debug = debug;
-        c
-    };
-    let (a, _ra) = StatusServer::start(&mk(false)).unwrap();
-    let (b, rb) = StatusServer::start(&mk(true)).unwrap();
-    assert_ne!(a.endpoint(), b.endpoint());
-    drop(a);
-    // Derrubar um não derruba o do outro.
-    let mut c = Conn::connect(&b);
-    let tok = b
-        .hook_env()
-        .into_iter()
-        .find(|(k, _)| *k == wire::ENV_STATUS_TOKEN)
-        .map(|(_, v)| v);
-    let msg = serde_json::json!({"paneId": "dev", "st": "idle"});
-    let line = match tok {
-        Some(tok) => wire::with_token(msg, &tok),
-        None => msg,
-    };
-    c.write_all(format!("{line}\n").as_bytes()).unwrap();
-    assert!(matches!(
-        rb.recv_timeout(WAIT).unwrap(),
-        Delivery::Status(_)
-    ));
-    drop(c);
-    drop(b);
-    let _ = std::fs::remove_dir_all(&home);
-}
-
-#[cfg(unix)]
-#[test]
-fn parar_nao_trava_se_o_socket_foi_apagado_por_fora() {
-    // Outra instância do mesmo flavor apaga e refaz o arquivo: o nosso `stop`
-    // não pode depender do caminho para terminar.
-    let home = unique_dir("gi");
-    let (server, _rx) = StatusServer::start(&config(&home, Transport::Unix)).unwrap();
-    let Endpoint::Unix(path) = server.endpoint().clone() else {
-        panic!("esperava Unix");
-    };
-    std::fs::remove_file(&path).unwrap();
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        server.stop();
-        let _ = done_tx.send(());
-    });
-    done_rx.recv_timeout(WAIT).expect("stop travou");
-    let _ = std::fs::remove_dir_all(&home);
 }

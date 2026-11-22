@@ -6,21 +6,20 @@
 //! (`"type":"cmd"`) espera a resposta com a conexão aberta. Status não tem
 //! resposta; comando tem uma linha de resposta e a conexão fecha.
 //!
-//! Comandos da CLI são outra camada: por ora todo comando válido recebe
-//! `commands unavailable`, o mesmo que o app original responde sem handler
-//! (o `gsh hook` trata como "deixa o terminal perguntar").
+//! Comandos da CLI são entregues ao app para decisão; pedidos de permissão
+//! podem manter a conexão aberta por até 24 h, como o timeout do hook Claude.
+//! Se o app não estiver ouvindo, a CLI deixa o terminal perguntar.
 
 use std::fs::{self, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::io::{self, Write};
+use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
-use gsh_core::status::{decode_line, Incoming, LineError, StatusUpdate};
+use gsh_core::status::{LineError, StatusUpdate};
 use gsh_core::wire::{ENV_STATUS_PORT, ENV_STATUS_TOKEN};
 use serde_json::Value;
 use thiserror::Error;
@@ -28,21 +27,10 @@ use thiserror::Error;
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, OpenOptionsExt, PermissionsExt};
 #[cfg(unix)]
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixListener;
 
-/// Teto de uma linha. Folga larga: o maior payload é o `write` da CLI (texto
-/// em base64). Acima disso a linha vira lixo e a conexão cai.
-const MAX_LINE_BYTES: u64 = 16 * 1024 * 1024;
-
-/// Quanto esperar a linha de um cliente. O hook escreve na hora; sem teto, um
-/// cliente mudo seguraria uma thread para sempre.
-const READ_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Intervalo do `accept` sem conexão pendente (ver `accept_loop`).
-const ACCEPT_POLL: Duration = Duration::from_millis(25);
-
-const REPLY_INVALID_TOKEN: &[u8] = b"{\"ok\":false,\"error\":\"invalid token\"}\n";
-const REPLY_COMMANDS_UNAVAILABLE: &[u8] = b"{\"ok\":false,\"error\":\"commands unavailable\"}\n";
+mod connections;
+use connections::{accept_loop, Listener};
 
 #[derive(Debug, Error)]
 pub enum ServerError {
@@ -160,7 +148,7 @@ pub struct PendingCommand {
 }
 
 /// Servidor de status em execução. Derrubar (`stop` ou `Drop`) fecha o listener
-/// e apaga o socket (ou o arquivo de endpoint).
+/// e as conexões pendentes e apaga o socket (ou o arquivo de endpoint).
 #[derive(Debug)]
 pub struct StatusServer {
     endpoint: Endpoint,
@@ -173,10 +161,17 @@ pub struct StatusServer {
 }
 
 struct Shared {
+    stop: Arc<AtomicBool>,
     token: Option<String>,
     // ponytail: canal sem limite; o consumidor é a UI, que drena por tick.
     // Se o app parar de ler, troque por `sync_channel` e descarte o mais antigo.
     tx: Sender<Delivery>,
+}
+
+impl Shared {
+    fn stopping(&self) -> bool {
+        self.stop.load(Ordering::Acquire)
+    }
 }
 
 impl StatusServer {
@@ -247,15 +242,13 @@ impl StatusServer {
         let (tx, rx) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let shared = Arc::new(Shared {
+            stop: Arc::clone(&stop),
             token: token.clone(),
             tx,
         });
-        let accept = {
-            let stop = Arc::clone(&stop);
-            thread::Builder::new()
-                .name("gsh-status-accept".into())
-                .spawn(move || accept_loop(&listener, &stop, &shared))
-        };
+        let accept = thread::Builder::new()
+            .name("gsh-status-accept".into())
+            .spawn(move || accept_loop(listener, &shared));
         let accept = match accept {
             Ok(handle) => handle,
             Err(source) => {
@@ -381,193 +374,9 @@ fn write_endpoint_file(path: &Path, port: u16, token: &str) -> io::Result<()> {
     opts.open(path)?.write_all(body.as_bytes())
 }
 
-enum Listener {
-    #[cfg(unix)]
-    Unix(UnixListener),
-    Tcp(TcpListener),
-}
-
-impl Listener {
-    fn set_nonblocking(&self) -> io::Result<()> {
-        match self {
-            #[cfg(unix)]
-            Listener::Unix(l) => l.set_nonblocking(true),
-            Listener::Tcp(l) => l.set_nonblocking(true),
-        }
-    }
-
-    fn accept(&self) -> io::Result<Stream> {
-        match self {
-            #[cfg(unix)]
-            Listener::Unix(l) => l.accept().map(|(s, _)| Stream::Unix(s)),
-            Listener::Tcp(l) => l.accept().map(|(s, _)| Stream::Tcp(s)),
-        }
-    }
-}
-
-enum Stream {
-    #[cfg(unix)]
-    Unix(UnixStream),
-    Tcp(TcpStream),
-}
-
-impl Stream {
-    /// Conexão aceita de um listener não bloqueante pode herdar o modo (macOS,
-    /// Windows); a thread da conexão lê de forma bloqueante, com timeout.
-    fn set_blocking(&self) -> io::Result<()> {
-        match self {
-            #[cfg(unix)]
-            Stream::Unix(s) => s.set_nonblocking(false),
-            Stream::Tcp(s) => s.set_nonblocking(false),
-        }
-    }
-
-    fn set_read_timeout(&self, dur: Duration) -> io::Result<()> {
-        match self {
-            #[cfg(unix)]
-            Stream::Unix(s) => s.set_read_timeout(Some(dur)),
-            Stream::Tcp(s) => s.set_read_timeout(Some(dur)),
-        }
-    }
-}
-
-impl Read for Stream {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            #[cfg(unix)]
-            Stream::Unix(s) => s.read(buf),
-            Stream::Tcp(s) => s.read(buf),
-        }
-    }
-}
-
-impl Write for Stream {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            #[cfg(unix)]
-            Stream::Unix(s) => s.write(buf),
-            Stream::Tcp(s) => s.write(buf),
-        }
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            #[cfg(unix)]
-            Stream::Unix(s) => s.flush(),
-            Stream::Tcp(s) => s.flush(),
-        }
-    }
-}
-
-/// `accept` não bloqueante com respiro: o shutdown só precisa ligar a flag, sem
-/// depender de o caminho do socket ainda apontar para nós (outro processo pode
-/// ter apagado e refeito o arquivo, e um "acorda o accept" iria para ele).
-// ponytail: ~40 despertares/s ocioso e até 25 ms de latência no accept. Se
-// incomodar, troque por poll/epoll (mio) com um waker.
-fn accept_loop(listener: &Listener, stop: &AtomicBool, shared: &Arc<Shared>) {
-    while !stop.load(Ordering::Acquire) {
-        match listener.accept() {
-            Ok(stream) => {
-                if stream.set_blocking().is_err() {
-                    continue;
-                }
-                let shared = Arc::clone(shared);
-                // Falha ao criar a thread derruba só esta conexão.
-                let _ = thread::Builder::new()
-                    .name("gsh-status-conn".into())
-                    .spawn(move || handle(stream, &shared));
-            }
-            // Sem conexão pendente, ou erro de accept (fds esgotados, conexão
-            // abortada): não derruba o servidor.
-            Err(_) => thread::sleep(ACCEPT_POLL),
-        }
-    }
-}
-
-fn handle(mut stream: Stream, shared: &Shared) {
-    // O cliente do hook escreve e fecha na hora. No macOS o setsockopt do
-    // timeout devolve EINVAL num socket Unix cujo par já fechou, mas a leitura
-    // abaixo ainda devolve os dados e o EOF, sem precisar do timeout. Só
-    // desistimos de outro erro.
-    match stream.set_read_timeout(READ_TIMEOUT) {
-        Ok(()) => {}
-        Err(e) if e.kind() == io::ErrorKind::InvalidInput => {}
-        Err(_) => return,
-    }
-    let Ok(line) = read_line_capped(&mut stream, MAX_LINE_BYTES) else {
-        return;
-    };
-    let reply: Option<Vec<u8>> = match decode_line(&line, shared.token.as_deref()) {
-        Ok(Incoming::Status(update)) => {
-            let _ = shared.tx.send(Delivery::Status(update));
-            None
-        }
-        Ok(Incoming::Command) => match serde_json::from_str::<Value>(&line) {
-            Ok(request) if request.get("cmd").and_then(Value::as_str) != Some("permission-ask") => {
-                let (reply, response) = mpsc::sync_channel(1);
-                if shared
-                    .tx
-                    .send(Delivery::Command(PendingCommand { request, reply }))
-                    .is_ok()
-                {
-                    let value = response
-                        .recv_timeout(Duration::from_secs(45))
-                        .unwrap_or_else(
-                            |_| serde_json::json!({"ok": false, "error": "command timed out"}),
-                        );
-                    serde_json::to_vec(&value).ok().map(|mut bytes| {
-                        bytes.push(b'\n');
-                        bytes
-                    })
-                } else {
-                    Some(REPLY_COMMANDS_UNAVAILABLE.to_vec())
-                }
-            }
-            _ => Some(REPLY_COMMANDS_UNAVAILABLE.to_vec()),
-        },
-        Ok(Incoming::BadToken { command: true }) => Some(REPLY_INVALID_TOKEN.to_vec()),
-        Ok(Incoming::BadToken { command: false } | Incoming::Ignored) => None,
-        Err(err) => {
-            let _ = shared.tx.send(Delivery::Malformed(err));
-            None
-        }
-    };
-    if let Some(reply) = reply {
-        let _ = stream.write_all(&reply).and_then(|()| stream.flush());
-    }
-}
-
-/// Lê até a primeira quebra de linha, ou o fim da conexão, ou `cap` bytes. A
-/// linha sem `\n` final conta (o cliente do hook fecha logo após escrever).
-fn read_line_capped<R: Read>(reader: R, cap: u64) -> io::Result<String> {
-    let mut buf = Vec::new();
-    BufReader::new(reader.take(cap)).read_until(b'\n', &mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn le_so_a_primeira_linha() {
-        let got = read_line_capped(&b"um\ndois\n"[..], 100).unwrap();
-        assert_eq!(got, "um\n");
-    }
-
-    #[test]
-    fn linha_sem_quebra_final_vale() {
-        assert_eq!(
-            read_line_capped(&b"{\"a\":1}"[..], 100).unwrap(),
-            "{\"a\":1}"
-        );
-        assert_eq!(read_line_capped(&b""[..], 100).unwrap(), "");
-    }
-
-    #[test]
-    fn teto_corta_linha_gigante() {
-        let got = read_line_capped(&b"abcdefghij\n"[..], 4).unwrap();
-        assert_eq!(got, "abcd");
-    }
 
     #[test]
     fn token_tem_32_hex_e_muda() {

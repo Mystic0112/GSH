@@ -383,7 +383,7 @@ pub enum IslandMsg {
     RevealTab(String),
     /// Clique num botão de permissão ("Permitir", "Sempre", "Negar", "No terminal").
     DecidePermission {
-        tab_id: String,
+        ask_id: String,
         decision: PermissionDecision,
     },
 }
@@ -535,30 +535,7 @@ impl AgentIsland {
                 next.retain(|a| !(a.tab_id == tab_id && a.state == IslandAgentState::Finished));
                 self.set_agents(next);
             }
-            IslandMsg::DecidePermission { tab_id, decision } => {
-                let mut next = self.agents.clone();
-                for agent in &mut next {
-                    if agent.tab_id == tab_id {
-                        agent.ask = None;
-                        match decision {
-                            PermissionDecision::Allow | PermissionDecision::AllowAlways => {
-                                agent.state = IslandAgentState::Working;
-                            }
-                            PermissionDecision::Deny => {
-                                agent.state = IslandAgentState::Finished;
-                            }
-                            PermissionDecision::Pass => {
-                                agent.state = IslandAgentState::Waiting;
-                            }
-                        }
-                    }
-                }
-                if decision == PermissionDecision::Pass {
-                    self.pinned = false;
-                    self.active_tab_id = Some(tab_id);
-                }
-                self.set_agents(next);
-            }
+            IslandMsg::DecidePermission { .. } => {}
         }
     }
 

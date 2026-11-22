@@ -52,6 +52,8 @@ pub enum PaneTab {
     Harness(PathBuf),
     /// Aba de detalhe de um caso de Telemetria identificada pelo fingerprint.
     TelemetryCase { fingerprint: String, title: String },
+    /// Navegador web integrado (cliente do daemon `gsh-browser`).
+    Browser,
 }
 
 impl PaneTab {
@@ -86,6 +88,7 @@ impl PaneTab {
             } => format!("{collection} ({conn})"),
             Self::Harness(_) => labels::HARNESS_TAB_TITLE.to_string(),
             Self::TelemetryCase { title, .. } => title.clone(),
+            Self::Browser => labels::SETTINGS_FEATURE_BROWSER.to_string(),
         }
     }
 
@@ -102,6 +105,7 @@ impl PaneTab {
             Self::Mongo { .. } => labels::ICON_DATA_OBJECT,
             Self::Harness(_) => labels::ICON_TUNE,
             Self::TelemetryCase { .. } => labels::ICON_MONITOR_HEART,
+            Self::Browser => labels::ICON_LANGUAGE,
             Self::File(path) => {
                 let name = file_display_name(path);
                 labels::file_icon_for_name(&name)
@@ -222,6 +226,20 @@ impl PaneModel {
             self.active = Some(index);
         } else {
             self.tabs.push(PaneTab::Farm);
+            self.active = Some(self.tabs.len().saturating_sub(1));
+        }
+    }
+
+    /// Abre ou ativa a aba única do navegador integrado.
+    pub fn open_browser(&mut self) {
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| matches!(tab, PaneTab::Browser))
+        {
+            self.active = Some(index);
+        } else {
+            self.tabs.push(PaneTab::Browser);
             self.active = Some(self.tabs.len().saturating_sub(1));
         }
     }

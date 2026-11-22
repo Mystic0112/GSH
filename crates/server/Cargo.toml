@@ -1,0 +1,20 @@
+[package]
+name = "gsh-server"
+description = "Persistent headless GSH terminal sessions over a private Unix socket"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+base64 = "0.22"
+libc = "0.2"
+portable-pty = "0.9"
+serde.workspace = true
+serde_json.workspace = true
+signal-hook = "0.4"
+socket2 = "0.6"
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile = "3"

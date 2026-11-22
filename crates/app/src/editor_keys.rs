@@ -18,7 +18,6 @@ pub(crate) fn bind_key(
         if key.modifiers.command() {
             if let keyboard::Key::Character(c) = &key.key {
                 match c.to_lowercase().as_str() {
-                    "s" => return Some(Binding::Custom(EditorMsg::Save)),
                     "z" if key.modifiers.shift() => return Some(Binding::Custom(EditorMsg::Redo)),
                     "z" => return Some(Binding::Custom(EditorMsg::Undo)),
                     "y" => return Some(Binding::Custom(EditorMsg::Redo)),

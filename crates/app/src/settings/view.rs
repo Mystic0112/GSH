@@ -1,8 +1,9 @@
 //! Interface da aba de configurações.
 use super::{claude, Error, Message, Section, Settings};
+use crate::scheduled_automations::{RunStatus, WEEKDAYS};
 use crate::{labels, theme};
-use gsh_config::schema::{AppFeature, AppThemeMode, TranscriptWidth};
-use iced::widget::{button, column, container, pick_list, row, text, text_input};
+use gsh_config::schema::{AppFeature, AppThemeMode, HarnessKind, TranscriptWidth};
+use iced::widget::{button, column, container, pick_list, row, text, text_editor, text_input};
 use iced::{Alignment, Background, Border, Element, Fill, Theme};
 
 pub(super) fn choice<M: Clone + 'static>(
@@ -283,20 +284,12 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
                 .size(theme::SIZE_TITLE)
                 .color(theme::palette().text),
             setting_row(
-                labels::SETTINGS_NOTIFY_TURN_DONE,
+                labels::SETTINGS_AGENT_NOTIFICATIONS,
                 switch(
                     s.notifications,
                     Message::NotificationsChanged(!s.notifications)
                 )
-            ),
-            setting_row(
-                labels::SETTINGS_NOTIFY_PERMISSION,
-                switch(
-                    s.permission_sound,
-                    Message::PermissionSoundChanged(!s.permission_sound)
-                )
-            ),
-            text(labels::SETTINGS_NOTIFICATIONS_PENDING)
+            )
         ],
         Section::Team => {
             let team = &s.current.farm.team;
@@ -384,6 +377,238 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
             rows
         }
         Section::LocalSend => column![super::localsend::view(&s.localsend)],
+        Section::Automations => {
+            let ws_placeholder = s
+                .claude
+                .workspace
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| labels::SETTINGS_ROUTINE_WORKSPACE_HINT.to_owned());
+            let mut col = column![
+                text(labels::SETTINGS_AUTOMATIONS)
+                    .font(theme::FONT_TITLE)
+                    .size(theme::SIZE_TITLE)
+                    .color(theme::palette().text),
+                setting_row(
+                    labels::SETTINGS_AUTOMATION_HARNESS,
+                    pick_list(
+                        &[
+                            labels::SETTINGS_AUTOMATION_DISABLED,
+                            "Antigravity",
+                            "Claude Code",
+                            "Codex",
+                            "Cursor",
+                            "GitHub Copilot",
+                            "OpenCode",
+                            "Pi",
+                        ][..],
+                        Some(harness_label(s.current.automation.harness_id)),
+                        |value| Message::AutomationHarnessChanged(value.to_owned()),
+                    )
+                    .into(),
+                ),
+                setting_row(
+                    labels::SETTINGS_AUTOMATION_MODEL,
+                    text_input(
+                        "Padrão do harness",
+                        s.current.automation.model_id.as_deref().unwrap_or("")
+                    )
+                    .on_input(Message::AutomationModelChanged)
+                    .style(input_style)
+                    .width(240)
+                    .into(),
+                ),
+                text(labels::SETTINGS_ROUTINES_TITLE)
+                    .font(theme::FONT_TITLE)
+                    .size(theme::SIZE_SECTION_HEADER)
+                    .color(theme::palette().text),
+                text(labels::SETTINGS_ROUTINES_DESC)
+                    .font(theme::FONT_BODY)
+                    .size(theme::SIZE_LABEL)
+                    .color(theme::palette().text3),
+                row![
+                    text_input(labels::SETTINGS_ROUTINE_NAME_HINT, &s.routine_name)
+                        .on_input(Message::RoutineNameChanged)
+                        .style(input_style)
+                        .width(180),
+                    text_input(labels::SETTINGS_ROUTINE_TIME_HINT, &s.routine_time)
+                        .on_input(Message::RoutineTimeChanged)
+                        .style(input_style)
+                        .width(110),
+                    pick_list(
+                        &crate::scheduled_automations::ALLOWED_ROUTINE_HARNESSES[..],
+                        Some(s.routine_harness.as_str()),
+                        |val| Message::RoutineHarnessChanged(val.to_owned()),
+                    ),
+                ]
+                .spacing(8),
+                WEEKDAYS
+                    .into_iter()
+                    .zip(s.routine_weekdays)
+                    .enumerate()
+                    .fold(
+                        row![text("Dias")].spacing(4),
+                        |days, (index, (day, selected))| {
+                            days.push(choice(day, selected, Message::RoutineWeekdayToggled(index)))
+                        }
+                    ),
+                text_input(&ws_placeholder, &s.routine_workspace)
+                    .on_input(Message::RoutineWorkspaceChanged)
+                    .style(input_style),
+                row![
+                    text_input(labels::SETTINGS_ROUTINE_PROMPT_HINT, &s.routine_prompt)
+                        .on_input(Message::RoutinePromptChanged)
+                        .on_submit(Message::RoutineAdd)
+                        .style(input_style),
+                    button(text(labels::SETTINGS_ROUTINE_ADD).size(theme::SIZE_LABEL))
+                        .padding([7, 12])
+                        .on_press(Message::RoutineAdd)
+                        .style(theme::ghost_button),
+                ]
+                .spacing(8),
+            ]
+            .spacing(10);
+            if let Some(err) = &s.routine_error {
+                col = col.push(
+                    text(err)
+                        .font(theme::FONT_BODY)
+                        .size(theme::SIZE_LABEL)
+                        .color(theme::palette().error),
+                );
+            }
+            if s.routines.routines().is_empty() {
+                col = col.push(
+                    text(labels::SETTINGS_ROUTINES_EMPTY)
+                        .font(theme::FONT_BODY)
+                        .size(theme::SIZE_LABEL)
+                        .color(theme::palette().text3),
+                );
+            } else {
+                for routine in s.routines.routines() {
+                    let last = routine
+                        .last_run_date
+                        .as_deref()
+                        .unwrap_or("ainda não rodou");
+                    let summary = format!(
+                        "[{} · {}] {} · {} · {} (último disparo agendado: {last})\n{}",
+                        routine.time_hhmm,
+                        WEEKDAYS
+                            .into_iter()
+                            .zip(routine.weekdays)
+                            .filter_map(|(day, selected)| selected.then_some(day))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        routine.name,
+                        routine.harness,
+                        routine.workspace,
+                        routine.prompt
+                    );
+                    let id_toggle = routine.id.clone();
+                    let id_run = routine.id.clone();
+                    let id_rm = routine.id.clone();
+                    col = col.push(
+                        row![
+                            text(summary)
+                                .font(theme::FONT_BODY)
+                                .size(theme::SIZE_LABEL)
+                                .color(theme::palette().text)
+                                .width(iced::Fill),
+                            switch(
+                                routine.enabled,
+                                Message::RoutineToggle(id_toggle, !routine.enabled),
+                            ),
+                            button(text(labels::SETTINGS_ROUTINE_RUN_NOW).size(theme::SIZE_BADGE))
+                                .padding([4, 8])
+                                .on_press_maybe(
+                                    (!s.routines.is_running(&id_run))
+                                        .then_some(Message::RoutineRunNow(id_run))
+                                )
+                                .style(theme::ghost_button),
+                            button(text(labels::SETTINGS_ROUTINE_REMOVE).size(theme::SIZE_BADGE))
+                                .padding([4, 8])
+                                .on_press(Message::RoutineRemove(id_rm))
+                                .style(theme::ghost_button),
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center),
+                    );
+                }
+            }
+            if !s.routines.runs().is_empty() {
+                col = col.push(text("Histórico de execuções").font(theme::FONT_BODY_SEMIBOLD));
+                for run in s.routines.runs().iter().rev() {
+                    col = col.push(
+                        row![
+                            text(run.summary()).size(theme::SIZE_LABEL).width(Fill),
+                            button(text("Abrir log").size(theme::SIZE_BADGE))
+                                .padding([4, 8])
+                                .on_press_maybe(
+                                    (run.status != RunStatus::Running)
+                                        .then(|| Message::RoutineOpenLog(run.log()))
+                                )
+                                .style(theme::ghost_button),
+                        ]
+                        .spacing(8)
+                        .align_y(Alignment::Center),
+                    );
+                }
+            }
+            col
+        }
+        Section::LanguageServers => column![
+            text(labels::SETTINGS_LANGUAGE_SERVERS)
+                .font(theme::FONT_TITLE)
+                .size(theme::SIZE_TITLE)
+                .color(theme::palette().text),
+            text(labels::SETTINGS_LSP_HELP).color(theme::palette().text2),
+            setting_row(
+                labels::SETTINGS_LSP_COMMANDS,
+                text_editor(&s.lsp_commands)
+                    .on_action(Message::LspCommandsAction)
+                    .font(theme::FONT_MONO)
+                    .size(theme::SIZE_MONO)
+                    .height(160)
+                    .style(settings_editor_style)
+                    .into(),
+            ),
+            setting_row(
+                labels::SETTINGS_LSP_FORMATTERS,
+                text_editor(&s.lsp_formatters)
+                    .on_action(Message::LspFormattersAction)
+                    .font(theme::FONT_MONO)
+                    .size(theme::SIZE_MONO)
+                    .height(160)
+                    .style(settings_editor_style)
+                    .into(),
+            ),
+        ],
+        Section::Features => {
+            let features = [
+                (AppFeature::Chat, labels::SETTINGS_FEATURE_CHAT),
+                (AppFeature::Farm, labels::SETTINGS_FEATURE_FARM),
+                (AppFeature::Harness, labels::SETTINGS_FEATURE_HARNESS),
+                (AppFeature::AgentGraph, labels::SETTINGS_FEATURE_GRAPH),
+                (AppFeature::Browser, labels::SETTINGS_FEATURE_BROWSER),
+                (AppFeature::AgentIsland, labels::SETTINGS_FEATURE_ISLAND),
+            ];
+            let mut rows = column![text(labels::SETTINGS_FEATURES)
+                .font(theme::FONT_TITLE)
+                .size(theme::SIZE_TITLE)
+                .color(theme::palette().text)];
+            for (feature, label) in features {
+                rows = rows.push(setting_row(
+                    label,
+                    switch(
+                        s.current.shows_feature(feature),
+                        Message::FeatureVisibilityChanged(
+                            feature,
+                            !s.current.shows_feature(feature),
+                        ),
+                    ),
+                ));
+            }
+            rows
+        }
     }
     .spacing(theme::SETTINGS_SECTION_TITLE_GAP)
     .width(Fill);
@@ -402,6 +627,8 @@ pub fn view(s: &Settings) -> Element<'_, Message> {
             Error::InvalidTerminalSize => labels::SETTINGS_INVALID_TERMINAL_SIZE,
             Error::InvalidTabSize => labels::SETTINGS_INVALID_TAB_SIZE,
             Error::InvalidLocalSendLimit => labels::SETTINGS_INVALID_LOCALSEND_LIMIT,
+            Error::InvalidLspSettings => labels::SETTINGS_LSP_INVALID,
+            Error::InvalidAutomation => labels::SETTINGS_AUTOMATION_INVALID,
             Error::InvalidSection | Error::Config(_) | Error::Io(_) | Error::Document(_) => {
                 labels::SETTINGS_CONFIG_ERROR
             }
@@ -500,6 +727,21 @@ fn navigation(s: &Settings) -> Element<'_, Message> {
             labels::ICON_FILE_ITEM,
             labels::LOCALSEND_TITLE,
             Section::LocalSend,
+        ),
+        (
+            labels::ICON_BOLT,
+            labels::SETTINGS_AUTOMATIONS,
+            Section::Automations,
+        ),
+        (
+            labels::ICON_LANGUAGE,
+            labels::SETTINGS_LANGUAGE_SERVERS,
+            Section::LanguageServers,
+        ),
+        (
+            labels::ICON_WIDGETS,
+            labels::SETTINGS_FEATURES,
+            Section::Features,
         ),
     ];
     let mut nav_list = column![];
@@ -635,6 +877,29 @@ fn navigation(s: &Settings) -> Element<'_, Message> {
         ..Default::default()
     })
     .into()
+}
+
+fn harness_label(harness: Option<HarnessKind>) -> &'static str {
+    match harness {
+        None => labels::SETTINGS_AUTOMATION_DISABLED,
+        Some(HarnessKind::Antigravity) => "Antigravity",
+        Some(HarnessKind::ClaudeCode) => "Claude Code",
+        Some(HarnessKind::Codex) => "Codex",
+        Some(HarnessKind::Cursor) => "Cursor",
+        Some(HarnessKind::GitHubCopilot) => "GitHub Copilot",
+        Some(HarnessKind::OpenCode) => "OpenCode",
+        Some(HarnessKind::Pi) => "Pi",
+    }
+}
+
+fn settings_editor_style(_: &Theme, _: text_editor::Status) -> text_editor::Style {
+    text_editor::Style {
+        background: theme::palette().panel.into(),
+        border: Border::default(),
+        placeholder: theme::palette().text4,
+        value: theme::palette().text,
+        selection: theme::TERM_SELECTION_BG,
+    }
 }
 
 fn segment(label: &'static str, claude: bool, current: bool) -> Element<'static, Message> {

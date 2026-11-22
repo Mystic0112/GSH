@@ -574,13 +574,124 @@ fn socket_orfao_recusa_conexao_com_exit_3() {
 }
 
 #[test]
-fn verbo_ainda_nao_portado_e_erro_de_uso() {
-    let (out, err, code, home) = run_offline(&["version"], &[]);
+fn open_e_atalho_enviam_caminho_absoluto_sem_escrever_no_stdout() {
+    for (args, tab) in [
+        (&["open", "notes.md", "--tab-id", "t9"][..], "t9"),
+        (&["open", "--focused", "notes.md"][..], "@focused"),
+        (&["notes.md"][..], "t7"),
+    ] {
+        let r = Setup::new(args).reply(r#"{"ok":true}"#).run();
+        let request: serde_json::Value = serde_json::from_str(r.line()).unwrap();
+        assert_eq!(
+            request,
+            serde_json::json!({
+                "type": "cmd",
+                "cmd": "open",
+                "tabId": tab,
+                "args": {"path": r.home.join("notes.md")}
+            })
+        );
+        assert_eq!((r.stdout.as_str(), r.stderr.as_str(), r.code), ("", "", 0));
+    }
+}
+
+#[test]
+fn read_tab_decodifica_base64_e_avisa_truncamento() {
+    let r = Setup::new(&[
+        "read-tab",
+        "Extension",
+        "--lines",
+        "5",
+        "--offset",
+        "10",
+        "--from-start",
+    ])
+    .reply(r#"{"ok":true,"data":{"text":"bGluaGExCmxpbmhhMg==","truncated":true}}"#)
+    .run();
     assert_eq!(
-        (out.as_str(), err.as_str(), code),
-        ("", "gsh: unknown verb: version\n", 2)
+        r.line(),
+        "{\"args\":{\"fromStart\":true,\"lines\":5,\"offset\":10,\"target\":\"Extension\"},\"cmd\":\"read-pane\",\"tabId\":\"t7\",\"type\":\"cmd\"}\n"
     );
-    let _ = std::fs::remove_dir_all(home);
+    assert_eq!(r.stdout, "linha1\nlinha2\n");
+    assert_eq!(
+        r.stderr,
+        "gsh: output truncated (server cap 2000 lines/read — page with --offset)\n"
+    );
+    assert_eq!(r.code, 0);
+}
+
+#[test]
+fn read_pane_e_alias_e_focused_vai_no_tab_id() {
+    let r = Setup::new(&["read-pane", "--focused"])
+        .reply(r#"{"ok":true,"data":{"text":""}}"#)
+        .run();
+    assert_eq!(
+        r.line(),
+        "{\"args\":{},\"cmd\":\"read-pane\",\"tabId\":\"@focused\",\"type\":\"cmd\"}\n"
+    );
+    assert_eq!((r.stdout.as_str(), r.stderr.as_str(), r.code), ("", "", 0));
+}
+
+#[test]
+fn rename_tab_interrupt_e_wait_idle_enviam_comandos_no_wire() {
+    let r = Setup::new(&["rename-tab", "t3", "New", "Worker"])
+        .reply(r#"{"ok":true,"data":{"tabId":"t3"}}"#)
+        .run();
+    assert_eq!(
+        r.line(),
+        "{\"args\":{\"target\":\"t3\",\"title\":\"New Worker\"},\"cmd\":\"rename-tab\",\"tabId\":\"t7\",\"type\":\"cmd\"}\n"
+    );
+    assert_eq!((r.stdout.as_str(), r.code), ("t3\n", 0));
+
+    let r = Setup::new(&["interrupt", "Worker", "--force"])
+        .reply(r#"{"ok":true,"data":{"tabId":"t2"}}"#)
+        .run();
+    assert_eq!(
+        r.line(),
+        "{\"args\":{\"force\":true,\"target\":\"Worker\"},\"cmd\":\"interrupt\",\"tabId\":\"t7\",\"type\":\"cmd\"}\n"
+    );
+    assert_eq!((r.stdout.as_str(), r.code), ("t2\n", 0));
+
+    let r = Setup::new(&["wait-idle", "--focused", "--json"])
+        .reply(r#"{"ok":true,"data":{"tabId":"t7"}}"#)
+        .run();
+    assert_eq!(
+        r.line(),
+        "{\"args\":{},\"cmd\":\"wait-idle\",\"tabId\":\"@focused\",\"type\":\"cmd\"}\n"
+    );
+    assert_eq!((r.stdout.as_str(), r.code), ("{\"tabId\":\"t7\"}\n", 0));
+}
+
+#[test]
+fn send_com_enter_manda_duas_escritas_em_base64() {
+    let r = Setup::new(&["send", "--tab-id", "t4", "--enter", "npm", "test"])
+        .reply(r#"{"ok":true}"#)
+        .reply(r#"{"ok":true}"#)
+        .run();
+    assert_eq!(
+        r.lines,
+        vec![
+            "{\"args\":{\"data\":\"bnBtIHRlc3Q=\"},\"cmd\":\"write\",\"tabId\":\"t4\",\"type\":\"cmd\"}\n",
+            "{\"args\":{\"data\":\"DQ==\"},\"cmd\":\"write\",\"tabId\":\"t4\",\"type\":\"cmd\"}\n",
+        ]
+    );
+    assert_eq!((r.stdout.as_str(), r.stderr.as_str(), r.code), ("", "", 0));
+}
+
+#[test]
+fn send_focused_com_enter_mantem_a_aba_resolvida_no_primeiro_envio() {
+    let r = Setup::new(&["send", "--focused", "--enter", "oi"])
+        .reply(r#"{"ok":true,"data":{"tabId":"t4"}}"#)
+        .reply(r#"{"ok":true}"#)
+        .run();
+    assert_eq!(
+        r.lines,
+        vec![
+            "{\"args\":{\"data\":\"b2k=\"},\"cmd\":\"write\",\"tabId\":\"@focused\",\"type\":\"cmd\"}\n",
+            "{\"args\":{\"data\":\"DQ==\"},\"cmd\":\"write\",\"tabId\":\"t4\",\"type\":\"cmd\"}\n",
+        ]
+    );
+    assert_eq!(r.code, 0);
 }
 
 // ---- hook -------------------------------------------------------------------

@@ -41,6 +41,29 @@ pub const CLOSE_TAB_HELP: &str = "gsh close-tab [<label|tab-id>] [--json]
   removes the split; closing the last tab of a workspace leaves an empty tab.
   Prints the id of the closed tab.";
 
+pub const READ_TAB_HELP: &str =
+    "gsh read-tab [<label|tab-id>] [--lines <n>] [--offset <n>] [--from-start] [--json]
+  Reads a tab's rendered output (alias: read-pane). Without a target, reads
+  the CURRENT tab.
+  --lines N     how many lines (default 100, server cap 2000)
+  --offset N    skip N lines from the anchor (pagination)
+  --from-start  anchor at the start of the buffer (default: tail/end)";
+
+pub const RENAME_TAB_HELP: &str =
+    "gsh rename-tab [<label|tab-id>] <title> [--tab-id <id> | --focused] [--json]
+  Updates the stable label of a tab. Without a target, renames the CURRENT
+  tab. Prints the id of the renamed tab.";
+
+pub const INTERRUPT_HELP: &str =
+    "gsh interrupt [<label|tab-id>] [--tab-id <id> | --focused] [--force] [--json]
+  Interrupts a tab's running turn or process. Without a target, interrupts
+  the CURRENT tab. Prints the id of the interrupted tab.";
+
+pub const WAIT_IDLE_HELP: &str =
+    "gsh wait-idle [<label|tab-id>] [--tab-id <id> | --focused] [--json]
+  Waits until a tab returns to idle. Without a target, waits on the CURRENT
+  tab. Prints the id of the tab.";
+
 /// Qual aba o comando mira. A resolução final precisa do ambiente
 /// (`GSH_TAB_ID`), por isso fica pendente até a execução.
 #[derive(Debug, Default, PartialEq)]
@@ -60,11 +83,10 @@ impl Target {
     }
 }
 
-/// Flags comuns aos comandos simples, incluindo as de verbos que ainda não
-/// foram portados: o parser tem que consumir exatamente o que o original
-/// consome (uma flag desconhecida vira posicional, ou seja, texto).
+/// Flags comuns aos comandos simples: o parser tem que consumir exatamente o
+/// que o original consome (uma flag desconhecida vira posicional, ou seja,
+/// texto).
 #[derive(Debug, Default, PartialEq)]
-#[allow(dead_code)] // ponytail: lines/offset/from_start/enter/force são lidos por verbos ainda não portados
 pub struct Flags {
     pub positionals: Vec<String>,
     pub tab_id: Option<String>,
@@ -172,7 +194,7 @@ fn split_to(args: &[String]) -> (Option<String>, Vec<String>) {
             break;
         }
         match take(args, &mut i, &["--to"]) {
-            Some((_, v)) => to = v,
+            Some((_, v)) => to = Some(v.unwrap_or_default()),
             None => rest.push(a.clone()),
         }
         i += 1;
@@ -217,6 +239,11 @@ pub enum Command {
         text: String,
         json: bool,
     },
+    Send {
+        text: String,
+        enter: bool,
+        target: Target,
+    },
     TeamPeers {
         json: bool,
     },
@@ -224,6 +251,35 @@ pub enum Command {
         to: String,
         file: String,
         note: String,
+        json: bool,
+    },
+    Open {
+        path: String,
+        target: Target,
+    },
+    ReadTab {
+        label: Option<String>,
+        lines: Option<u64>,
+        offset: Option<u64>,
+        from_start: bool,
+        target: Target,
+        json: bool,
+    },
+    RenameTab {
+        label: Option<String>,
+        title: String,
+        target: Target,
+        json: bool,
+    },
+    Interrupt {
+        label: Option<String>,
+        force: bool,
+        target: Target,
+        json: bool,
+    },
+    WaitIdle {
+        label: Option<String>,
+        target: Target,
         json: bool,
     },
     NewTab {
@@ -262,11 +318,16 @@ pub fn parse(argv: &[String]) -> Result<Command, CliError> {
         }),
         "mcp" => parse_mcp(args),
         "msg" => parse_msg(args),
-        "send" => parse_team_send(args),
+        "send" => parse_send(args),
         "peers" => Ok(Command::TeamPeers {
             json: Flags::parse(args)?.json,
         }),
         "deliver" => parse_deliver(args),
+        "open" => parse_open(args),
+        "read-tab" | "read-pane" => parse_read_tab(args),
+        "rename-tab" => parse_rename_tab(args),
+        "interrupt" => parse_interrupt(args),
+        "wait-idle" => parse_wait_idle(args),
         "new-tab" => parse_new_tab(args),
         "close-tab" => parse_close_tab(args),
         // `list-panes` é o verbo legado; o comando de wire é o mesmo.
@@ -281,8 +342,20 @@ pub fn parse(argv: &[String]) -> Result<Command, CliError> {
         "localsend" => Ok(Command::LocalSend {
             args: args.to_vec(),
         }),
-        other => Err(CliError::usage(format!("gsh: unknown verb: {other}"))),
+        _ => parse_open(argv),
     }
+}
+
+fn parse_open(args: &[String]) -> Result<Command, CliError> {
+    let flags = Flags::parse(args)?;
+    let target = flags.target();
+    let path = flags
+        .positionals
+        .into_iter()
+        .next()
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| CliError::usage("gsh open: missing file path"))?;
+    Ok(Command::Open { path, target })
 }
 
 fn parse_mcp(args: &[String]) -> Result<Command, CliError> {
@@ -308,22 +381,114 @@ fn parse_mcp(args: &[String]) -> Result<Command, CliError> {
     Ok(Command::Mcp { agent })
 }
 
-fn parse_team_send(args: &[String]) -> Result<Command, CliError> {
+fn parse_send(args: &[String]) -> Result<Command, CliError> {
     if wants_help(args) {
-        return Ok(Command::Help("gsh send --to <Name/agent> [--json] <text...>\n  Sends a message to a teammate's agent on the office network."));
+        return Ok(Command::Help(concat!(
+            "gsh send [--tab-id <id> | --focused] [--enter] <text...>\n",
+            "  Types into a terminal tab (default: the current tab).\n",
+            "gsh send --to <Name/agent> [--json] <text...>\n",
+            "  Sends a message to a teammate's agent on the office network.",
+        )));
     }
     let (to, rest) = split_to(args);
     let parsed = Flags::parse(&rest)?;
-    let to = to
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| CliError::usage("gsh send: missing --to"))?;
+    if to.as_deref() == Some("") {
+        return Err(CliError::usage("gsh send: missing --to"));
+    }
     let text = parsed.positionals.join(" ");
     if text.is_empty() {
-        return Err(CliError::usage("gsh send: missing text"));
+        return Err(CliError::usage(if to.is_some() {
+            "gsh send: missing text"
+        } else {
+            "gsh send: missing text to send"
+        }));
     }
-    Ok(Command::TeamSend {
-        to,
+    if let Some(to) = to {
+        return Ok(Command::TeamSend {
+            to,
+            text,
+            json: parsed.json,
+        });
+    }
+    Ok(Command::Send {
         text,
+        enter: parsed.enter,
+        target: parsed.target(),
+    })
+}
+
+fn parse_read_tab(args: &[String]) -> Result<Command, CliError> {
+    let parsed = Flags::parse(args)?;
+    if wants_help(args) {
+        return Ok(Command::Help(READ_TAB_HELP));
+    }
+    Ok(Command::ReadTab {
+        label: parsed
+            .positionals
+            .first()
+            .cloned()
+            .filter(|t| !t.is_empty()),
+        lines: parsed.lines,
+        offset: parsed.offset,
+        from_start: parsed.from_start,
+        target: parsed.target(),
+        json: parsed.json,
+    })
+}
+
+fn parse_rename_tab(args: &[String]) -> Result<Command, CliError> {
+    let parsed = Flags::parse(args)?;
+    if wants_help(args) {
+        return Ok(Command::Help(RENAME_TAB_HELP));
+    }
+    let (label, title) = match parsed.positionals.as_slice() {
+        [] => return Err(CliError::usage("gsh rename-tab: missing title")),
+        [only] => (None, only.trim().to_string()),
+        [target, rest @ ..] => (
+            (!target.is_empty()).then(|| target.clone()),
+            rest.join(" ").trim().to_string(),
+        ),
+    };
+    if title.is_empty() {
+        return Err(CliError::usage("gsh rename-tab: missing title"));
+    }
+    Ok(Command::RenameTab {
+        label,
+        title,
+        target: parsed.target(),
+        json: parsed.json,
+    })
+}
+
+fn parse_interrupt(args: &[String]) -> Result<Command, CliError> {
+    let parsed = Flags::parse(args)?;
+    if wants_help(args) {
+        return Ok(Command::Help(INTERRUPT_HELP));
+    }
+    Ok(Command::Interrupt {
+        label: parsed
+            .positionals
+            .first()
+            .cloned()
+            .filter(|t| !t.is_empty()),
+        force: parsed.force,
+        target: parsed.target(),
+        json: parsed.json,
+    })
+}
+
+fn parse_wait_idle(args: &[String]) -> Result<Command, CliError> {
+    let parsed = Flags::parse(args)?;
+    if wants_help(args) {
+        return Ok(Command::Help(WAIT_IDLE_HELP));
+    }
+    Ok(Command::WaitIdle {
+        label: parsed
+            .positionals
+            .first()
+            .cloned()
+            .filter(|t| !t.is_empty()),
+        target: parsed.target(),
         json: parsed.json,
     })
 }
@@ -581,8 +746,23 @@ mod tests {
     }
 
     #[test]
-    fn verbo_desconhecido_e_erro_de_uso() {
-        assert_eq!(usage_msg(parse(&v(&["xyz"]))), "gsh: unknown verb: xyz");
+    fn open_exige_um_caminho() {
+        assert_eq!(
+            usage_msg(parse(&v(&["open"]))),
+            "gsh open: missing file path"
+        );
+    }
+
+    #[test]
+    fn new_tab_ignora_focused_e_close_tab_valida_flags_antes_da_ajuda() {
+        let Command::NewTab { target, .. } = parse(&v(&["new-tab", "--focused"])).unwrap() else {
+            panic!("expected new-tab");
+        };
+        assert!(!target.focused);
+        assert_eq!(
+            usage_msg(parse(&v(&["close-tab", "--help", "--lines=bad"]))),
+            "gsh: --lines requires a non-negative integer"
+        );
     }
 
     #[test]
@@ -803,5 +983,185 @@ mod tests {
         assert_eq!(harness_from(&v(&["--harness", "  "])), "claude");
         assert_eq!(harness_from(&v(&["--harness", "codex"])), "codex");
         assert_eq!(harness_from(&v(&["--harness=codex"])), "codex");
+    }
+
+    #[test]
+    fn open_aceita_focused_tab_id_e_atalho_sem_verbo() {
+        assert_eq!(
+            parse(&v(&["open", "--focused", "README.md"])).unwrap(),
+            Command::Open {
+                path: "README.md".into(),
+                target: Target {
+                    focused: true,
+                    tab_id: None,
+                },
+            }
+        );
+        assert_eq!(
+            parse(&v(&["open", "--tab-id=t4", "README.md"])).unwrap(),
+            Command::Open {
+                path: "README.md".into(),
+                target: Target {
+                    focused: false,
+                    tab_id: Some("t4".into()),
+                },
+            }
+        );
+        assert_eq!(
+            parse(&v(&["--focused", "README.md"])).unwrap(),
+            Command::Open {
+                path: "README.md".into(),
+                target: Target {
+                    focused: true,
+                    tab_id: None,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn read_tab_e_alias_read_pane_leem_paginacao_e_alvo() {
+        let want = Command::ReadTab {
+            label: Some("Extension".into()),
+            lines: Some(50),
+            offset: Some(10),
+            from_start: true,
+            target: Target {
+                focused: false,
+                tab_id: Some("t2".into()),
+            },
+            json: true,
+        };
+        for verb in ["read-tab", "read-pane"] {
+            assert_eq!(
+                parse(&v(&[
+                    verb,
+                    "Extension",
+                    "--lines",
+                    "50",
+                    "--offset=10",
+                    "--from-start",
+                    "-t",
+                    "t2",
+                    "--json",
+                ]))
+                .unwrap(),
+                want
+            );
+        }
+        assert_eq!(
+            parse(&v(&["read-tab", "--help"])).unwrap(),
+            Command::Help(READ_TAB_HELP)
+        );
+    }
+
+    #[test]
+    fn rename_tab_interrupt_e_wait_idle_parseiam_alvo_e_flags() {
+        assert_eq!(
+            parse(&v(&["rename-tab", "Worker"])).unwrap(),
+            Command::RenameTab {
+                label: None,
+                title: "Worker".into(),
+                target: Target::default(),
+                json: false,
+            }
+        );
+        assert_eq!(
+            parse(&v(&["rename-tab", "t3", "New", "Worker", "--json"])).unwrap(),
+            Command::RenameTab {
+                label: Some("t3".into()),
+                title: "New Worker".into(),
+                target: Target::default(),
+                json: true,
+            }
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["rename-tab"]))),
+            "gsh rename-tab: missing title"
+        );
+        assert_eq!(
+            parse(&v(&["rename-tab", "-h"])).unwrap(),
+            Command::Help(RENAME_TAB_HELP)
+        );
+
+        assert_eq!(
+            parse(&v(&["interrupt", "Worker", "--force", "--json"])).unwrap(),
+            Command::Interrupt {
+                label: Some("Worker".into()),
+                force: true,
+                target: Target::default(),
+                json: true,
+            }
+        );
+        assert_eq!(
+            parse(&v(&["interrupt", "--help"])).unwrap(),
+            Command::Help(INTERRUPT_HELP)
+        );
+
+        assert_eq!(
+            parse(&v(&["wait-idle", "Worker", "--tab-id", "t5", "--json"])).unwrap(),
+            Command::WaitIdle {
+                label: Some("Worker".into()),
+                target: Target {
+                    focused: false,
+                    tab_id: Some("t5".into()),
+                },
+                json: true,
+            }
+        );
+        assert_eq!(
+            parse(&v(&["wait-idle", "-h"])).unwrap(),
+            Command::Help(WAIT_IDLE_HELP)
+        );
+    }
+
+    #[test]
+    fn send_de_aba_usa_enter_e_target_quando_sem_to() {
+        assert_eq!(
+            parse(&v(&["send", "--tab-id", "t4", "--enter", "npm", "test"])).unwrap(),
+            Command::Send {
+                text: "npm test".into(),
+                enter: true,
+                target: Target {
+                    focused: false,
+                    tab_id: Some("t4".into()),
+                },
+            }
+        );
+        assert_eq!(
+            parse(&v(&["send", "--focused", "oi"])).unwrap(),
+            Command::Send {
+                text: "oi".into(),
+                enter: false,
+                target: Target {
+                    focused: true,
+                    tab_id: None,
+                },
+            }
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["send", "--enter"]))),
+            "gsh send: missing text to send"
+        );
+        assert_eq!(
+            parse(&v(&["send", "oi"])).unwrap(),
+            Command::Send {
+                text: "oi".into(),
+                enter: false,
+                target: Target::default()
+            }
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["send", "--to=", "oi"]))),
+            "gsh send: missing --to"
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["send", "oi", "--to"]))),
+            "gsh send: missing --to"
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["send"]))),
+            "gsh send: missing text to send"
+        );
     }
 }

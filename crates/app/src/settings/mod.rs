@@ -19,6 +19,8 @@ pub enum Error {
     InvalidTerminalSize,
     InvalidTabSize,
     InvalidLocalSendLimit,
+    InvalidLspSettings,
+    InvalidAutomation,
     InvalidSection,
     Config(gsh_config::ConfigError),
     Io(std::io::Error),
@@ -55,13 +57,29 @@ pub enum Message {
     TeamDoorAllowChanged(String),
     TeamDoorAskChanged(bool),
     SaveControls,
+    AutomationHarnessChanged(String),
+    AutomationModelChanged(String),
+    RoutineNameChanged(String),
+    RoutineTimeChanged(String),
+    RoutineWeekdayToggled(usize),
+    RoutineWorkspaceChanged(String),
+    RoutineHarnessChanged(String),
+    RoutinePromptChanged(String),
+    RoutineAdd,
+    RoutineToggle(String, bool),
+    RoutineRunNow(String),
+    RoutineRemove(String),
+    RoutineOpenLog(PathBuf),
+    FeatureVisibilityChanged(gsh_config::schema::AppFeature, bool),
+    LspCommandsAction(iced::widget::text_editor::Action),
+    LspFormattersAction(iced::widget::text_editor::Action),
     LocalSend(LocalSendMessage),
     Claude(claude::Message),
 }
 
 #[derive(Debug, Clone)]
 pub enum LocalSendMessage {
-    EnableChanged(bool),
+    AlwaysOnChanged(bool),
     AliasChanged(String),
     ChooseReceiveDir,
     ReceiveDirPicked(Option<PathBuf>),
@@ -81,7 +99,7 @@ pub enum LocalSendMessage {
 
 #[derive(Debug, Clone)]
 pub struct LocalSendState {
-    pub enabled: bool,
+    pub always_on: bool,
     pub alias: String,
     pub receive_dir: PathBuf,
     pub max_file_mb: String,
@@ -98,7 +116,7 @@ impl Default for LocalSendState {
     fn default() -> Self {
         let config = gsh_config::schema::LocalSend::default();
         Self {
-            enabled: config.enabled,
+            always_on: config.always_on,
             alias: config.alias,
             receive_dir: PathBuf::from(config.receive_dir),
             max_file_mb: config.max_file_mb.to_string(),
@@ -153,6 +171,9 @@ pub enum Section {
     Notifications,
     Team,
     LocalSend,
+    Automations,
+    LanguageServers,
+    Features,
 }
 
 pub struct Settings {
@@ -179,6 +200,17 @@ pub struct Settings {
     pub saved: bool,
     pub claude: claude::ClaudeState,
     pub localsend: LocalSendState,
+    pub lsp_commands: iced::widget::text_editor::Content,
+    pub lsp_formatters: iced::widget::text_editor::Content,
+    pub routines: crate::scheduled_automations::ScheduledStore,
+    pub routine_name: String,
+    pub routine_time: String,
+    pub routine_weekdays: [bool; 7],
+    pub routine_workspace: String,
+    pub routine_harness: String,
+    pub routine_prompt: String,
+    pub routine_error: Option<String>,
+    pub pending_routine_run: Option<crate::scheduled_automations::ScheduledRoutine>,
 }
 
 impl Default for Settings {
@@ -207,6 +239,17 @@ impl Default for Settings {
             saved: false,
             claude: claude::ClaudeState::default(),
             localsend: LocalSendState::default(),
+            lsp_commands: iced::widget::text_editor::Content::new(),
+            lsp_formatters: iced::widget::text_editor::Content::new(),
+            routines: crate::scheduled_automations::ScheduledStore::load_default(),
+            routine_name: String::new(),
+            routine_time: String::from("09:00"),
+            routine_weekdays: crate::scheduled_automations::every_day(),
+            routine_workspace: String::new(),
+            routine_harness: String::from("claude"),
+            routine_prompt: String::new(),
+            routine_error: None,
+            pending_routine_run: None,
         }
     }
 }
@@ -252,9 +295,20 @@ impl Settings {
                         .unwrap_or(true);
                     self.transcript_width = config.chat.transcript_width;
                     self.theme_mode = config.theme_mode;
-                    theme::set_active(ThemeVariant::from_mode(config.theme_mode));
+                    let variant = ThemeVariant::from_mode(config.theme_mode);
+                    let spec =
+                        claude::themes::selected_theme_json(&self.claude.home, &config.theme_id);
+                    if !theme::set_theme_palette(&config.theme_id, spec.as_deref(), variant) {
+                        theme::set_active(variant);
+                    }
                     self.current = config.clone();
-                    self.localsend.enabled = config.localsend.enabled;
+                    self.lsp_commands = iced::widget::text_editor::Content::with_text(
+                        &format_lsp_map(&config.lsp_commands),
+                    );
+                    self.lsp_formatters = iced::widget::text_editor::Content::with_text(
+                        &format_lsp_map(&config.lsp_formatters),
+                    );
+                    self.localsend.always_on = config.localsend.always_on;
                     self.localsend.alias.clone_from(&config.localsend.alias);
                     self.localsend.receive_dir = PathBuf::from(&config.localsend.receive_dir);
                     self.localsend.max_file_mb = config.localsend.max_file_mb.to_string();
@@ -278,7 +332,12 @@ impl Settings {
         if let Ok(saved) = &result {
             self.theme_mode = *saved;
             self.current.theme_mode = *saved;
-            theme::set_active(ThemeVariant::from_mode(*saved));
+            let variant = ThemeVariant::from_mode(*saved);
+            let spec =
+                claude::themes::selected_theme_json(&self.claude.home, &self.current.theme_id);
+            if !theme::set_theme_palette(&self.current.theme_id, spec.as_deref(), variant) {
+                theme::set_active(variant);
+            }
         }
         self.saved = result.is_ok();
         self.error = result.err();
@@ -362,6 +421,109 @@ impl Settings {
                 let _ = self.update(Message::SaveControls);
             }
             Message::ThemeSelected(mode) => self.select_theme(mode),
+            Message::AutomationHarnessChanged(value) => {
+                self.current.automation.harness_id = match value.as_str() {
+                    "Antigravity" => Some(gsh_config::schema::HarnessKind::Antigravity),
+                    "Claude Code" => Some(gsh_config::schema::HarnessKind::ClaudeCode),
+                    "Codex" => Some(gsh_config::schema::HarnessKind::Codex),
+                    "Cursor" => Some(gsh_config::schema::HarnessKind::Cursor),
+                    "GitHub Copilot" => Some(gsh_config::schema::HarnessKind::GitHubCopilot),
+                    "OpenCode" => Some(gsh_config::schema::HarnessKind::OpenCode),
+                    "Pi" => Some(gsh_config::schema::HarnessKind::Pi),
+                    _ => None,
+                };
+                self.save_current_section(Section::Automations);
+            }
+            Message::AutomationModelChanged(value) => {
+                let model = value.trim();
+                if model.len() > 128 || model.chars().any(char::is_control) {
+                    self.error = Some(Error::InvalidAutomation);
+                } else {
+                    self.current.automation.model_id =
+                        (!model.is_empty()).then(|| model.to_owned());
+                    self.save_current_section(Section::Automations);
+                }
+            }
+            Message::RoutineNameChanged(v) => {
+                self.routine_name = v;
+                self.routine_error = None;
+            }
+            Message::RoutineTimeChanged(v) => {
+                self.routine_time = v;
+                self.routine_error = None;
+            }
+            Message::RoutineWeekdayToggled(day) => {
+                if let Some(selected) = self.routine_weekdays.get_mut(day) {
+                    *selected = !*selected;
+                    self.routine_error = None;
+                }
+            }
+            Message::RoutineWorkspaceChanged(v) => {
+                self.routine_workspace = v;
+                self.routine_error = None;
+            }
+            Message::RoutineHarnessChanged(v) => {
+                self.routine_harness = v;
+                self.routine_error = None;
+            }
+            Message::RoutinePromptChanged(v) => {
+                self.routine_prompt = v;
+                self.routine_error = None;
+            }
+            Message::RoutineAdd => {
+                let ws = if self.routine_workspace.trim().is_empty() {
+                    self.claude
+                        .workspace
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                } else {
+                    self.routine_workspace.clone()
+                };
+                match self.routines.add(
+                    &self.routine_name,
+                    &self.routine_time,
+                    self.routine_weekdays,
+                    &ws,
+                    &self.routine_harness,
+                    &self.routine_prompt,
+                ) {
+                    Ok(_) => {
+                        self.routine_name.clear();
+                        self.routine_prompt.clear();
+                        self.routine_error = None;
+                    }
+                    Err(err) => {
+                        self.routine_error = Some(err);
+                    }
+                }
+            }
+            Message::RoutineToggle(id, enabled) => {
+                let _ = self.routines.set_enabled(&id, enabled);
+            }
+            Message::RoutineRunNow(id) => {
+                self.pending_routine_run = self.routines.manual_run(&id);
+            }
+            Message::RoutineRemove(id) => {
+                let _ = self.routines.remove(&id);
+            }
+            Message::RoutineOpenLog(_) => {}
+            Message::FeatureVisibilityChanged(feature, visible) => {
+                if visible {
+                    self.current.features.hidden.remove(&feature);
+                } else {
+                    self.current.features.hidden.insert(feature);
+                }
+                self.save_current_section(Section::Features);
+            }
+            Message::LspCommandsAction(action) => {
+                self.lsp_commands.perform(action);
+                self.save_lsp_map(true);
+            }
+            Message::LspFormattersAction(action) => {
+                self.lsp_formatters.perform(action);
+                self.save_lsp_map(false);
+            }
             Message::LocalSend(message) => self.update_localsend(message),
             Message::TeamEnabledChanged(value) => {
                 self.current.farm.team.enabled = value;
@@ -465,11 +627,47 @@ impl Settings {
         self.error = result.err();
     }
 
+    fn save_current_section(&mut self, section: Section) {
+        self.section = section;
+        self.saved = false;
+        self.error = None;
+        let result = match &self.path {
+            Ok(path) => controls::save(path, self),
+            Err(_) => Err(Error::Config(gsh_config::ConfigError::NoHome)),
+        };
+        match result {
+            Ok(config) => {
+                self.current = config;
+                self.saved = true;
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    fn save_lsp_map(&mut self, commands: bool) {
+        let text = if commands {
+            self.lsp_commands.text()
+        } else {
+            self.lsp_formatters.text()
+        };
+        match parse_lsp_map(&text) {
+            Ok(map) => {
+                if commands {
+                    self.current.lsp_commands = map;
+                } else {
+                    self.current.lsp_formatters = map;
+                }
+                self.save_current_section(Section::LanguageServers);
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
     fn update_localsend(&mut self, message: LocalSendMessage) {
         let settings_changed = match message {
-            LocalSendMessage::EnableChanged(enabled) => {
-                self.localsend.enabled = enabled;
-                self.current.localsend.enabled = enabled;
+            LocalSendMessage::AlwaysOnChanged(always_on) => {
+                self.localsend.always_on = always_on;
+                self.current.localsend.always_on = always_on;
                 true
             }
             LocalSendMessage::AliasChanged(alias) => {
@@ -534,6 +732,39 @@ impl Settings {
             }
         }
     }
+}
+
+fn format_lsp_map(map: &std::collections::BTreeMap<String, String>) -> String {
+    map.iter()
+        .map(|(language, command)| format!("{language} = {command}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_lsp_map(input: &str) -> Result<std::collections::BTreeMap<String, String>, Error> {
+    let mut result = std::collections::BTreeMap::new();
+    for line in input.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let Some((language, command)) = line.split_once('=') else {
+            return Err(Error::InvalidLspSettings);
+        };
+        let language = language.trim();
+        let command = command.trim();
+        if language.is_empty()
+            || language.len() > 32
+            || !language
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            || command.is_empty()
+            || command.len() > 512
+            || command.chars().any(char::is_control)
+            || result
+                .insert(language.to_owned(), command.to_owned())
+                .is_some()
+        {
+            return Err(Error::InvalidLspSettings);
+        }
+    }
+    Ok(result)
 }
 
 fn save_locale(path: &Path, value: &str) -> Result<(), Error> {
@@ -686,6 +917,54 @@ mod tests {
         assert!(std::fs::read_to_string(&path)
             .unwrap()
             .contains("futureKey = 'keep'"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn lsp_settings_round_trip_and_reject_malformed_entries() {
+        let parsed = parse_lsp_map("rust = rust-analyzer\npython = pyright\n").unwrap();
+        assert_eq!(
+            parsed.get("rust").map(String::as_str),
+            Some("rust-analyzer")
+        );
+        assert!(matches!(
+            parse_lsp_map("bad entry"),
+            Err(Error::InvalidLspSettings)
+        ));
+        assert!(matches!(
+            parse_lsp_map("rust = a\nrust = b"),
+            Err(Error::InvalidLspSettings)
+        ));
+        assert_eq!(parse_lsp_map(&format_lsp_map(&parsed)).unwrap(), parsed);
+    }
+
+    #[test]
+    fn automation_and_toolbar_visibility_save_to_config() {
+        let dir =
+            std::env::temp_dir().join(format!("gsh-settings-features-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[future]\nkeep = true\n[features]\nother = 3\n").unwrap();
+        let mut settings = Settings {
+            path: Ok(path.clone()),
+            ..Settings::default()
+        };
+        let _ = settings.update(Message::AutomationHarnessChanged("Codex".into()));
+        let _ = settings.update(Message::AutomationModelChanged("gpt-test".into()));
+        let _ = settings.update(Message::FeatureVisibilityChanged(
+            gsh_config::schema::AppFeature::Browser,
+            false,
+        ));
+        let saved = gsh_config::load(&path).unwrap();
+        assert_eq!(
+            saved.automation.harness_id,
+            Some(gsh_config::schema::HarnessKind::Codex)
+        );
+        assert_eq!(saved.automation.model(), Some("gpt-test"));
+        assert!(!saved.shows_feature(gsh_config::schema::AppFeature::Browser));
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("keep = true"));
+        assert!(contents.contains("other = 3"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

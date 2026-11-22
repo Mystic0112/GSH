@@ -18,6 +18,7 @@ pub mod fonts;
 mod palettes;
 mod panels;
 mod prefs;
+pub(crate) mod profiles;
 mod secondary;
 mod switches;
 pub mod themes;
@@ -25,13 +26,16 @@ pub(super) mod update;
 pub mod view;
 mod widgets;
 
+use crate::bag_mode::{poll_and_heal_bag_mode_blocking, BagModeState, BagPoll};
 use crate::labels;
 use cli::{Account, InfoError, MarketplacePlugin, McpServerInfo, PluginInfo, Usage};
 use files::{AutoMemoryEntry, MemoryFileInfo, SkillInfo};
 use fonts::{FontPickerState, FontTarget};
 use gsh_harness::Json;
 use iced::widget::text_editor;
-use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::{path::PathBuf, time::Instant};
 
 pub use prefs::Pref;
 pub use switches::Switch;
@@ -158,12 +162,21 @@ pub enum Message {
     CrossSession(String),
     Instructions(text_editor::Action),
     InstructionsCommit,
+    ProfileName(String),
+    ProfileDirectory(String),
+    AddProfile,
+    SelectProfile(Option<String>),
+    LoginProfile(String),
+    RemoveProfile(String),
     RefreshAccount,
     AccountLoaded(Result<Account, InfoError>),
     LogoutAsk,
     LogoutCancel,
     LogoutConfirm,
     LoggedOut(Result<(), InfoError>),
+    SwitchAccountAsk,
+    SwitchAccountCancel,
+    SwitchAccountConfirm,
     /// Uso (`get_usage`).
     RefreshUsage,
     UsageLoaded(Result<Usage, InfoError>),
@@ -197,6 +210,15 @@ pub enum Message {
     DeleteTheme(String),
     /// Sistema e Armazenamento.
     KeepAwakeToggle(bool),
+    LidSessionDuration(themes::LidSessionDuration),
+    LidSessionStart,
+    LidSessionStop,
+    BagModeToggle(bool),
+    BagHotspotInput(String),
+    BagPreferredInput(String),
+    BagApplyHotspot,
+    BagHotspotApplied(bool, Result<(), String>),
+    BagPollFinished(Result<BagPoll, String>),
     StorageUseDefault,
     StorageChangePick,
     StorageFolderPicked(Option<PathBuf>),
@@ -241,6 +263,10 @@ pub struct ClaudeState {
     account_loading: bool,
     logout_error: Option<InfoError>,
     logout_ask: bool,
+    switch_account_ask: bool,
+    profile_name: String,
+    profile_directory: String,
+    profile_error: Option<String>,
     instructions: Option<Instructions>,
     instructions_error: Option<InfoError>,
     usage: Option<Result<Usage, InfoError>>,
@@ -271,6 +297,7 @@ pub struct ClaudeState {
     ds_search: String,
     keep_awake: themes::KeepAwake,
     keep_awake_active: bool,
+    bag_mode: BagModeState,
     storage_reset_ask: bool,
     storage_restart_msg: Option<(String, bool)>,
     font_picker: Option<FontPickerState>,
@@ -278,6 +305,7 @@ pub struct ClaudeState {
     toast: Option<(u64, String)>,
     next_toast: u64,
     pending_terminal: Option<String>,
+    pending_profile_terminal: Option<String>,
     pending_open_file: Option<PathBuf>,
     pending_quit: bool,
 }
@@ -299,6 +327,10 @@ impl Default for ClaudeState {
             account_loading: false,
             logout_error: None,
             logout_ask: false,
+            switch_account_ask: false,
+            profile_name: String::new(),
+            profile_directory: String::new(),
+            profile_error: None,
             instructions: None,
             instructions_error: None,
             usage: None,
@@ -329,6 +361,7 @@ impl Default for ClaudeState {
             ds_search: String::new(),
             keep_awake: themes::KeepAwake::default(),
             keep_awake_active: false,
+            bag_mode: BagModeState::default(),
             storage_reset_ask: false,
             storage_restart_msg: None,
             font_picker: None,
@@ -336,6 +369,7 @@ impl Default for ClaudeState {
             toast: None,
             next_toast: 0,
             pending_terminal: None,
+            pending_profile_terminal: None,
             pending_open_file: None,
             pending_quit: false,
         }
@@ -351,19 +385,20 @@ fn home_dir() -> PathBuf {
 
 impl ClaudeState {
     /// Janela de Configurações aberta de novo: a página do Flutter nasce do zero
-    /// (preservando `home`, `workspace` e o estado efêmero de `keep_awake`).
+    /// (preservando `home`, `workspace` e a sessão de tampa/Modo bolsa).
     pub fn reset(&mut self) {
         let home = self.home.clone();
         let workspace = self.workspace.clone();
-        let mut keep_awake = std::mem::take(&mut self.keep_awake);
-        let keep_awake_active = keep_awake.is_active();
+        let keep_awake = std::mem::take(&mut self.keep_awake);
+        let bag_mode = std::mem::take(&mut self.bag_mode);
         *self = Self {
             home,
             workspace,
             keep_awake,
-            keep_awake_active,
+            bag_mode,
             ..Self::default()
         };
+        self.poll_keep_awake();
         self.reload_files();
     }
 
@@ -399,11 +434,77 @@ impl ClaudeState {
         self.pending_terminal.take()
     }
 
+    pub fn take_profile_terminal_command(&mut self) -> Option<String> {
+        self.pending_profile_terminal.take()
+    }
+
     pub fn take_open_file(&mut self) -> Option<PathBuf> {
         self.pending_open_file.take()
     }
 
     pub fn take_quit_request(&mut self) -> bool {
         std::mem::replace(&mut self.pending_quit, false)
+    }
+
+    pub fn keep_awake_active(&self) -> bool {
+        self.keep_awake_active
+    }
+
+    pub fn keep_awake_on_battery(&self) -> bool {
+        self.keep_awake_active && self.keep_awake.on_battery()
+    }
+
+    pub fn poll_keep_awake(&mut self) {
+        self.keep_awake_active = self.keep_awake.is_active();
+        if self.bag_mode.config.enabled && self.keep_awake.lid_remaining_minutes().is_none() {
+            self.stop_bag_mode();
+            self.bag_mode.status = Some(Ok("Sessão de tampa fechada encerrada.".to_owned()));
+        }
+    }
+
+    fn stop_bag_mode(&mut self) {
+        self.bag_mode.config.enabled = false;
+        self.bag_mode.status = None;
+        self.bag_mode.poll_at = None;
+        self.bag_mode.preferred_retry_at = None;
+        self.bag_mode.cancel_work();
+    }
+
+    pub fn poll_bag_mode(&mut self) -> Option<iced::Task<Message>> {
+        let now = Instant::now();
+        if !self.bag_mode.config.enabled
+            || self.bag_mode.work.is_some()
+            || self.bag_mode.poll_at.is_some_and(|due| due > now)
+        {
+            return None;
+        }
+
+        let cancelled = self.start_bag_work();
+        let config = self.bag_mode.config.clone();
+        let defer_preferred = self
+            .bag_mode
+            .preferred_retry_at
+            .is_some_and(|due| due > now);
+        Some(iced::Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    poll_and_heal_bag_mode_blocking(&config, defer_preferred, &cancelled)
+                })
+                .await
+                .map_err(|err| format!("Falha na vigia do Modo bolsa: {err}"))?
+            },
+            Message::BagPollFinished,
+        ))
+    }
+
+    fn start_bag_work(&mut self) -> Arc<AtomicBool> {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.bag_mode.work = Some(cancelled.clone());
+        cancelled
+    }
+
+    fn finish_bag_work(&mut self) -> bool {
+        let work = self.bag_mode.work.take();
+        work.is_some_and(|work| !work.load(Ordering::Relaxed))
     }
 }

@@ -44,10 +44,15 @@ pub fn view(state: &GitState) -> Element<'_, GitMsg> {
     let tabs = row![
         tab(
             labels::GIT_TAB_CHANGES,
-            !state.history_open,
+            !state.history_open && !state.branches_open,
             GitMsg::Changes
         ),
-        tab(labels::GIT_TAB_HISTORY, state.history_open, GitMsg::History)
+        tab(labels::GIT_TAB_HISTORY, state.history_open, GitMsg::History),
+        tab(
+            labels::GIT_TAB_BRANCHES,
+            state.branches_open,
+            GitMsg::Branches
+        )
     ]
     .spacing(4);
     container(column![title, tabs].spacing(6))

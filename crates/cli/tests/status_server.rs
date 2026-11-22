@@ -7,7 +7,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
@@ -66,6 +66,18 @@ impl App {
         env: &[(String, String)],
         pane: Option<&str>,
     ) -> Output {
+        self.spawn_hook_with_env(harness, envelope, env, pane)
+            .wait_with_output()
+            .unwrap()
+    }
+
+    fn spawn_hook_with_env(
+        &self,
+        harness: Option<&str>,
+        envelope: &Value,
+        env: &[(String, String)],
+        pane: Option<&str>,
+    ) -> Child {
         let mut cmd = Command::new(BIN);
         cmd.arg("hook");
         if let Some(h) = harness {
@@ -95,7 +107,7 @@ impl App {
             .unwrap()
             .write_all(envelope.to_string().as_bytes())
             .unwrap();
-        child.wait_with_output().unwrap()
+        child
     }
 
     fn status(&self) -> StatusUpdate {
@@ -303,7 +315,25 @@ fn permission_request_do_claude_sem_handler_deixa_o_terminal_perguntar() {
             "PermissionRequest",
             json!({"tool_name": "Bash", "tool_input": {"command": "ls"}}),
         );
-        let out = app.hook(None, &env);
+        let child = app.spawn_hook_with_env(None, &env, &app.server.hook_env_owned(), Some("t3"));
+        let mut status = None;
+        let command = loop {
+            match app
+                .rx
+                .recv_timeout(WAIT)
+                .expect("permission-ask não entregue")
+            {
+                Delivery::Status(update) => status = Some(update),
+                Delivery::Command(command) => break command,
+                other => panic!("esperava permission-ask, veio {other:?}"),
+            }
+        };
+        assert_eq!(command.request["cmd"], "permission-ask");
+        command
+            .reply
+            .send(json!({"ok": false, "error": "commands unavailable"}))
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
         // O app responde `commands unavailable` ao `permission-ask`: o hook não
         // imprime decisão e o Claude mostra o prompt de sempre.
         assert!(out.status.success(), "{out:?}");
@@ -312,7 +342,7 @@ fn permission_request_do_claude_sem_handler_deixa_o_terminal_perguntar() {
             "{:?}",
             String::from_utf8_lossy(&out.stdout)
         );
-        let u = app.status();
+        let u = status.unwrap_or_else(|| app.status());
         assert_eq!(u.status, TurnStatus::Waiting);
         app.assert_quiet();
     }

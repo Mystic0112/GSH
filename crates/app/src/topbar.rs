@@ -9,6 +9,7 @@ use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
 
 use crate::labels;
 use crate::theme;
+use crate::{anchored::Anchored, app_menu};
 
 /// Dados de entrada para renderizar a topbar sem acoplamento ao estado global.
 #[derive(Debug, Clone, Copy)]
@@ -23,11 +24,21 @@ pub struct TopbarProps<'a> {
 pub struct TopbarActions<M> {
     pub on_toggle_rail: M,
     pub on_toggle_files: M,
-    pub on_chat: M,
-    pub on_farm: M,
+    pub on_chat: Option<M>,
+    pub on_farm: Option<M>,
+    pub on_browser: Option<M>,
     /// Abre a aba Harness do workspace; `None` esconde o botão (sem pasta local ou recurso desligado).
     pub on_harness: Option<M>,
-    pub on_agent_graph: M,
+    pub on_agent_graph: Option<M>,
+    pub on_localsend: Option<M>,
+    pub app_menus: Vec<AppMenu<M>>,
+    pub app_menu_open: bool,
+    pub on_toggle_app_menu: M,
+    pub on_close_app_menu: M,
+}
+
+pub struct AppMenu<M> {
+    pub items: Vec<app_menu::Item<M>>,
 }
 
 /// Renderiza a barra superior do shell com a pílula da ilha centralizada.
@@ -36,26 +47,61 @@ pub fn view<'a, M: Clone + 'a>(
     island_pill: impl Fn() -> Element<'a, M> + 'a,
     actions: TopbarActions<M>,
 ) -> Element<'a, M> {
-    let left = row![
-        Space::new().width(12.0),
-        icon_toggle_button(
+    let mut menu_items = Vec::new();
+    for menu in actions.app_menus {
+        if !menu_items.is_empty() {
+            menu_items.push(app_menu::Item::Divider);
+        }
+        menu_items.extend(menu.items);
+    }
+    let menu_button = icon_toggle_button(
+        labels::ICON_MORE_VERT,
+        actions.app_menu_open,
+        actions.on_toggle_app_menu,
+    );
+    let menu = Anchored::new(
+        menu_button,
+        actions
+            .app_menu_open
+            .then(|| app_menu::menu(menu_items, 180.0)),
+        actions.on_close_app_menu.clone(),
+    )
+    .on_escape(actions.on_close_app_menu.clone());
+    let menu = tooltip(
+        menu,
+        crate::pane_chrome::tip_bubble("Menu"),
+        tooltip::Position::Bottom,
+    );
+    let left = row![Space::new().width(12.0), menu]
+        .push(icon_toggle_button(
             labels::ICON_SIDEBAR_LEFT,
             !props.rail_open,
-            actions.on_toggle_rail
-        ),
-        Space::new().width(8.0),
-        text(props.workspace_title)
-            .font(theme::FONT_TITLE)
-            .size(theme::SIZE_TOPBAR_TITLE)
-            .color(theme::palette().text),
-    ]
-    .align_y(Alignment::Center);
+            actions.on_toggle_rail,
+        ))
+        .push(Space::new().width(8.0))
+        .push(
+            text(props.workspace_title)
+                .font(theme::FONT_TITLE)
+                .size(theme::SIZE_TOPBAR_TITLE)
+                .color(theme::palette().text),
+        )
+        .align_y(Alignment::Center);
 
-    let mut right = row![
-        farm_strip(props.counts, actions.on_farm.clone()),
-        icon_toggle_button(labels::ICON_CHAT, false, actions.on_chat),
-        icon_toggle_button(labels::ICON_FARM, false, actions.on_farm),
-    ];
+    let mut right = row![];
+    if let Some(on_farm) = actions.on_farm.clone() {
+        right = right.push(farm_strip(props.counts, on_farm.clone()));
+        right = right.push(icon_toggle_button(labels::ICON_FARM, false, on_farm));
+    }
+    if let Some(on_chat) = actions.on_chat {
+        right = right.push(icon_toggle_button(labels::ICON_CHAT, false, on_chat));
+    }
+    if let Some(on_browser) = actions.on_browser {
+        right = right.push(tooltip(
+            icon_toggle_button(labels::ICON_LANGUAGE, false, on_browser),
+            crate::pane_chrome::tip_bubble(labels::SETTINGS_FEATURE_BROWSER),
+            tooltip::Position::Bottom,
+        ));
+    }
     if let Some(on_harness) = actions.on_harness {
         right = right.push(tooltip(
             icon_toggle_button(labels::ICON_TUNE, false, on_harness),
@@ -63,11 +109,20 @@ pub fn view<'a, M: Clone + 'a>(
             tooltip::Position::Bottom,
         ));
     }
-    right = right.push(tooltip(
-        icon_toggle_button(labels::ICON_HUB_OUTLINED, false, actions.on_agent_graph),
-        crate::pane_chrome::tip_bubble(labels::TOPBAR_VISUALIZE_AGENTS),
-        tooltip::Position::Bottom,
-    ));
+    if let Some(on_agent_graph) = actions.on_agent_graph {
+        right = right.push(tooltip(
+            icon_toggle_button(labels::ICON_HUB_OUTLINED, false, on_agent_graph),
+            crate::pane_chrome::tip_bubble(labels::TOPBAR_VISUALIZE_AGENTS),
+            tooltip::Position::Bottom,
+        ));
+    }
+    if let Some(on_localsend) = actions.on_localsend {
+        right = right.push(tooltip(
+            icon_toggle_button(labels::ICON_SEND, false, on_localsend),
+            crate::pane_chrome::tip_bubble(labels::TOPBAR_LOCALSEND_SEND),
+            tooltip::Position::Bottom,
+        ));
+    }
     // ponytail: o grafo de agentes entra com o painel dele
     let right = right
         .push(icon_toggle_button(

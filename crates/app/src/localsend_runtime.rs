@@ -7,8 +7,10 @@ use gsh_localsend::{
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver as EventReceiver, Sender, SyncSender};
 use std::sync::Arc;
+use std::time::Instant;
 use thiserror::Error;
 
 pub struct IncomingRequest {
@@ -113,6 +115,19 @@ pub struct LocalSendHost {
     identity: Identity,
 }
 
+#[derive(Clone)]
+pub struct LocalSendSender {
+    identity: Identity,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum PeerLookupError {
+    #[error("LocalSend peer not found: {0}")]
+    NotFound(String),
+    #[error("LocalSend peer target is ambiguous: {0}")]
+    Ambiguous(String),
+}
+
 impl LocalSendHost {
     pub fn start(
         bind: SocketAddr,
@@ -120,17 +135,18 @@ impl LocalSendHost {
         limits: Limits,
         receive_bridge: ReceiveBridge,
     ) -> Result<Self, StartError> {
-        Self::start_with_discovery(bind, alias, limits, receive_bridge, true)
+        let identity = Identity::load_or_create(bind.port())?;
+        Self::start_with_identity(bind, alias, limits, receive_bridge, identity, true)
     }
 
-    fn start_with_discovery(
+    fn start_with_identity(
         bind: SocketAddr,
         alias: &str,
         limits: Limits,
         receive_bridge: ReceiveBridge,
+        mut identity: Identity,
         with_discovery: bool,
     ) -> Result<Self, StartError> {
-        let mut identity = Identity::generate(bind.port())?;
         if !alias.trim().is_empty() {
             identity.info.alias = alias.trim().to_owned();
         }
@@ -166,6 +182,12 @@ impl LocalSendHost {
             .unwrap_or_default()
     }
 
+    pub fn sender(&self) -> LocalSendSender {
+        LocalSendSender {
+            identity: self.identity(),
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn start_for_test(
         bind: SocketAddr,
@@ -173,7 +195,62 @@ impl LocalSendHost {
         limits: Limits,
         receive_bridge: ReceiveBridge,
     ) -> Result<Self, StartError> {
-        Self::start_with_discovery(bind, alias, limits, receive_bridge, false)
+        let identity = Identity::generate(bind.port()).expect("test identity");
+        Self::start_with_identity(bind, alias, limits, receive_bridge, identity, false)
+    }
+}
+
+impl LocalSendSender {
+    pub fn send_open_files_until(
+        &self,
+        peer: &Peer,
+        files: Vec<(PathBuf, std::fs::File)>,
+        max_file_size: u64,
+        deadline: Instant,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<(), gsh_localsend::NetworkError> {
+        gsh_localsend::send_open_files_until(
+            peer,
+            &self.identity,
+            files,
+            max_file_size,
+            deadline,
+            |_, _, _| {},
+            move || cancelled.load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    pub fn send_files(
+        &self,
+        peer: Peer,
+        files: Vec<PathBuf>,
+        max_file_size: u64,
+        mut progress: impl FnMut(&std::path::Path, u64, u64) + Send + 'static,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<(), gsh_localsend::NetworkError> {
+        gsh_localsend::send_files(
+            &peer,
+            &self.identity,
+            &files,
+            max_file_size,
+            |path, sent, total| progress(path, sent, total),
+            move || cancelled.load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+}
+
+pub fn find_peer(peers: &[Peer], target: &str) -> Result<Peer, PeerLookupError> {
+    let target = target.trim();
+    let ip = target.parse::<std::net::Ipv4Addr>().ok();
+    let matches = peers
+        .iter()
+        .filter(|peer| peer.info.alias.eq_ignore_ascii_case(target) || Some(peer.ip) == ip)
+        .cloned()
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [peer] => Ok(peer.clone()),
+        [] => Err(PeerLookupError::NotFound(target.to_owned())),
+        _ => Err(PeerLookupError::Ambiguous(target.to_owned())),
     }
 }
 
@@ -357,5 +434,95 @@ mod tests {
         ));
         assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn peer_lookup_accepts_alias_case_insensitively_or_ip() {
+        let peer = Peer {
+            info: DeviceInfo {
+                alias: "Sala".into(),
+                version: "2.0".into(),
+                device_model: None,
+                device_type: Some("desktop".into()),
+                fingerprint: "fingerprint".into(),
+                port: Some(53317),
+                protocol: Some("https".into()),
+                download: false,
+            },
+            ip: Ipv4Addr::LOCALHOST,
+            seen_at: 0,
+        };
+        assert_eq!(
+            find_peer(std::slice::from_ref(&peer), "sAlA").unwrap().ip,
+            peer.ip
+        );
+        assert_eq!(
+            find_peer(std::slice::from_ref(&peer), "127.0.0.1")
+                .unwrap()
+                .info
+                .alias,
+            "Sala"
+        );
+        assert!(
+            matches!(find_peer(&[], "Sala"), Err(PeerLookupError::NotFound(name)) if name == "Sala")
+        );
+    }
+
+    #[test]
+    fn peer_lookup_rejects_ambiguous_alias() {
+        let make_peer = |ip| Peer {
+            info: DeviceInfo {
+                alias: "Laptop".into(),
+                version: "2.0".into(),
+                device_model: None,
+                device_type: Some("desktop".into()),
+                fingerprint: "fingerprint".into(),
+                port: Some(53317),
+                protocol: Some("https".into()),
+                download: false,
+            },
+            ip,
+            seen_at: 0,
+        };
+        let peers = [
+            make_peer(Ipv4Addr::LOCALHOST),
+            make_peer(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+        assert!(
+            matches!(find_peer(&peers, "Laptop"), Err(PeerLookupError::Ambiguous(name)) if name == "Laptop")
+        );
+    }
+
+    #[test]
+    fn app_sender_propagates_cancelled_result() {
+        let sender = LocalSendSender {
+            identity: Identity::generate(0).unwrap(),
+        };
+        let cancelled = Arc::new(AtomicBool::new(true));
+        let peer = Peer {
+            info: sender.identity.info.clone(),
+            ip: Ipv4Addr::LOCALHOST,
+            seen_at: 0,
+        };
+        let error = sender
+            .send_files(peer, Vec::new(), 1024, |_, _, _| {}, cancelled)
+            .unwrap_err();
+        assert!(matches!(error, NetworkError::Cancelled));
+    }
+
+    #[test]
+    fn repeated_host_start_and_drop_releases_listener() {
+        let probe = std::net::TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 42), 0))
+            .expect("probe listener");
+        let address = probe.local_addr().expect("probe addr");
+        drop(probe);
+        for _ in 0..20 {
+            let (bridge, _events) = ReceiveBridge::channel();
+            let host =
+                LocalSendHost::start_for_test(address, "GSH Test", limits(2, 4), bridge).unwrap();
+            assert_eq!(host.address(), address);
+            drop(host);
+            std::net::TcpListener::bind(address).expect("LocalSend socket released after drop");
+        }
     }
 }

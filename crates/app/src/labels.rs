@@ -20,6 +20,18 @@ pub const WORKSPACE_EXAMPLE: &str = "Projeto de exemplo";
 pub const WORKSPACE_EXAMPLE_INITIAL: &str = "P";
 pub const WORKSPACE_EXAMPLE_BRANCH: &str = "feat/ui";
 pub const DEFAULT_REALM: &str = "Padrão";
+pub const RAIL_KEEP_AWAKE_ON: &str =
+    "Mantendo este computador acordado para acesso remoto. Clique para deixá-lo dormir de novo.";
+pub const RAIL_KEEP_AWAKE_OFF: &str =
+    "Manter este computador acordado para acesso remoto. Desliga sozinho quando o GSH Desktop reinicia.";
+pub const RAIL_KEEP_AWAKE_BATTERY: &str = "Acordado na bateria. Isso consome a bateria.";
+pub const RAIL_KEEP_AWAKE_LID: &str =
+    "Fechar a tampa do notebook continua colocando-o para dormir.";
+pub const RAIL_SETTINGS_TOOLTIP: &str = "Configurações";
+pub const UPDATE_CARD_TITLE: &str = "Update available";
+pub const UPDATE_CARD_CLICK_TO_DOWNLOAD: &str = "click to download";
+pub const UPDATE_CARD_DISMISS_TOOLTIP: &str = "Dispensar";
+pub const EDITOR_APPLY_CKP_LAYOUT: &str = "Aplicar layout";
 
 pub const DEFAULT_TAB_TITLE: &str = "Terminal";
 pub const CHAT_TAB_TITLE: &str = "Chat";
@@ -117,6 +129,18 @@ pub const EDITOR_DISCARD: &str = "Descartar e fechar";
 pub const EDITOR_CANCEL: &str = "Cancelar";
 pub const EDITOR_EXTERNAL_CHANGE: &str = "O arquivo mudou no disco. Confirme para sobrescrever.";
 pub const EDITOR_OVERWRITE: &str = "Sobrescrever arquivo";
+#[cfg(target_os = "linux")]
+pub const EDITOR_FORMAT: &str = "Formatar";
+#[cfg(target_os = "linux")]
+pub const EDITOR_FORMATTING: &str = "Formatando…";
+#[cfg(target_os = "linux")]
+pub const EDITOR_DIAGNOSTIC_ERROR: &str = "Erro";
+#[cfg(target_os = "linux")]
+pub const EDITOR_DIAGNOSTIC_WARNING: &str = "Aviso";
+#[cfg(target_os = "linux")]
+pub const EDITOR_DIAGNOSTIC_INFO: &str = "Informação";
+#[cfg(target_os = "linux")]
+pub const EDITOR_DIAGNOSTIC_HINT: &str = "Sugestão";
 pub const EDITOR_SAVE_ERROR: &str = "Não foi possível salvar: ";
 pub const EDITOR_INVALID_POSITION: &str = "Posição de edição inválida.";
 pub const EDITOR_READ_ONLY: &str = "O arquivo é somente leitura.";
@@ -190,6 +214,7 @@ pub const ICON_ACCOUNT_TREE: &str = "\u{e97a}";
 pub const ICON_HUB_OUTLINED: &str = "\u{e9f4}";
 pub const ICON_INFO_OUTLINE: &str = "\u{e88e}";
 pub const TOPBAR_VISUALIZE_AGENTS: &str = "Visualizar agentes";
+pub const TOPBAR_LOCALSEND_SEND: &str = "Enviar por LocalSend";
 pub const ICON_DIFF: &str = "\u{eb7d}";
 pub const ICON_MINUS: &str = "\u{e15b}";
 pub const ICON_SPEED: &str = "\u{e9e4}";
@@ -206,11 +231,20 @@ pub const SOURCE_CONTROL_HEADER: &str = "Controle de versão";
 pub const SOURCE_CONTROL_SECTION_UPPER: &str = "CONTROLE DE VERSÃO";
 pub const GIT_TAB_CHANGES: &str = "Alterações";
 pub const GIT_TAB_HISTORY: &str = "Histórico";
+pub const GIT_TAB_BRANCHES: &str = "Branches";
 pub const GIT_NO_CHANGES: &str = "Nenhuma alteração.";
 pub const GIT_NO_REPO: &str = "Nenhum repositório Git disponível.";
 pub const GIT_COMMIT_PLACEHOLDER: &str = "Mensagem do commit";
 pub const GIT_COMMIT_BUTTON: &str = "Commit";
 pub const GIT_COMMITTING_BUTTON: &str = "Comitando…";
+pub const GIT_SUGGEST_COMMIT: &str = "Sugerir mensagem";
+pub const GIT_SUGGESTING_COMMIT: &str = "Gerando sugestão…";
+pub const GIT_SEND_PR_FEEDBACK: &str = "Corrigir com agente";
+pub const GIT_FETCHING_PR_FEEDBACK: &str = "Consultando PR no GitHub…";
+pub const GIT_BRANCHES_EMPTY: &str = "Nenhuma branch local.";
+pub const GIT_BRANCH_DIRTY_NOTICE: &str =
+    "Salve ou faça stash das alterações antes de trocar de branch.";
+pub const GIT_BRANCH_CURRENT: &str = "atual";
 pub const GIT_HISTORY_EMPTY: &str = "Nenhum commit encontrado.";
 pub const GIT_HISTORY_UNTITLED: &str = "Commit sem título";
 pub const GIT_DIFF_TAB_PREFIX: &str = "Diff: ";
@@ -224,6 +258,13 @@ pub const GIT_DIFF_UNCHANGED: &str = "Sem alterações.";
 pub const GIT_DIFF_PREFIX_ADD: &str = "+";
 pub const GIT_DIFF_PREFIX_DEL: &str = "-";
 pub const GIT_DIFF_PREFIX_CTX: &str = " ";
+pub const GIT_DIFF_ADD_NOTE: &str = "Anotar";
+pub const GIT_DIFF_NOTE_PLACEHOLDER: &str = "Observação sobre esta linha para o agente…";
+pub const GIT_DIFF_NOTE_SAVE: &str = "Salvar nota";
+pub const GIT_DIFF_NOTE_REMOVE: &str = "Remover";
+pub fn format_git_send_notes_button(count: usize) -> String {
+    format!("Enviar {count} nota(s) ao agente")
+}
 pub const GIT_ERR_NOT_INSTALLED_PREFIX: &str = "Git não instalado: ";
 pub const GIT_ERR_NOT_A_REPO: &str = "Esta pasta não é um repositório Git.";
 pub const GIT_ERR_EMPTY_MESSAGE: &str = "Digite uma mensagem de commit.";
@@ -463,6 +504,29 @@ pub fn format_git_error(err: &gsh_git::GitError) -> String {
         gsh_git::GitError::NotARepository { .. } => GIT_ERR_NOT_A_REPO.to_string(),
         gsh_git::GitError::EmptyCommitMessage => GIT_ERR_EMPTY_MESSAGE.to_string(),
         gsh_git::GitError::EmptyPaths => GIT_ERR_EMPTY_PATHS.to_string(),
+        gsh_git::GitError::NoStagedChanges => {
+            "Adicione alterações ao stage antes de pedir uma sugestão.".to_string()
+        }
+        gsh_git::GitError::StagedDiffTooLarge { max_bytes } => {
+            format!("O diff staged excede o limite de {max_bytes} bytes.")
+        }
+        gsh_git::GitError::StagedDiffTimeout => {
+            "O Git excedeu o tempo limite ao obter o diff staged.".to_string()
+        }
+        gsh_git::GitError::DirtyWorkingTree => GIT_BRANCH_DIRTY_NOTICE.to_string(),
+        gsh_git::GitError::BranchNotFound { name } => {
+            format!("Branch local não encontrada: {name}")
+        }
+        gsh_git::GitError::CommitMessageGenerationFailed(failure) => {
+            use gsh_git::error::CommitMessageFailure;
+            match failure {
+                CommitMessageFailure::Disabled => {
+                    "Selecione um harness em Configurações → Automações para gerar sugestões."
+                        .to_string()
+                }
+                _ => format!("Falha ao gerar sugestão: {failure}"),
+            }
+        }
         gsh_git::GitError::CommandFailed { stderr, .. } => {
             format!("{GIT_ERR_CMD_PREFIX}{stderr}")
         }
@@ -549,6 +613,12 @@ pub const AGENT_GRAPH_MAKE_MAESTRO: &str = "Tornar maestro";
 pub const AGENT_GRAPH_REMOVE_MAESTRO: &str = "Remover maestro";
 pub const AGENT_GRAPH_CLOSE_TAB: &str = "Fechar aba";
 pub const AGENT_GRAPH_REMOVE_FROM_CANVAS: &str = "Remover do canvas";
+pub const AGENT_GRAPH_IMPORT_TEAM: &str = "Importar time (.md)…";
+pub const AGENT_GRAPH_EXPORT_TEAM: &str = "Exportar time (.md)…";
+pub const AGENT_GRAPH_IMPORT_REVIEW_TITLE: &str = "Revisar time importado (.md)";
+pub const AGENT_GRAPH_IMPORT_SECURITY_NOTICE: &str =
+    "Revisão de segurança: nenhum comando foi executado na leitura. Apenas harnesses oficiais e pastas dentro do workspace serão abertos se você confirmar.";
+pub const AGENT_GRAPH_IMPORT_CONFIRM: &str = "Criar time";
 pub fn agent_graph_maestro_replaces(name: &str) -> String {
     format!("{name} é o maestro atual e deixará de ser.")
 }
@@ -603,6 +673,36 @@ pub const SETTINGS_APPEARANCE: &str = "Aparência";
 pub const SETTINGS_TERMINAL: &str = "Terminal";
 pub const SETTINGS_EDITOR: &str = "Editor";
 pub const SETTINGS_NOTIFICATIONS: &str = "Notificações";
+pub const SETTINGS_AUTOMATIONS: &str = "Automações";
+pub const SETTINGS_LANGUAGE_SERVERS: &str = "Servidores de linguagem";
+pub const SETTINGS_FEATURES: &str = "Recursos do GSH";
+pub const SETTINGS_AUTOMATION_HARNESS: &str = "Harness padrão";
+pub const SETTINGS_AUTOMATION_MODEL: &str = "Modelo padrão";
+pub const SETTINGS_AUTOMATION_DISABLED: &str = "Desativado";
+pub const SETTINGS_ROUTINES_TITLE: &str = "Rotinas agendadas";
+pub const SETTINGS_ROUTINES_DESC: &str =
+    "Escolha os dias da semana e o horário local. A rotina abre o agente no repositório e salva a saída no histórico. O agendamento funciona enquanto o GSH estiver aberto.";
+pub const SETTINGS_ROUTINE_NAME_HINT: &str = "Nome (ex.: Revisão matinal)";
+pub const SETTINGS_ROUTINE_TIME_HINT: &str = "HH:MM (ex.: 09:00)";
+pub const SETTINGS_ROUTINE_WORKSPACE_HINT: &str = "Caminho do repositório";
+pub const SETTINGS_ROUTINE_PROMPT_HINT: &str = "Prompt para o agente rodar neste repositório…";
+pub const SETTINGS_ROUTINE_ADD: &str = "Agendar rotina";
+pub const SETTINGS_ROUTINE_RUN_NOW: &str = "Testar agora";
+pub const SETTINGS_ROUTINE_REMOVE: &str = "Remover";
+pub const SETTINGS_ROUTINES_EMPTY: &str = "Nenhuma rotina agendada.";
+pub const SETTINGS_LSP_COMMANDS: &str = "Servidores de linguagem";
+pub const SETTINGS_LSP_FORMATTERS: &str = "Formatadores";
+pub const SETTINGS_LSP_HELP: &str =
+    "Uma entrada por linha: linguagem = comando. Exemplo: rust = rust-analyzer";
+pub const SETTINGS_LSP_INVALID: &str =
+    "Confira o formato: linguagem = comando, uma entrada por linha.";
+pub const SETTINGS_AUTOMATION_INVALID: &str = "O nome do modelo deve ter até 128 caracteres.";
+pub const SETTINGS_FEATURE_CHAT: &str = "Chat";
+pub const SETTINGS_FEATURE_FARM: &str = "Fazenda";
+pub const SETTINGS_FEATURE_GRAPH: &str = "Grafo de agentes";
+pub const SETTINGS_FEATURE_BROWSER: &str = "Navegador";
+pub const SETTINGS_FEATURE_HARNESS: &str = "Harness";
+pub const SETTINGS_FEATURE_ISLAND: &str = "Ilha de agentes";
 pub const SETTINGS_TEAM: &str = "Fazenda do time";
 pub const SETTINGS_TEAM_ENABLE: &str = "Ver a fazenda dos colegas";
 pub const SETTINGS_TEAM_ENABLE_DESC: &str = "Na mesma rede (ex.: no escritório), cada GSH anuncia a própria fazenda e mostra a dos colegas ao lado da sua — diminua o zoom para ver. Sem servidor: nada sai da rede local. Desligado, nada sai do seu GSH.";
@@ -628,7 +728,7 @@ pub const SETTINGS_TEAM_NETWORK_HINT: &str = "qualquer rede local";
 
 // LocalSend
 pub const LOCALSEND_TITLE: &str = "LocalSend";
-pub const LOCALSEND_ENABLE: &str = "Ativar LocalSend";
+pub const LOCALSEND_ALWAYS_ON: &str = "Ficar disponível para receber arquivos o tempo todo";
 pub const LOCALSEND_ALIAS: &str = "Nome deste dispositivo";
 pub const LOCALSEND_ALIAS_HINT: &str = "vazio usa o nome do computador";
 pub const LOCALSEND_RECEIVE_DIR: &str = "Pasta para receber";
@@ -695,8 +795,6 @@ pub const SETTINGS_TRANSCRIPT_WIDTH: &str = "Largura da transcrição";
 pub const SETTINGS_WIDTH_NARROW: &str = "Estreito";
 pub const SETTINGS_WIDTH_MEDIUM: &str = "Médio";
 pub const SETTINGS_WIDTH_WIDE: &str = "Largo";
-pub const SETTINGS_NOTIFY_TURN_DONE: &str = "Conclusão de respostas";
-pub const SETTINGS_NOTIFY_PERMISSION: &str = "Solicitações de permissão do Code";
 pub const SETTINGS_THEME: &str = "Tema";
 pub const SETTINGS_DARK: &str = "Escuro";
 pub const SETTINGS_LIGHT: &str = "Claro";
@@ -707,9 +805,7 @@ pub const SETTINGS_TERMINAL_SIZE: &str = "Fonte do terminal (8 a 32)";
 pub const SETTINGS_TAB_SIZE: &str = "Tabulação (2 ou 4)";
 pub const SETTINGS_HIGHLIGHT: &str = "Realce de sintaxe";
 pub const SETTINGS_WRAP: &str = "Quebra de linha";
-pub const SETTINGS_AGENT_NOTIFICATIONS: &str = "Notificações de agente";
-pub const SETTINGS_NOTIFICATIONS_PENDING: &str =
-    "A entrega de notificações ainda não está disponível neste aplicativo.";
+pub const SETTINGS_AGENT_NOTIFICATIONS: &str = "Conclusão de respostas e permissões do Claude Code";
 pub const SETTINGS_INVALID_SHELL: &str = "Informe um shell não vazio.";
 pub const SETTINGS_INVALID_SCROLLBACK: &str = "Informe um histórico entre 1000 e 100000.";
 pub const SETTINGS_INVALID_TERMINAL_SIZE: &str = "Informe um tamanho de fonte entre 8 e 32.";
@@ -1230,8 +1326,11 @@ pub const SETTINGS_ACCOUNT_LOGGED_OUT_DESC: &str =
     "Entre para usar sua assinatura do Claude no Claude Code.";
 pub const SETTINGS_ACCOUNT_LOGIN: &str = "Entrar";
 pub const SETTINGS_ACCOUNT_LOGOUT: &str = "Sair";
+pub const SETTINGS_ACCOUNT_SWITCH: &str = "Trocar de conta";
 pub const SETTINGS_ACCOUNT_LOGOUT_CONFIRM_TITLE: &str = "Sair do Claude Code?";
 pub const SETTINGS_ACCOUNT_LOGOUT_CONFIRM_MESSAGE: &str = "Roda `claude auth logout`. As sessões deste computador deixam de usar sua assinatura até você entrar de novo.";
+pub const SETTINGS_ACCOUNT_SWITCH_CONFIRM_TITLE: &str = "Trocar de conta do Claude Code?";
+pub const SETTINGS_ACCOUNT_SWITCH_CONFIRM_MESSAGE: &str = "Encerra a sessão atual (`claude auth logout`) e abre um terminal com `claude auth login` para autenticar outra conta.";
 pub const SETTINGS_ACCOUNT_EMAIL: &str = "E-mail";
 pub const SETTINGS_ACCOUNT_ORGANIZATION: &str = "Organização";
 pub const SETTINGS_ACCOUNT_ORG_ID: &str = "ID da organização";
@@ -1448,6 +1547,19 @@ pub const SETTINGS_SYSTEM_LAUNCH_DESC: &str =
     "Inicia o GSH Desktop automaticamente quando você faz login no computador.";
 pub const SETTINGS_SYSTEM_KEEP_AWAKE_TITLE: &str = "Manter computador ativo";
 pub const SETTINGS_SYSTEM_KEEP_AWAKE_DESC: &str = "Impede a suspensão por inatividade enquanto ligado (o mesmo botão de raio do rail). Desliga ao fechar o app; fechar a tampa ainda suspende.";
+pub const SETTINGS_SYSTEM_LID_SESSION_TITLE: &str = "Sessão com a tampa fechada";
+pub const SETTINGS_SYSTEM_LID_SESSION_DESC: &str = "Mantém o notebook acordado no Linux mesmo com a tampa fechada por tempo definido (systemd-inhibit handle-lid-switch). Aviso: deixe o notebook em superfície ventilada — nunca dentro de mochila fechada. Encerra sozinho se a bateria cair a 20% ou menos ou se a temperatura atingir 85 °C.";
+pub const SETTINGS_SYSTEM_LID_START: &str = "Iniciar sessão";
+pub const SETTINGS_SYSTEM_LID_STOP: &str = "Encerrar agora";
+pub fn settings_lid_active_remaining(mins: u64) -> String {
+    format!("Ativa · restam {mins} min")
+}
+pub fn settings_lid_stopped_battery(pct: u8) -> String {
+    format!("Sessão encerrada por bateria baixa ({pct}%).")
+}
+pub fn settings_lid_stopped_temp(temp_c: i32) -> String {
+    format!("Sessão encerrada por temperatura alta ({temp_c} °C).")
+}
 pub const SETTINGS_STORAGE_SECTION_TITLE: &str = "Armazenamento";
 pub const SETTINGS_STORAGE_LOCATION_TITLE: &str = "Local de armazenamento";
 pub const SETTINGS_STORAGE_USE_DEFAULT: &str = "Usar padrão";

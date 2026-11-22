@@ -9,14 +9,18 @@ use sha2::Digest;
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const SESSION_TTL: Duration = Duration::from_secs(300);
+const MAX_REQUESTS: usize = 64;
+const PRE_REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 /// Tempo máximo para o usuário aceitar ou recusar um recebimento.
 pub const RECEIVE_DECISION_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -82,11 +86,12 @@ struct State {
     receiver: Arc<dyn Receiver>,
     limits: Limits,
     sessions: Mutex<HashMap<String, Session>>,
+    stop: Arc<AtomicBool>,
 }
 
 pub struct LocalSendServer {
     address: SocketAddr,
-    stop: Arc<std::sync::atomic::AtomicBool>,
+    stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
 }
 
@@ -110,31 +115,53 @@ impl LocalSendServer {
                 .with_single_cert(vec![identity.cert.clone()], identity.key.clone_key())
                 .map_err(|e| ServerError::Tls(e.to_string()))?,
         );
+        let stop = Arc::new(AtomicBool::new(false));
         let state = Arc::new(State {
             identity,
             receiver,
             limits,
             sessions: Mutex::new(HashMap::new()),
+            stop: Arc::clone(&stop),
         });
-        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let worker = thread::Builder::new()
             .name("gsh-localsend-https".into())
             .spawn(move || {
-                while !worker_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let mut requests: Vec<(TcpStream, thread::JoinHandle<()>)> = Vec::new();
+                while !worker_stop.load(Ordering::Relaxed) {
+                    let mut request_index = 0;
+                    while request_index < requests.len() {
+                        if requests[request_index].1.is_finished() {
+                            let (_, request) = requests.swap_remove(request_index);
+                            let _ = request.join();
+                        } else {
+                            request_index += 1;
+                        }
+                    }
                     match listener.accept() {
-                        Ok((stream, peer)) => {
+                        Ok((stream, peer)) if requests.len() < MAX_REQUESTS => {
+                            let Ok(shutdown) = stream.try_clone() else {
+                                continue;
+                            };
                             let state = Arc::clone(&state);
                             let tls = Arc::clone(&tls);
-                            let _ = thread::Builder::new()
+                            if let Ok(request) = thread::Builder::new()
                                 .name("gsh-localsend-request".into())
-                                .spawn(move || serve(stream, peer, tls, state));
+                                .spawn(move || serve(stream, peer, tls, state))
+                            {
+                                requests.push((shutdown, request));
+                            }
                         }
+                        Ok(_) => {}
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                             thread::sleep(Duration::from_millis(20))
                         }
                         Err(_) => thread::sleep(Duration::from_millis(100)),
                     }
+                }
+                // A receive decision can wait on the UI that's dropping this server.
+                for (stream, _) in requests {
+                    let _ = stream.shutdown(Shutdown::Both);
                 }
             })
             .map_err(|e| ServerError::Thread(e.to_string()))?;
@@ -150,7 +177,7 @@ impl LocalSendServer {
 }
 impl Drop for LocalSendServer {
     fn drop(&mut self) {
-        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -158,13 +185,50 @@ impl Drop for LocalSendServer {
 }
 
 fn serve(stream: TcpStream, peer: SocketAddr, config: Arc<ServerConfig>, state: Arc<State>) {
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
+    let Ok(watchdog_stream) = stream.try_clone() else {
+        return;
+    };
+    let (headers_done, wait_for_headers) = mpsc::channel();
+    let Ok(watchdog) = thread::Builder::new()
+        .name("gsh-localsend-header-deadline".into())
+        .spawn(move || {
+            if wait_for_headers.recv_timeout(PRE_REQUEST_DEADLINE).is_err() {
+                let _ = watchdog_stream.shutdown(Shutdown::Both);
+            }
+        })
+    else {
+        return;
+    };
     let Ok(connection) = rustls::ServerConnection::new(config) else {
+        let _ = headers_done.send(());
+        let _ = watchdog.join();
         return;
     };
     let mut tls = rustls::StreamOwned::new(connection, stream);
-    let Ok((method, target, headers)) = read_headers(&mut tls) else {
+    let headers = read_headers(&mut tls);
+    let preloaded_body = match &headers {
+        Ok((method, target, headers))
+            if method == "POST"
+                && matches!(
+                    target.split('?').next().unwrap_or(""),
+                    path if path == format!("{API}/register")
+                        || path == format!("{API}/prepare-upload")
+                ) =>
+        {
+            let length = headers
+                .get("content-length")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            Some(read_body(&mut tls, length, 1024 * 1024))
+        }
+        _ => None,
+    };
+    let _ = headers_done.send(());
+    let _ = watchdog.join();
+    let Ok((method, target, headers)) = headers else {
         return;
     };
     let length = headers
@@ -173,12 +237,15 @@ fn serve(stream: TcpStream, peer: SocketAddr, config: Arc<ServerConfig>, state: 
         .unwrap_or(0);
     let path = target.split('?').next().unwrap_or("");
     let query = target.split_once('?').map(|(_, query)| query).unwrap_or("");
-    let response = if (method == "GET" && path == format!("{API}/info"))
-        || (method == "POST" && path == format!("{API}/register"))
-    {
+    let response = if method == "GET" && path == format!("{API}/info") {
         json_response(200, &state.identity.info)
+    } else if method == "POST" && path == format!("{API}/register") {
+        match preloaded_body.unwrap_or(Err(400)) {
+            Ok(_) => json_response(200, &state.identity.info),
+            Err(status) => empty_response(status),
+        }
     } else if method == "POST" && path == format!("{API}/prepare-upload") {
-        let body = read_body(&mut tls, length, 1024 * 1024);
+        let body = preloaded_body.unwrap_or(Err(400));
         match body.and_then(|body| serde_json::from_slice::<PrepareUpload>(&body).map_err(|_| 400))
         {
             Ok(request) => prepare(&state, peer, request),
@@ -220,6 +287,7 @@ fn serve(stream: TcpStream, peer: SocketAddr, config: Arc<ServerConfig>, state: 
     let _ = write_response(&mut tls, response);
     tls.conn.send_close_notify();
     let _ = tls.flush();
+    let _ = tls.sock.shutdown(Shutdown::Write);
 }
 
 fn prepare(state: &State, peer: SocketAddr, request: PrepareUpload) -> Response {
@@ -252,6 +320,9 @@ fn prepare(state: &State, peer: SocketAddr, request: PrepareUpload) -> Response 
     let ReceiveDecision::Accept { dir } = state.receiver.accept(&request.info, peer, &files) else {
         return empty_response(403);
     };
+    if state.stop.load(Ordering::Relaxed) {
+        return empty_response(403);
+    }
     if fs::create_dir_all(&dir).is_err() {
         return empty_response(500);
     }
@@ -408,6 +479,10 @@ fn upload(
         }
     }
     drop(output);
+    if state.stop.load(Ordering::Relaxed) {
+        let _ = fs::remove_file(&part);
+        return empty_response(403);
+    }
     if persist_without_overwrite(&part, &root, &file.safe_name).is_err() {
         let _ = fs::remove_file(&part);
         return empty_response(500);

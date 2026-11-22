@@ -240,72 +240,61 @@ fn ask_card<'a>(agent: &IslandAgent) -> Element<'a, IslandMsg> {
     .spacing(8)
     .align_y(Alignment::Center);
 
-    let (tool_line, always_rule) = match &agent.ask {
-        Some(ask) => (
-            labels::format_tool_line(&ask.tool_name, &ask.input_summary),
-            ask.always_rule.clone(),
-        ),
-        None => (agent.name.clone(), None),
-    };
-
-    let code_box = container(
-        text(tool_line)
-            .font(theme::FONT_MONO)
-            .size(theme::SIZE_LABEL)
-            .color(color_text2()),
-    )
-    .width(Fill)
-    .padding([6, 8])
-    .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(color_panel3())),
-        border: Border {
-            radius: 6.0.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    });
-
-    let mut actions = row![action_button(
-        labels::ACTION_ALLOW,
-        IslandMsg::DecidePermission {
-            tab_id: agent.tab_id.clone(),
-            decision: PermissionDecision::Allow,
-        },
-        AskButtonKind::Primary,
-    )]
-    .spacing(6)
-    .align_y(Alignment::Center);
-
-    if always_rule.is_some() {
+    let mut card = column![header].spacing(8);
+    let mut actions = row![].spacing(6).align_y(Alignment::Center);
+    let terminal = if let Some(ask) = &agent.ask {
+        let tool_line = labels::format_tool_line(&ask.tool_name, &ask.input_summary);
+        card = card.push(
+            container(
+                text(tool_line)
+                    .font(theme::FONT_MONO)
+                    .size(theme::SIZE_LABEL)
+                    .color(color_text2()),
+            )
+            .width(Fill)
+            .padding([6, 8])
+            .style(|_: &Theme| container::Style {
+                background: Some(Background::Color(color_panel3())),
+                border: Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        );
+        let decide = |decision| IslandMsg::DecidePermission {
+            ask_id: ask.id.clone(),
+            decision,
+        };
         actions = actions.push(action_button(
-            labels::ACTION_ALWAYS,
-            IslandMsg::DecidePermission {
-                tab_id: agent.tab_id.clone(),
-                decision: PermissionDecision::AllowAlways,
-            },
-            AskButtonKind::Outline,
+            labels::ACTION_ALLOW,
+            decide(PermissionDecision::Allow),
+            AskButtonKind::Primary,
         ));
-    }
-
-    actions = actions
-        .push(action_button(
+        if let Some(rule) = &ask.always_rule {
+            card = card.push(text(format!("Sempre: {rule}")).size(theme::SIZE_LABEL));
+            actions = actions.push(action_button(
+                labels::ACTION_ALWAYS,
+                decide(PermissionDecision::AllowAlways),
+                AskButtonKind::Outline,
+            ));
+        }
+        actions = actions.push(action_button(
             labels::ACTION_DENY,
-            IslandMsg::DecidePermission {
-                tab_id: agent.tab_id.clone(),
-                decision: PermissionDecision::Deny,
-            },
+            decide(PermissionDecision::Deny),
             AskButtonKind::Outline,
-        ))
-        .push(action_button(
-            labels::ACTION_IN_TERMINAL,
-            IslandMsg::DecidePermission {
-                tab_id: agent.tab_id.clone(),
-                decision: PermissionDecision::Pass,
-            },
-            AskButtonKind::Ghost,
         ));
+        decide(PermissionDecision::Pass)
+    } else {
+        IslandMsg::RevealTab(agent.tab_id.clone())
+    };
+    card = card.push(actions.push(action_button(
+        labels::ACTION_IN_TERMINAL,
+        terminal,
+        AskButtonKind::Ghost,
+    )));
 
-    container(column![header, code_box, actions].spacing(8))
+    container(card)
         .width(Fill)
         .padding(10)
         .style(move |_: &Theme| container::Style {

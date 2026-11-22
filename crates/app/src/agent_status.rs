@@ -230,6 +230,9 @@ impl PaneAgentRecord {
 
     /// Converte o estado atual deste terminal no [`IslandAgentState`] da ilha.
     pub fn island_state(&self) -> Option<IslandAgentState> {
+        if self.pending_ask.is_some() {
+            return Some(IslandAgentState::AskingPermission);
+        }
         IslandAgentState::from_turn_status(
             self.tracker.status(),
             self.last_event.as_ref(),
@@ -267,18 +270,8 @@ impl PaneAgentRecord {
         }
 
         match self.tracker.status() {
-            TurnStatus::Working => {
-                self.unseen_finish = false;
-                self.pending_ask = None;
-            }
-            TurnStatus::Waiting => {
-                self.unseen_finish = false;
-                if !matches!(self.last_event, Some(HookEvent::PermissionRequest)) {
-                    self.pending_ask = None;
-                }
-            }
+            TurnStatus::Working | TurnStatus::Waiting => self.unseen_finish = false,
             TurnStatus::Idle => {
-                self.pending_ask = None;
                 if matches!(
                     update.event,
                     Some(HookEvent::SessionStart | HookEvent::SessionEnd)
@@ -565,10 +558,8 @@ impl StatusRuntime {
             if let Some(h) = record.harness {
                 agent = agent.with_harness(h);
             }
-            if state == IslandAgentState::AskingPermission {
-                if let Some(ask) = &record.pending_ask {
-                    agent = agent.with_ask(ask.clone());
-                }
+            if let Some(ask) = &record.pending_ask {
+                agent = agent.with_ask(ask.clone());
             }
             out.push(agent);
         }
@@ -741,6 +732,45 @@ mod tests {
             harness: Some(AgentHarness::Claude),
             files: files.iter().map(|f| (*f).to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn eventos_de_turno_preservam_pedido_ate_decisao_ou_cancelamento() {
+        let mut runtime = StatusRuntime::without_server(None);
+        runtime.register_pane("t1");
+        let descriptors = [PaneDescriptor::new("t1", "Terminal", "GSH")];
+        let ask = PermissionAsk {
+            id: "pending".into(),
+            tool_name: "Read".into(),
+            input_summary: "README.md".into(),
+            always_rule: None,
+        };
+        runtime.set_pending_ask("t1", Some(ask.clone()));
+
+        for (now, status, event) in [
+            (1_000, TurnStatus::Working, HookEvent::PostToolUse),
+            (2_000, TurnStatus::Waiting, HookEvent::Notification),
+            (3_000, TurnStatus::Idle, HookEvent::Stop),
+        ] {
+            let mut update = files_update("t1", event, &[]);
+            update.status = status;
+            runtime.apply_update(update, now);
+            let agents = runtime.island_agents(&descriptors);
+            assert_eq!(agents[0].state, IslandAgentState::AskingPermission);
+            assert_eq!(agents[0].ask.as_ref(), Some(&ask));
+        }
+
+        runtime.set_pending_ask("t1", None);
+        assert_eq!(
+            runtime.island_agents(&descriptors)[0].state,
+            IslandAgentState::Finished
+        );
+
+        runtime.set_pending_ask("t1", Some(ask));
+        assert!(runtime.apply_permission_decision("t1", PermissionDecision::Pass, 4_000));
+        let agents = runtime.island_agents(&descriptors);
+        assert_eq!(agents[0].state, IslandAgentState::Waiting);
+        assert!(agents[0].ask.is_none());
     }
 
     #[test]

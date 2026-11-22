@@ -9,3 +9,10 @@ repository.workspace = true
 thiserror.workspace = true
 tempfile = "3"
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+serde.workspace = true
+serde_json.workspace = true
+shlex = "2"
+tokio = { workspace = true, features = ["io-util", "macros", "process", "sync", "time"] }
+url = "2"

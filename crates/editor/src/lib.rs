@@ -14,6 +14,8 @@ use std::ops::Range;
 use std::path::Path;
 
 pub mod highlight;
+#[cfg(target_os = "linux")]
+pub mod lsp;
 
 const HISTORY_LIMIT: usize = 500;
 

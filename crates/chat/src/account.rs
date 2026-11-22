@@ -226,6 +226,7 @@ pub fn probe_account(exe: &Path, extra_env: &[(String, String)]) -> Option<Accou
     for (k, v) in env_with_dir_on_path(exe, extra_env) {
         cmd.env(k, v);
     }
+    crate::settings::apply_profile_env(&mut cmd, extra_env);
     let mut child = cmd.spawn().ok()?;
     let result = run_probe(&mut child);
     let _ = child.kill();

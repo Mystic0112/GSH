@@ -350,6 +350,14 @@ impl PaneTree {
         Some(id)
     }
 
+    /// Cria e foca um pane vazio à direita/abaixo para abrir uma aba não-terminal.
+    pub fn split_empty(&mut self, pane: Pane, axis: Axis) -> Option<Pane> {
+        self.grid.get(pane)?;
+        let (new_pane, _) = self.grid.split(axis, pane, PaneModel::empty())?;
+        self.focused = new_pane;
+        Some(new_pane)
+    }
+
     /// Fecha `pane` (`closePane` do Flutter): o irmão expande; sendo o único, ele
     /// fica com um terminal novo. Foco inválido vai para o primeiro pane do layout.
     pub fn close(&mut self, pane: Pane) -> Option<ClosedPane> {
@@ -434,6 +442,20 @@ mod tests {
         let (_, axis, ratio) = root_split(&tree).expect("raiz dividida");
         assert!(matches!(axis, Axis::Vertical));
         assert_eq!(ratio, 0.5);
+    }
+
+    #[test]
+    fn split_empty_foca_pane_vazio_sem_abrir_terminal() {
+        let mut tree = PaneTree::default();
+        let original = tree.focused();
+        let empty = tree.split_empty(original, Axis::Vertical);
+        assert_eq!(empty, Some(tree.focused()));
+        assert_ne!(tree.focused(), original);
+        assert!(tree.focused_model().tabs().is_empty());
+        assert_eq!(
+            tree.model(original).map(PaneModel::tabs),
+            Some(&[PaneTab::Terminal(1)][..])
+        );
     }
 
     #[test]

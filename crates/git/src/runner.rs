@@ -6,6 +6,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
 use crate::error::GitError;
 use crate::parse::{
@@ -15,6 +16,8 @@ use crate::types::{
     normalize_rel_path, DiffHunk, DiffLine, DiffLineKind, FileDiff, FileDiffKind, GitCommitInfo,
     GitRepoStatus,
 };
+
+mod staged;
 
 /// Candidatos conhecidos para o binário `git` (espelha `GitBinary` do Flutter).
 pub const GIT_BINARY_CANDIDATES: [&str; 3] = [
@@ -95,6 +98,34 @@ impl GitClient {
         )?;
         let text = String::from_utf8_lossy(&out.stdout);
         Ok(parse_porcelain_v2_z(&text))
+    }
+
+    /// Lista branches locais por nome, sem depender de locale nem do shell.
+    pub fn branches(&self, repo: &Path) -> Result<Vec<String>, GitError> {
+        let output = self.run_args(
+            repo,
+            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        )?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(ToOwned::to_owned)
+            .collect())
+    }
+
+    /// Troca branch local somente com a árvore limpa e para um nome existente.
+    pub fn switch_branch(&self, repo: &Path, name: &str) -> Result<(), GitError> {
+        if !self.status(repo)?.is_clean() {
+            return Err(GitError::DirtyWorkingTree);
+        }
+        if !self.branches(repo)?.iter().any(|branch| branch == name) {
+            return Err(GitError::BranchNotFound {
+                name: name.to_owned(),
+            });
+        }
+        let _ = self.run_args(repo, &["switch", "--quiet", name])?;
+        Ok(())
     }
 
     /// Adiciona caminhos relativos ao index (`git add -- <paths...>`).
@@ -235,6 +266,65 @@ impl GitClient {
         }
 
         Ok(FileDiff::unchanged(rel, staged))
+    }
+
+    /// Lê o diff staged com teto de bytes e encerra o processo se o exceder.
+    pub fn staged_diff<P: AsRef<Path>>(
+        &self,
+        repo: &Path,
+        paths: &[P],
+        max_bytes: usize,
+    ) -> Result<String, GitError> {
+        if paths.is_empty() {
+            return Err(GitError::EmptyPaths);
+        }
+        let paths = paths
+            .iter()
+            .map(|path| normalize_rel_path(path.as_ref()))
+            .collect::<Vec<_>>();
+        self.read_staged_diff(repo, &paths, max_bytes)
+    }
+
+    /// Lê o diff staged de todo o index, sem filtrar por caminho.
+    pub fn staged_index_diff(&self, repo: &Path, max_bytes: usize) -> Result<String, GitError> {
+        self.read_staged_diff(repo, &[], max_bytes)
+    }
+
+    fn read_staged_diff(
+        &self,
+        repo: &Path,
+        paths: &[String],
+        max_bytes: usize,
+    ) -> Result<String, GitError> {
+        let mut args = vec![
+            "--no-pager",
+            "-c",
+            "core.fsmonitor=false",
+            "diff",
+            "--cached",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--submodule=short",
+            "--unified=2",
+        ];
+        if paths.is_empty() {
+            args.extend(["--no-relative", "--ignore-submodules=none", "--no-color"]);
+        }
+        args.push("--");
+        args.extend(paths.iter().map(String::as_str));
+        let child = self
+            .base_command(repo)
+            .args(&args)
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| self.map_spawn_error(repo, &error))?;
+        let output = staged::read_output(child, max_bytes, Duration::from_secs(10))?;
+        let text =
+            String::from_utf8_lossy(&self.check_output(repo, &args, output)?.stdout).into_owned();
+        Ok(text)
     }
 
     fn is_file_untracked(&self, repo: &Path, rel: &str) -> Result<bool, GitError> {

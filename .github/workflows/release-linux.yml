@@ -1,0 +1,32 @@
+name: Release Linux
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build Linux binaries
+        run: cargo build --release --locked -p gsh-app -p gsh-cli -p gsh-server
+      - name: Package and checksum
+        run: |
+          mkdir -p dist
+          tar -C target/release -czf dist/gsh-linux-x86_64.tar.gz gsh-app gsh gsh-server
+          cd dist
+          sha256sum gsh-linux-x86_64.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gsh-linux-x86_64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30

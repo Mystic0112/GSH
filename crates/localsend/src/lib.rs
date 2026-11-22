@@ -11,7 +11,9 @@ pub mod protocol;
 pub mod receive;
 
 pub use identity::{Identity, IdentityError};
-pub use network::{send_files, Discovery, NetworkError, Peer};
+pub use network::{
+    send_files, send_open_files, send_open_files_until, Discovery, NetworkError, Peer,
+};
 pub use protocol::{Announcement, DeviceInfo, FileMetadata};
 pub use receive::{
     Limits, LocalSendServer, ReceiveDecision, Receiver, ServerError, RECEIVE_DECISION_TIMEOUT,

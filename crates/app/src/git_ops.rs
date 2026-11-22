@@ -47,6 +47,17 @@ pub fn root(workspace: &Path) -> Result<PathBuf, GitError> {
     })?;
     Ok(PathBuf::from(path.trim_end_matches(['\r', '\n'])))
 }
+
+pub fn current_branch(repo: &Path) -> Result<String, GitError> {
+    let raw = command(repo, &["branch", "--show-current"])?;
+    let branch = String::from_utf8_lossy(&raw).trim().to_owned();
+    if branch.is_empty() {
+        return Err(GitError::Io {
+            detail: "Selecione uma branch para consultar o PR.".to_owned(),
+        });
+    }
+    Ok(branch)
+}
 /// Tira `relative` do git de `root` sem tocar em arquivo versionado: se o repo
 /// ainda não o ignora, acrescenta em `.git/info/exclude` (local, nunca
 /// comitado) (`_excludeFromGit` de `gsh_viewmodel.dart`). Best-effort: pasta

@@ -121,6 +121,77 @@ impl EditorPane {
         use iced::widget::{column, container, responsive, text};
         let body = responsive(move |size| self.body(size.height, size.width));
         let mut content = column![body].height(Fill);
+        let is_ckp = self
+            .state
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("ckp"));
+        if is_ckp {
+            use iced::widget::{button, row};
+            let mut tools =
+                row![button(labels::EDITOR_APPLY_CKP_LAYOUT).on_press(EditorMsg::ApplyCkpLayout)]
+                    .spacing(8);
+            if let Some(error) = &self.ckp_error {
+                tools = tools.push(
+                    text(error)
+                        .size(theme::SIZE_LABEL)
+                        .color(theme::palette().error),
+                );
+            }
+            content = content.push(container(tools).padding([6, 12]));
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(lsp) = &self.lsp {
+            use iced::widget::{button, row, scrollable};
+            let mut tools = row![].spacing(8);
+            if lsp.formatting || lsp.external.is_some() {
+                let label = if lsp.pending {
+                    labels::EDITOR_FORMATTING
+                } else {
+                    labels::EDITOR_FORMAT
+                };
+                tools = tools.push(button(label).on_press_maybe(
+                    (!lsp.pending && self.state.notice.is_none()).then_some(EditorMsg::Format),
+                ));
+            }
+            if let Some(error) = &lsp.error {
+                tools = tools.push(
+                    text(error)
+                        .size(theme::SIZE_LABEL)
+                        .color(theme::palette().error),
+                );
+            }
+            content = content.push(tools);
+            if !lsp.diagnostics.is_empty() {
+                let messages =
+                    lsp.diagnostics
+                        .iter()
+                        .fold(column![].spacing(2), |items, diagnostic| {
+                            let line = diagnostic.range.start.line.saturating_add(1);
+                            let (severity, color) = match diagnostic.severity {
+                                Some(1) => {
+                                    (labels::EDITOR_DIAGNOSTIC_ERROR, theme::palette().error)
+                                }
+                                Some(2) => {
+                                    (labels::EDITOR_DIAGNOSTIC_WARNING, theme::palette().warn)
+                                }
+                                Some(4) => (labels::EDITOR_DIAGNOSTIC_HINT, theme::palette().text2),
+                                _ => (labels::EDITOR_DIAGNOSTIC_INFO, theme::palette().text2),
+                            };
+                            items.push(
+                                button(
+                                    text(format!("{severity} · L{line}  {}", diagnostic.message))
+                                        .size(theme::SIZE_LABEL)
+                                        .color(color),
+                                )
+                                .on_press(EditorMsg::RevealDiagnostic(line as usize)),
+                            )
+                        });
+                content = content
+                    .push(container(scrollable(messages).height(iced::Shrink)).max_height(160));
+            }
+        }
         if let Some(notice) = &self.state.notice {
             let message = match notice {
                 EditorNotice::ConfirmClose => labels::EDITOR_CONFIRM_CLOSE.to_owned(),

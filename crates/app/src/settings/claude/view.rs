@@ -23,7 +23,7 @@ pub fn panel(s: &Settings) -> Element<'_, Message> {
         Tab::ClaudeCode => panels::claude_code(s),
         Tab::Cowork => secondary::cowork(),
         Tab::System => secondary::system(s),
-        Tab::Extensions => secondary::extensions(),
+        Tab::Extensions => secondary::extensions(s),
         Tab::Developer => secondary::developer(s),
         Tab::Skills => catalog::skills(s),
         Tab::Connectors => catalog::connectors(s),
@@ -59,6 +59,10 @@ pub fn overlay<'a>(
     }
     if c.logout_ask {
         let modal = confirm_logout_dialog().map(crate::settings::Message::Claude);
+        layered = stack![layered, modal].into();
+    }
+    if c.switch_account_ask {
+        let modal = confirm_switch_account_dialog().map(crate::settings::Message::Claude);
         layered = stack![layered, modal].into();
     }
     if c.notice {
@@ -205,6 +209,26 @@ fn confirm_logout_dialog() -> Element<'static, Message> {
         labels::SETTINGS_ACCOUNT_LOGOUT_CONFIRM_MESSAGE.to_owned(),
         actions.into(),
         Message::LogoutCancel,
+    )
+}
+
+fn confirm_switch_account_dialog() -> Element<'static, Message> {
+    let actions = row![
+        dialog_button(labels::DIALOG_CANCEL, Message::SwitchAccountCancel, None),
+        dialog_button(
+            labels::SETTINGS_ACCOUNT_SWITCH,
+            Message::SwitchAccountConfirm,
+            Some(false),
+        ),
+    ]
+    .spacing(theme::DIALOG_ACTIONS_GAP)
+    .align_y(Alignment::Center);
+
+    modal_shell(
+        labels::SETTINGS_ACCOUNT_SWITCH_CONFIRM_TITLE,
+        labels::SETTINGS_ACCOUNT_SWITCH_CONFIRM_MESSAGE.to_owned(),
+        actions.into(),
+        Message::SwitchAccountCancel,
     )
 }
 

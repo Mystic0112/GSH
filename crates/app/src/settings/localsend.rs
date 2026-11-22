@@ -12,17 +12,17 @@ pub(super) fn view(state: &LocalSendState) -> Element<'_, Message> {
             .size(theme::SIZE_TITLE)
             .color(theme::palette().text),
         setting_row(
-            labels::LOCALSEND_ENABLE,
+            labels::LOCALSEND_ALWAYS_ON,
             super::view::switch(
-                state.enabled,
-                Message::LocalSend(LocalSendMessage::EnableChanged(!state.enabled)),
+                state.always_on,
+                Message::LocalSend(LocalSendMessage::AlwaysOnChanged(!state.always_on)),
             ),
         ),
     ]
     .spacing(theme::SETTINGS_SECTION_TITLE_GAP)
     .width(Fill);
 
-    if state.enabled {
+    {
         content = content
             .push(setting_row(
                 labels::LOCALSEND_ALIAS,
@@ -75,72 +75,12 @@ pub(super) fn view(state: &LocalSendState) -> Element<'_, Message> {
                 .spacing(8)
                 .align_y(Alignment::Center)
                 .into(),
-            ))
-            .push(setting_row(
-                labels::LOCALSEND_SERVER,
-                text(
-                    state
-                        .server_status
-                        .as_deref()
-                        .unwrap_or(labels::LOCALSEND_STARTING),
-                )
-                .size(theme::SETTINGS_NAV_TEXT_SIZE)
-                .color(if state.error.is_some() {
-                    theme::palette().warn
-                } else {
-                    theme::palette().text2
-                })
-                .into(),
             ));
 
         if let Some(error) = &state.error {
             content = content.push(text(error).size(12).color(theme::palette().warn));
         }
 
-        content = content.push(
-            text(labels::LOCALSEND_DEVICES)
-                .font(theme::FONT_BODY_SEMIBOLD)
-                .size(theme::SETTINGS_SECTION_TITLE_SIZE)
-                .color(theme::palette().text),
-        );
-        if state.peers.is_empty() {
-            content =
-                content.push(text(labels::LOCALSEND_NO_DEVICES).color(theme::palette().text3));
-        } else {
-            for peer in &state.peers {
-                let description = format!("{} · {}", peer.device_type, peer.ip);
-                content = content.push(
-                    container(
-                        row![
-                            column![
-                                text(&peer.alias)
-                                    .font(theme::FONT_BODY_MEDIUM)
-                                    .size(theme::SETTINGS_NAV_TEXT_SIZE)
-                                    .color(theme::palette().text),
-                                text(description).size(12).color(theme::palette().text3),
-                            ]
-                            .width(Fill),
-                            action_button(
-                                labels::LOCALSEND_SEND_FILE,
-                                Message::LocalSend(LocalSendMessage::SendTo(peer.ip.clone())),
-                            )
-                        ]
-                        .spacing(theme::SETTINGS_ROW_GAP)
-                        .align_y(Alignment::Center),
-                    )
-                    .padding([theme::SETTINGS_ROW_VERTICAL, 0])
-                    .width(Fill)
-                    .style(|_| container::Style {
-                        border: Border {
-                            color: theme::palette().border,
-                            width: 0.0,
-                            radius: theme::RADIUS_BUTTON.into(),
-                        },
-                        ..Default::default()
-                    }),
-                );
-            }
-        }
         if let Some(transfer) = &state.transfer {
             content = content.push(
                 column![
@@ -310,7 +250,7 @@ mod snapshots {
         let settings = Settings {
             section: Section::LocalSend,
             localsend: LocalSendState {
-                enabled: true,
+                always_on: true,
                 alias: String::from("GSH da sala"),
                 receive_dir: PathBuf::from("/home/ana/Downloads/GSH"),
                 max_file_mb: String::from("2048"),

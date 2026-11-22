@@ -102,6 +102,7 @@ impl ChatEngine {
         for (k, v) in crate::resolve::env_with_dir_on_path(&config.binary, &config.env) {
             cmd.env(k, v);
         }
+        crate::settings::apply_profile_env(&mut cmd, &config.env);
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == ErrorKind::NotFound {
                 ChatError::BinaryNotFound {

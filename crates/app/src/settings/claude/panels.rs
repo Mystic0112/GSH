@@ -470,6 +470,11 @@ pub fn account(s: &Settings) -> El<'_> {
         rows.push(note(labels::claude_info_error(error), true));
     }
     column![
+        if cfg!(target_os = "linux") {
+            profile_list(s)
+        } else {
+            Space::new().into()
+        },
         section(
             labels::SETTINGS_ACCOUNT_PROFILE,
             None,
@@ -483,6 +488,86 @@ pub fn account(s: &Settings) -> El<'_> {
     ]
     .width(Fill)
     .into()
+}
+
+fn profile_list(s: &Settings) -> El<'_> {
+    let profiles = &s.current.claude;
+    let c = &s.claude;
+    let choose = |name: Option<String>| {
+        let active = profiles.active_profile == name;
+        small_button(
+            if active { "Em uso" } else { "Usar" },
+            None,
+            Emphasis::Outline,
+            (!active).then_some(Message::SelectProfile(name)),
+        )
+    };
+    let mut rows = vec![setting_row(
+        "Conta padrão",
+        Some("Selecione um perfil para os próximos chats e agentes Claude abertos pelo GSH."),
+        Some(choose(None)),
+        None,
+    )];
+    for (name, directory) in &profiles.profiles {
+        rows.push(
+            row![
+                column![
+                    text(name)
+                        .font(theme::FONT_BODY)
+                        .size(theme::SETTINGS_NAV_TEXT_SIZE),
+                    note(directory.clone(), false),
+                ]
+                .width(Fill),
+                choose(Some(name.clone())),
+                small_button(
+                    labels::SETTINGS_ACCOUNT_LOGIN,
+                    None,
+                    Emphasis::Outline,
+                    Some(Message::LoginProfile(name.clone())),
+                ),
+                small_button(
+                    "Desvincular",
+                    None,
+                    Emphasis::Outline,
+                    Some(Message::RemoveProfile(name.clone())),
+                ),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center)
+            .padding([theme::SETTINGS_ROW_VERTICAL, 0])
+            .into(),
+        );
+    }
+    rows.push(
+        column![
+            text_field(
+                &c.profile_name,
+                "Nome do perfil",
+                Message::ProfileName,
+                Message::AddProfile
+            ),
+            text_field(
+                &c.profile_directory,
+                "/caminho/da/pasta",
+                Message::ProfileDirectory,
+                Message::AddProfile,
+            ),
+            small_button(
+                "Adicionar perfil",
+                None,
+                Emphasis::Primary,
+                (!c.profile_name.trim().is_empty() && !c.profile_directory.trim().is_empty())
+                    .then_some(Message::AddProfile),
+            ),
+        ]
+        .spacing(8)
+        .padding([theme::SETTINGS_ROW_VERTICAL, 0])
+        .into(),
+    );
+    if let Some(error) = &c.profile_error {
+        rows.push(note(error.clone(), true));
+    }
+    section("Perfis do Claude Code", None, rows)
 }
 
 fn account_rows(account: &Account) -> Vec<El<'static>> {
@@ -502,13 +587,24 @@ fn account_rows(account: &Account) -> Vec<El<'static>> {
             p.text3,
         )
     };
-    let action = if account.logged_in {
-        small_button(
-            labels::SETTINGS_ACCOUNT_LOGOUT,
-            None,
-            Emphasis::Outline,
-            Some(Message::LogoutAsk),
-        )
+    let action: El<'static> = if account.logged_in {
+        row![
+            small_button(
+                labels::SETTINGS_ACCOUNT_SWITCH,
+                None,
+                Emphasis::Outline,
+                Some(Message::SwitchAccountAsk),
+            ),
+            small_button(
+                labels::SETTINGS_ACCOUNT_LOGOUT,
+                None,
+                Emphasis::Outline,
+                Some(Message::LogoutAsk),
+            ),
+        ]
+        .spacing(8.0)
+        .align_y(iced::Alignment::Center)
+        .into()
     } else {
         small_button(
             labels::SETTINGS_ACCOUNT_LOGIN,

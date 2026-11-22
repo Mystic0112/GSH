@@ -2,8 +2,8 @@
 
 use super::fonts::{FontPickerState, FontTarget};
 use super::{
-    cli, file, files, prefs, themes, widgets, ClaudeState, Instructions, Message, NamePromptKind,
-    Pref, Tab,
+    cli, file, files, prefs, profiles, themes, widgets, ClaudeState, Instructions, Message,
+    NamePromptKind, Pref, Tab,
 };
 use crate::labels;
 use crate::settings::{Error, Settings};
@@ -12,7 +12,7 @@ use gsh_harness::Json;
 use iced::widget::text_editor;
 use iced::Task;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(in crate::settings) fn update(s: &mut Settings, message: Message) -> Task<Message> {
     match message {
@@ -81,6 +81,72 @@ pub(in crate::settings) fn update(s: &mut Settings, message: Message) -> Task<Me
             commit_instructions(&mut s.claude);
             Task::none()
         }
+        Message::ProfileName(name) => {
+            s.claude.profile_name = name;
+            s.claude.profile_error = None;
+            Task::none()
+        }
+        Message::ProfileDirectory(path) => {
+            s.claude.profile_directory = path;
+            s.claude.profile_error = None;
+            Task::none()
+        }
+        Message::AddProfile => {
+            if !cfg!(target_os = "linux") {
+                return Task::none();
+            }
+            let name = s.claude.profile_name.trim().to_owned();
+            let path = s.claude.profile_directory.trim();
+            match profiles::register(&s.current, &name, path) {
+                Ok(path) => {
+                    let mut claude = s.current.claude.clone();
+                    claude
+                        .profiles
+                        .insert(name, path.to_string_lossy().into_owned());
+                    save_profiles(s, claude);
+                    if s.saved {
+                        s.claude.profile_name.clear();
+                        s.claude.profile_directory.clear();
+                    }
+                }
+                Err(error) => s.claude.profile_error = Some(error),
+            }
+            Task::none()
+        }
+        Message::SelectProfile(name) => {
+            if let Some(name) = &name {
+                if let Err(error) = profiles::directory(&s.current, name) {
+                    s.claude.profile_error = Some(error);
+                    return Task::none();
+                }
+            }
+            let mut claude = s.current.claude.clone();
+            claude.active_profile = name;
+            save_profiles(s, claude);
+            Task::none()
+        }
+        Message::LoginProfile(name) => {
+            match profiles::directory(&s.current, &name)
+                .and_then(|path| profiles::command(Some(&path), "auth login"))
+            {
+                Ok(command) => {
+                    s.claude.profile_error = None;
+                    s.claude.pending_profile_terminal = Some(command);
+                }
+                Err(error) => s.claude.profile_error = Some(error),
+            }
+            Task::none()
+        }
+        Message::RemoveProfile(name) => {
+            let mut claude = s.current.claude.clone();
+            if claude.profiles.remove(&name).is_some() {
+                if claude.active_profile.as_ref() == Some(&name) {
+                    claude.active_profile = None;
+                }
+                save_profiles(s, claude);
+            }
+            Task::none()
+        }
         Message::RefreshAccount => {
             if s.claude.account_loading {
                 Task::none()
@@ -117,6 +183,23 @@ pub(in crate::settings) fn update(s: &mut Settings, message: Message) -> Task<Me
             s.claude.logout_error = result.err();
             s.claude.account_loading = false;
             load_account(&mut s.claude)
+        }
+        Message::SwitchAccountAsk => {
+            s.claude.switch_account_ask = true;
+            Task::none()
+        }
+        Message::SwitchAccountCancel => {
+            s.claude.switch_account_ask = false;
+            Task::none()
+        }
+        Message::SwitchAccountConfirm => {
+            s.claude.switch_account_ask = false;
+            s.claude.account = None;
+            s.claude.usage = None;
+            s.claude.usage_at = None;
+            s.claude.pending_terminal =
+                Some(String::from("claude auth logout && claude auth login"));
+            Task::none()
         }
         Message::RefreshUsage => {
             if s.claude.usage_loading {
@@ -284,7 +367,112 @@ pub(in crate::settings) fn update(s: &mut Settings, message: Message) -> Task<Me
         },
         Message::KeepAwakeToggle(enable) => {
             s.claude.keep_awake.set(enable);
-            s.claude.keep_awake_active = s.claude.keep_awake.is_active();
+            if !enable {
+                s.claude.stop_bag_mode();
+            }
+            s.claude.poll_keep_awake();
+            Task::none()
+        }
+        Message::LidSessionDuration(duration) => {
+            s.claude.keep_awake.set_lid_duration(duration);
+            Task::none()
+        }
+        Message::LidSessionStart => {
+            let duration = s.claude.keep_awake.lid_duration();
+            if let Err(reason) = s.claude.keep_awake.start_lid_session(duration) {
+                let msg = match reason {
+                    themes::LidSafetyStop::LowBattery(pct) => {
+                        labels::settings_lid_stopped_battery(pct)
+                    }
+                    themes::LidSafetyStop::HighTemp(temp_c) => {
+                        labels::settings_lid_stopped_temp(temp_c)
+                    }
+                };
+                s.claude.keep_awake_active = s.claude.keep_awake.is_active();
+                return show_raw_toast(&mut s.claude, msg);
+            }
+            s.claude.poll_keep_awake();
+            Task::none()
+        }
+        Message::LidSessionStop => {
+            s.claude.keep_awake.stop_lid_session();
+            s.claude.stop_bag_mode();
+            s.claude.poll_keep_awake();
+            Task::none()
+        }
+        Message::BagModeToggle(true) => apply_bag_hotspot(&mut s.claude, true),
+        Message::BagModeToggle(false) => {
+            s.claude.stop_bag_mode();
+            s.claude.keep_awake.stop_lid_session();
+            s.claude.poll_keep_awake();
+            Task::none()
+        }
+        Message::BagHotspotInput(ssid) => {
+            if s.claude.bag_mode.is_editable() {
+                s.claude.bag_mode.config.hotspot_ssid = ssid;
+            }
+            Task::none()
+        }
+        Message::BagPreferredInput(raw) => {
+            if s.claude.bag_mode.is_editable() {
+                s.claude.bag_mode.config.preferred_wifi_ssids = raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                s.claude.bag_mode.preferred_draft = raw;
+            }
+            Task::none()
+        }
+        Message::BagApplyHotspot => apply_bag_hotspot(&mut s.claude, false),
+        Message::BagHotspotApplied(start, result) => {
+            let c = &mut s.claude;
+            if !c.finish_bag_work() {
+                return Task::none();
+            }
+            if let Err(error) = result {
+                c.bag_mode.status = Some(Err(error));
+                return Task::none();
+            }
+            if !start {
+                c.bag_mode.status = Some(Ok("Perfil do hotspot configurado.".to_owned()));
+                return Task::none();
+            }
+
+            if !c.keep_awake.is_lid_active() {
+                let duration = c.keep_awake.lid_duration();
+                if c.keep_awake.start_lid_session(duration).is_err() {
+                    c.bag_mode.status = None;
+                    return Task::none();
+                }
+            }
+            c.poll_keep_awake();
+            if c.keep_awake.lid_remaining_minutes().is_none() {
+                c.bag_mode.status = Some(Err(
+                    "Não foi possível iniciar a sessão de tampa fechada.".to_owned(),
+                ));
+                return Task::none();
+            }
+            c.bag_mode.config.enabled = true;
+            c.bag_mode.status = Some(Ok("Monitorando a conexão…".to_owned()));
+            c.poll_bag_mode().unwrap_or_else(Task::none)
+        }
+        Message::BagPollFinished(result) => {
+            let c = &mut s.claude;
+            let completed = c.finish_bag_work();
+            c.poll_keep_awake();
+            if completed && c.bag_mode.config.enabled {
+                let now = Instant::now();
+                c.bag_mode.poll_at = Some(now + crate::bag_mode::POLL_INTERVAL);
+                c.bag_mode.status = Some(result.map(|poll| {
+                    if poll.switched_to_hotspot {
+                        c.bag_mode.preferred_retry_at =
+                            Some(now + crate::bag_mode::HOTSPOT_RETRY_INTERVAL);
+                    }
+                    poll.status
+                }));
+            }
             Task::none()
         }
         Message::StorageUseDefault => {
@@ -419,6 +607,29 @@ pub(in crate::settings) fn update(s: &mut Settings, message: Message) -> Task<Me
     }
 }
 
+fn apply_bag_hotspot(c: &mut ClaudeState, start: bool) -> Task<Message> {
+    if !cfg!(target_os = "linux") || !c.bag_mode.is_editable() {
+        return Task::none();
+    }
+    let config = c.bag_mode.config.clone();
+    if let Err(error) = config.validate() {
+        c.bag_mode.status = Some(Err(error));
+        return Task::none();
+    }
+    c.bag_mode.status = Some(Ok("Configurando o hotspot…".to_owned()));
+    let cancelled = c.start_bag_work();
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                crate::bag_mode::configure_hotspot_blocking(&config, &cancelled)
+            })
+            .await
+            .map_err(|err| format!("Falha ao configurar o hotspot: {err}"))?
+        },
+        move |result| Message::BagHotspotApplied(start, result),
+    )
+}
+
 pub(in crate::settings) fn commit_pending(s: &mut Settings) -> Task<Message> {
     commit_code_font(s);
     commit_instructions(&mut s.claude);
@@ -442,11 +653,14 @@ fn enter_tab(c: &mut ClaudeState, tab: Tab) -> Task<Message> {
         }
         Tab::Account => enter_account(c),
         Tab::Usage => {
-            if c.usage.is_none() && !c.usage_loading {
-                load_usage(c)
-            } else {
-                Task::none()
+            let mut tasks = Vec::new();
+            if c.account.is_none() && !c.account_loading {
+                tasks.push(load_account(c));
             }
+            if c.usage.is_none() && !c.usage_loading {
+                tasks.push(load_usage(c));
+            }
+            Task::batch(tasks)
         }
         Tab::Developer | Tab::Connectors => {
             if c.mcp.is_none() && !c.mcp_loading {
@@ -597,9 +811,19 @@ fn apply_pref(s: &mut Settings, pref: &Pref) {
             .unwrap_or(true);
         s.transcript_width = config.chat.transcript_width;
         s.current = config.clone();
+        let variant = crate::theme::ThemeVariant::from_mode(config.theme_mode);
+        let spec = themes::selected_theme_json(&s.claude.home, &config.theme_id);
+        if !crate::theme::set_theme_palette(&config.theme_id, spec.as_deref(), variant) {
+            crate::theme::set_active(variant);
+        }
     }
     s.saved = result.is_ok();
     s.error = result.err();
+}
+
+fn save_profiles(s: &mut Settings, claude: gsh_config::schema::ClaudeProfiles) {
+    s.claude.profile_error = None;
+    apply_pref(s, &Pref::ClaudeProfiles(claude));
 }
 
 fn commit_code_font(s: &mut Settings) {
@@ -704,6 +928,11 @@ mod tests {
             std::env::temp_dir().join(format!("gsh-claude-update-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let config_path = dir.join("config.toml");
         let mut settings = Settings {
             path: Ok(config_path),
@@ -712,6 +941,24 @@ mod tests {
         settings.claude.home = dir.clone();
         settings.claude.reset();
         (dir, settings)
+    }
+
+    #[test]
+    fn bag_mode_preserves_single_flight_after_settings_reload_and_cancels_on_lid_stop() {
+        let (dir, mut settings) = temp_fixture("bag-mode");
+        settings.claude.bag_mode.config.hotspot_ssid = "Hotspot".into();
+        assert!(settings.claude.poll_bag_mode().is_none());
+        let pending = settings.claude.start_bag_work();
+        settings.reload();
+        assert_eq!(settings.claude.bag_mode.config.hotspot_ssid, "Hotspot");
+        assert!(!settings.claude.bag_mode.is_editable());
+        assert!(!pending.load(std::sync::atomic::Ordering::Relaxed));
+        let _ = settings.update(RootMsg::Claude(Message::LidSessionStop));
+        assert!(pending.load(std::sync::atomic::Ordering::Relaxed));
+        let _ = settings.update(RootMsg::Claude(Message::BagHotspotApplied(true, Ok(()))));
+        assert!(settings.claude.bag_mode.is_editable());
+        assert!(settings.claude.poll_bag_mode().is_none());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -766,6 +1013,7 @@ mod tests {
 
     #[test]
     fn prefs_fonts_themes_storage_and_instructions_round_trip_in_temp_dir() {
+        let _guard = crate::theme::test_guard();
         let (dir, mut s) = temp_fixture("prefs");
         let _ = s.update(RootMsg::Claude(Message::Pref(Pref::TranscriptView(
             TranscriptView::Thinking,
@@ -870,6 +1118,19 @@ mod tests {
         ))));
         assert_eq!(s.claude.logout_error, Some(InfoError::CliMissing));
 
+        let _ = s.update(RootMsg::Claude(Message::SwitchAccountAsk));
+        assert!(s.claude.switch_account_ask);
+        let _ = s.update(RootMsg::Claude(Message::SwitchAccountCancel));
+        assert!(!s.claude.switch_account_ask);
+        let _ = s.update(RootMsg::Claude(Message::SwitchAccountAsk));
+        let _ = s.update(RootMsg::Claude(Message::SwitchAccountConfirm));
+        assert!(!s.claude.switch_account_ask);
+        assert!(s.claude.account.is_none());
+        assert_eq!(
+            s.claude.take_terminal_command().as_deref(),
+            Some("claude auth logout && claude auth login")
+        );
+
         let _ = s.update(RootMsg::Claude(Message::RunInTerminal(
             "claude auth login".into(),
         )));
@@ -882,6 +1143,41 @@ mod tests {
         let _ = s.update(RootMsg::Claude(Message::NoticeClose));
         assert!(!s.claude.notice);
 
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn profiles_persist_selection_and_login_targets_the_requested_directory() {
+        let (dir, mut s) = temp_fixture("profiles");
+        let profile = dir.join("Conta Trabalho");
+        let _ = s.update(RootMsg::Claude(Message::ProfileName("Trabalho".into())));
+        let _ = s.update(RootMsg::Claude(Message::ProfileDirectory(
+            profile.to_string_lossy().into_owned(),
+        )));
+        let _ = s.update(RootMsg::Claude(Message::AddProfile));
+        assert!(s.saved);
+        assert_eq!(s.current.claude.active_profile, None);
+        let _ = s.update(RootMsg::Claude(Message::SelectProfile(Some(
+            "Trabalho".into(),
+        ))));
+        let config = gsh_config::load(s.path.as_ref().unwrap()).unwrap();
+        assert_eq!(profiles::selected(&config), Ok(Some(profile.clone())));
+
+        let _ = s.update(RootMsg::Claude(Message::LoginProfile("Trabalho".into())));
+        assert_eq!(
+            s.claude.take_profile_terminal_command(),
+            Some(profiles::command(Some(&profile), "auth login").unwrap())
+        );
+        let _ = s.update(RootMsg::Claude(Message::SwitchAccountConfirm));
+        assert_eq!(
+            s.claude.take_terminal_command().as_deref(),
+            Some("claude auth logout && claude auth login")
+        );
+        let _ = s.update(RootMsg::Claude(Message::RemoveProfile("Trabalho".into())));
+        assert!(s.current.claude.profiles.is_empty());
+        assert_eq!(s.current.claude.active_profile, None);
+        assert!(profile.is_dir());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

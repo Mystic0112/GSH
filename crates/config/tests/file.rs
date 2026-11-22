@@ -1,6 +1,7 @@
 //! Arquivo real em diretório temporário (nunca a home): padrões, arquivo
 //! parcial, arquivo inválido mantendo a última válida, recarga por polling.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
@@ -61,7 +62,7 @@ fn partial_file_fills_only_missing_fields_with_defaults() {
     let path = tmp.file();
     write(
         &path,
-        "themeMode = \"dark\"\ninterfaceSize = 16\n\n[chat]\nfont = \"Inter\"\n\n[features]\nhidden = [\"farm\"]\n",
+        "themeMode = \"dark\"\ninterfaceSize = 16\n\n[chat]\nfont = \"Inter\"\n\n[features]\nhidden = [\"farm\"]\n\n[shortcuts]\nnewTerminal = \"Ctrl+Shift+T\"\n",
     );
 
     let config = load(&path).unwrap();
@@ -77,6 +78,7 @@ fn partial_file_fills_only_missing_fields_with_defaults() {
         features: Features {
             hidden: [AppFeature::Farm].into(),
         },
+        shortcuts: BTreeMap::from([("newTerminal".to_owned(), "Ctrl+Shift+T".to_owned())]),
         ..defaults
     };
     assert_eq!(config, expected);

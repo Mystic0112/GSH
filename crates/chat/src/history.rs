@@ -2,7 +2,9 @@
 //! (`readClaudeHistory`, `writeClaudeTitle` de `claude_stream_engine.dart` e
 //! `claude_session_directory.dart` do Flutter).
 
-use std::fs::{self, File, OpenOptions};
+#[cfg(not(target_os = "linux"))]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -22,8 +24,56 @@ fn home_dir() -> Option<PathBuf> {
         .filter(|p| !p.as_os_str().is_empty())
 }
 
+#[cfg(target_os = "linux")]
+fn open_transcript(file: &Path, append: bool) -> std::io::Result<File> {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = std::ffi::CString::new(file.as_os_str().as_bytes())?;
+    let mut how: libc::open_how = unsafe { std::mem::zeroed() };
+    let access = if append {
+        libc::O_WRONLY | libc::O_APPEND
+    } else {
+        libc::O_RDONLY
+    };
+    how.flags = (access | libc::O_CLOEXEC | libc::O_NONBLOCK) as u64;
+    how.resolve = libc::RESOLVE_NO_SYMLINKS;
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            &how,
+            std::mem::size_of_val(&how),
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let opened = unsafe { File::from_raw_fd(fd as std::os::fd::RawFd) };
+    use std::os::unix::fs::MetadataExt;
+    let metadata = opened.metadata()?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        return Err(std::io::Error::other("unsafe Claude transcript file"));
+    }
+    Ok(opened)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_transcript(file: &Path, append: bool) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options
+        .write(append)
+        .append(append)
+        .read(!append)
+        .open(file)
+}
+
 /// `~/.claude/projects`.
 pub fn projects_root() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
+        return Some(PathBuf::from(dir).join("projects"));
+    }
     home_dir().map(|h| h.join(".claude").join("projects"))
 }
 
@@ -51,14 +101,35 @@ pub fn project_slug(cwd: &str) -> String {
 /// `~/.claude/projects/<slug do cwd>/<id>.jsonl`. `None` se o id não tem o formato esperado
 /// ou não há HOME.
 pub fn transcript_file(cwd: &str, session_id: &str) -> Option<PathBuf> {
+    transcript_in(&projects_root()?, cwd, session_id)
+}
+
+pub fn transcript_in(root: &Path, cwd: &str, session_id: &str) -> Option<PathBuf> {
     if !is_session_id(session_id) {
         return None;
     }
     Some(
-        projects_root()?
-            .join(project_slug(cwd))
+        root.join(project_slug(cwd))
             .join(format!("{session_id}.jsonl")),
     )
+}
+
+pub fn profile_transcript_file(root: &Path, cwd: &str, session_id: &str) -> Option<PathBuf> {
+    let file = transcript_in(root, cwd, session_id)?;
+    let directory = file.parent()?;
+    if !fs::symlink_metadata(directory).is_ok_and(|meta| meta.is_dir())
+        || !fs::symlink_metadata(&file).is_ok_and(|meta| meta.is_file())
+    {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if !fs::symlink_metadata(&file).is_ok_and(|meta| meta.nlink() == 1) {
+            return None;
+        }
+    }
+    Some(file)
 }
 
 fn at_ms(o: &Map<String, Value>) -> Option<u64> {
@@ -115,9 +186,17 @@ pub fn read_history(cwd: &str, session_id: &str) -> Vec<ChatEvent> {
     let Some(file) = transcript_file(cwd, session_id) else {
         return Vec::new();
     };
-    let Ok(bytes) = fs::read(&file) else {
+    read_transcript(&file)
+}
+
+pub fn read_transcript(file: &Path) -> Vec<ChatEvent> {
+    let Ok(mut source) = open_transcript(file, false) else {
         return Vec::new();
     };
+    let mut bytes = Vec::new();
+    if source.read_to_end(&mut bytes).is_err() {
+        return Vec::new();
+    }
     let text = String::from_utf8_lossy(&bytes);
     history_from_lines(text.lines())
 }
@@ -131,13 +210,13 @@ pub fn write_title(cwd: &str, session_id: &str, title: &str) -> Result<(), ChatE
     }
 }
 
-fn append_title(file: &Path, session_id: &str, title: &str) -> Result<(), ChatError> {
+pub fn append_title(file: &Path, session_id: &str, title: &str) -> Result<(), ChatError> {
     let line = json!({"type": "custom-title", "customTitle": title, "sessionId": session_id});
     let io = |e: std::io::Error| ChatError::WriteTranscript {
         path: file.display().to_string(),
         cause: e.to_string(),
     };
-    let mut f = OpenOptions::new().append(true).open(file).map_err(io)?;
+    let mut f = open_transcript(file, true).map_err(io)?;
     writeln!(f, "{line}").map_err(io)?;
     f.flush().map_err(io)
 }
@@ -230,9 +309,14 @@ fn read_chunk(f: &mut File, from: u64, len: u64) -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn read_entry(path: &Path, modified: SystemTime) -> Option<SessionEntry> {
-    let mut f = File::open(path).ok()?;
-    let len = f.metadata().ok()?.len();
+fn read_entry(path: &Path, now: SystemTime, within: Duration) -> Option<SessionEntry> {
+    let mut f = open_transcript(path, false).ok()?;
+    let metadata = f.metadata().ok()?;
+    let modified = metadata.modified().ok()?;
+    if now.duration_since(modified).is_ok_and(|age| age > within) {
+        return None;
+    }
+    let len = metadata.len();
     let mut scan = Scan::default();
     scan.feed(&read_chunk(&mut f, 0, len.min(HEAD_BYTES)).ok()?);
     if len > HEAD_BYTES {
@@ -283,16 +367,12 @@ pub fn recent_sessions(root: &Path, within: Duration) -> Vec<SessionEntry> {
         };
         for f in files.filter_map(Result::ok) {
             let path = f.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl")
+                || !f.file_type().is_ok_and(|ty| ty.is_file())
+            {
                 continue;
             }
-            let Ok(modified) = f.metadata().and_then(|m| m.modified()) else {
-                continue;
-            };
-            if now.duration_since(modified).is_ok_and(|age| age > within) {
-                continue;
-            }
-            if let Some(entry) = read_entry(&path, modified) {
+            if let Some(entry) = read_entry(&path, now, within) {
                 out.push(entry);
             }
         }
@@ -340,6 +420,21 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn transcript_read_rejects_symlink_swap() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("gsh-chat-symlink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("target.jsonl");
+        let alias = root.join("session.jsonl");
+        fs::write(&target, r#"{"type":"user","message":{"content":"secret"}}"#).unwrap();
+        symlink(&target, &alias).unwrap();
+        assert!(read_transcript(&alias).is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

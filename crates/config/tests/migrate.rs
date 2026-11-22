@@ -171,6 +171,7 @@ fn expected_full_config() -> Config {
             "typescript".to_owned(),
             "prettier --write %FILE%".to_owned(),
         )]),
+        shortcuts: BTreeMap::new(),
         editor: Editor {
             engine: FileEditorEngine::Neovim,
             ..Editor::default()
@@ -207,6 +208,7 @@ fn expected_full_config() -> Config {
             permission_mode: "acceptEdits".to_owned(),
             effort: "low".to_owned(),
         },
+        claude: Default::default(),
         code: Code {
             theme_light: Some("github-light".to_owned()),
             theme_dark: Some("one-dark".to_owned()),
@@ -783,4 +785,69 @@ fn b02_empty_team_secret_is_not_serialized_and_round_trips_as_default() {
     assert!(loaded.farm.team.enabled);
     assert_eq!(loaded.farm.team.name, "gorila");
     assert_eq!(loaded.farm.team.secret, "");
+}
+
+#[test]
+fn flutter_json_to_toml_golden_structure_matches_dotted_key_contract_and_omits_ui_session_keys() {
+    let parsed =
+        parse_flutter_json(Path::new("settings.json"), FULL_FLUTTER_SETTINGS_JSON).unwrap();
+    let toml_text = to_toml(&parsed).unwrap();
+    let toml_val: toml::Value = toml::from_str(&toml_text).unwrap();
+
+    // Chaves de estado de sessão/UI do Flutter nunca devem vazar para o TOML.
+    for forbidden in [
+        "lastOpenAppId",
+        "searchPanelHeight",
+        "tasksPanelHeight",
+        "railVisible",
+        "treeVisible",
+        "lastUpdateCheckTime",
+        "dismissed_update_version",
+        "ssh_known_host_keys",
+        "overrides",
+        "plots",
+        "removedFeature",
+        "unknownEvent",
+    ] {
+        assert!(
+            !toml_text.contains(forbidden),
+            "chave transitória do Flutter não deveria aparecer no TOML: {forbidden}"
+        );
+    }
+
+    // Compara as tabelas e chaves de topo do TOML contra o golden esperado do contrato Flutter -> TOML.
+    assert_eq!(toml_val["themeMode"].as_str(), Some("dark"));
+    assert_eq!(toml_val["themeId"].as_str(), Some("dracula"));
+    assert_eq!(toml_val["terminalFontWeight"].as_str(), Some("semiBold"));
+    assert_eq!(toml_val["editor"]["engine"].as_str(), Some("neovim"));
+    assert_eq!(toml_val["terminal"]["engine"].as_str(), Some("xterm"));
+    assert_eq!(
+        toml_val["terminal"]["default_profile_id"].as_str(),
+        Some("zsh-login")
+    );
+    assert_eq!(toml_val["sourceControl"]["viewMode"].as_str(), Some("tree"));
+    assert_eq!(
+        toml_val["automation"]["harnessId"].as_str(),
+        Some("claudeCode")
+    );
+    assert_eq!(
+        toml_val["automation"]["modelId"].as_str(),
+        Some("claude-sonnet-4-5")
+    );
+    assert_eq!(toml_val["chat"]["transcriptView"].as_str(), Some("verbose"));
+    assert_eq!(toml_val["chat"]["transcriptWidth"].as_str(), Some("wide"));
+    assert_eq!(toml_val["chat"]["font"].as_str(), Some("IBM Plex Sans"));
+    assert_eq!(
+        toml_val["code"]["themeLight"].as_str(),
+        Some("github-light")
+    );
+    assert_eq!(toml_val["code"]["themeDark"].as_str(), Some("one-dark"));
+    assert_eq!(toml_val["links"]["openInApp"].as_bool(), Some(true));
+    assert_eq!(toml_val["farm"]["scenery"].as_str(), Some("office"));
+    assert_eq!(toml_val["farm"]["team"]["name"].as_str(), Some("gorila"));
+    assert_eq!(
+        toml_val["lspCommands"]["rust"].as_str(),
+        Some("rust-analyzer")
+    );
+    assert!(toml_val["lspCommands"].get("empty").is_none());
 }

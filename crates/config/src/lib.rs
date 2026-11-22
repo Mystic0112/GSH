@@ -27,7 +27,11 @@
     )
 )]
 
+#[cfg(target_os = "linux")]
+pub mod ckp;
 mod error;
+#[cfg(target_os = "linux")]
+pub mod flutter_state;
 pub mod load;
 pub mod migrate;
 mod named;

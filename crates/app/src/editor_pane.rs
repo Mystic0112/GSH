@@ -10,6 +10,13 @@ pub enum EditorMsg {
     Undo,
     Redo,
     Overwrite,
+    #[cfg(target_os = "linux")]
+    Format,
+    #[cfg(target_os = "linux")]
+    Formatted(i64, Result<String, String>),
+    #[cfg(target_os = "linux")]
+    RevealDiagnostic(usize),
+    ApplyCkpLayout,
     Viewport(f32, f32),
     /// Ctrl/Cmd+Enter, só nos editores que o pedem (`with_submit_shortcut`): a aba de query o usa
     /// para executar. Não faz nada no editor de arquivo.
@@ -30,6 +37,9 @@ pub struct EditorPane {
     pub(crate) longest_line: usize,
     pub(crate) config: gsh_config::schema::Editor,
     pub(crate) submit_shortcut: bool,
+    pub(crate) ckp_error: Option<String>,
+    #[cfg(target_os = "linux")]
+    pub(crate) lsp: Option<crate::lsp_runtime::Document>,
 }
 impl EditorPane {
     pub fn new(path: std::path::PathBuf, text: String) -> Self {
@@ -50,6 +60,9 @@ impl EditorPane {
             longest_line,
             config: gsh_config::schema::Editor::default(),
             submit_shortcut: false,
+            ckp_error: None,
+            #[cfg(target_os = "linux")]
+            lsp: None,
         }
     }
     /// Ctrl/Cmd+Enter vira `EditorMsg::Submit` em vez de uma quebra de linha.
@@ -97,10 +110,7 @@ impl EditorPane {
                         let previous_step = self.state.buffer.history_marker();
                         if matches!(self.state.replace_text(&text), Ok(true)) {
                             if previous_step != self.state.buffer.history_marker() {
-                                self.undo_cursors.push(before);
-                                if self.undo_cursors.len() > 500 {
-                                    self.undo_cursors.remove(0);
-                                }
+                                self.record_undo_cursor(before);
                             }
                             self.redo_cursors.clear();
                         } else {
@@ -128,7 +138,11 @@ impl EditorPane {
                     }
                 }
             }
-            EditorMsg::Submit => {}
+            EditorMsg::Submit | EditorMsg::ApplyCkpLayout => {}
+            #[cfg(target_os = "linux")]
+            EditorMsg::Format | EditorMsg::Formatted(_, _) => {}
+            #[cfg(target_os = "linux")]
+            EditorMsg::RevealDiagnostic(line) => return self.reveal_line(line),
             EditorMsg::Save => self.state.save(),
             EditorMsg::Overwrite => self.state.overwrite_confirmed(),
             EditorMsg::Undo => {
@@ -147,6 +161,50 @@ impl EditorPane {
             }
         }
         Task::none()
+    }
+    fn record_undo_cursor(&mut self, cursor: Cursor) {
+        self.undo_cursors.push(cursor);
+        if self.undo_cursors.len() > 500 {
+            self.undo_cursors.remove(0);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    pub(crate) fn finish_lsp_format(
+        &mut self,
+        version: i64,
+        result: Result<String, String>,
+    ) -> bool {
+        let Some(document) = self
+            .lsp
+            .as_mut()
+            .filter(|doc| doc.pending && doc.version == version)
+        else {
+            return false;
+        };
+        document.pending = false;
+        let text = match result {
+            Ok(text) => text,
+            Err(error) => {
+                document.error = Some(error);
+                return false;
+            }
+        };
+        if self.state.notice.is_some() {
+            return false;
+        }
+        let cursor = self.content.cursor();
+        self.state.buffer.break_group();
+        if !matches!(self.state.replace_text(&text), Ok(true)) {
+            return false;
+        }
+        self.state.buffer.break_group();
+        self.record_undo_cursor(cursor);
+        self.redo_cursors.clear();
+        self.restore(Cursor {
+            selection: None,
+            ..cursor
+        });
+        true
     }
     /// Resultado de busca: cursor no início da linha (base 1) e rolagem até ela, como o
     /// `_reveal(select: false)` do Flutter. Linha fora do arquivo: não faz nada.
@@ -174,8 +232,19 @@ impl EditorPane {
             },
         )
     }
-    fn restore(&mut self, cursor: Cursor) {
+    fn restore(&mut self, mut cursor: Cursor) {
         self.content = Content::with_text(self.state.buffer.text());
+        cursor.position.line = cursor
+            .position
+            .line
+            .min(self.content.line_count().saturating_sub(1));
+        cursor.position.column = self.content.line(cursor.position.line).map_or(0, |line| {
+            let mut column = cursor.position.column.min(line.text.len());
+            while !line.text.is_char_boundary(column) {
+                column -= 1;
+            }
+            column
+        });
         self.content.move_to(cursor);
         self.highlight_text = self.state.buffer.text().into();
         self.gutter.update(self.content.line_count());

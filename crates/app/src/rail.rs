@@ -1,15 +1,38 @@
 //! Rail de projetos/workspaces à esquerda (`projects_rail.dart` do Flutter).
-//!
-//! Superfície `BG`, divisória direita de 1px `BORDER`, cabeçalho "Workspaces"
-//! com botão "+" para abrir pasta de projeto, lista de itens (item selecionado
-//! com fundo `PANEL2` e borda `ACCENT` 1px, hover `PANEL3`) e rodapé de 34px.
 
-use gsh_core::workspace::{Workspace, WorkspaceList};
-use iced::widget::{button, column, container, row, scrollable, text, Space};
-use iced::{Alignment, Background, Border, Element, Fill, Length, Padding, Theme};
+use gsh_core::workspace::{valid_channel_name, Workspace, WorkspaceList};
+use iced::widget::{
+    button, column, container, pick_list, row, scrollable, text, text_input, tooltip, Space,
+};
+use iced::{Alignment, Background, Border, Color, Element, Fill, Length, Padding, Theme};
 
 use crate::labels;
 use crate::theme;
+
+/// Estado visual do botão de manter acordado no rodapé do rail.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KeepAwakeStatus {
+    pub active: bool,
+    pub on_battery: bool,
+}
+
+pub fn keep_awake_tooltip(status: KeepAwakeStatus) -> &'static str {
+    match (status.active, status.on_battery) {
+        (false, _) => concat!(
+            "Manter este computador acordado para acesso remoto. Desliga sozinho quando o GSH Desktop reinicia.\n",
+            "Fechar a tampa do notebook continua colocando-o para dormir."
+        ),
+        (true, false) => concat!(
+            "Mantendo este computador acordado para acesso remoto. Clique para deixá-lo dormir de novo.\n",
+            "Fechar a tampa do notebook continua colocando-o para dormir."
+        ),
+        (true, true) => concat!(
+            "Mantendo este computador acordado para acesso remoto. Clique para deixá-lo dormir de novo.\n",
+            "Acordado na bateria. Isso consome a bateria.\n",
+            "Fechar a tampa do notebook continua colocando-o para dormir."
+        ),
+    }
+}
 
 /// Lista inicial de workspaces do shell.
 pub fn default_workspace_list() -> WorkspaceList {
@@ -29,50 +52,58 @@ pub fn default_workspace_list() -> WorkspaceList {
     WorkspaceList::new(vec![gsh, example])
 }
 
+/// Estado visual e callbacks do rodapé/avisos do rail lateral.
+pub struct RailActions<'a, M> {
+    pub keep_awake: KeepAwakeStatus,
+    pub update_version: Option<&'a str>,
+    pub on_add_workspace: M,
+    pub on_select_channel: fn(Option<String>) -> M,
+    pub channel_editor: Option<&'a str>,
+    pub on_toggle_channel_editor: M,
+    pub on_channel_name_change: fn(String) -> M,
+    pub on_assign_channel: M,
+    pub on_toggle_keep_awake: M,
+    pub on_download_update: M,
+    pub on_dismiss_update: M,
+    pub on_settings: M,
+}
+
+#[derive(Clone)]
+struct ChannelChoice(Option<String>);
+
+impl PartialEq for ChannelChoice {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_ref().map(|name| name.to_lowercase())
+            == other.0.as_ref().map(|name| name.to_lowercase())
+    }
+}
+
+impl std::fmt::Display for ChannelChoice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0.as_deref().unwrap_or("Todos os canais"))
+    }
+}
+
 /// Renderiza o rail lateral de workspaces com o botão "+" de abrir projeto.
 pub fn view<'a, M: Clone + 'a>(
     workspaces: &'a WorkspaceList,
     on_select: impl Fn(usize) -> M,
-    on_add_workspace: M,
-    on_settings: M,
+    actions: RailActions<'a, M>,
 ) -> Element<'a, M> {
-    let add_button = button(
-        container(
-            text(labels::ICON_PLUS)
-                .font(theme::FONT_ICON)
-                .size(theme::SIZE_ICON)
-                .color(theme::palette().text3),
-        )
-        .width(Fill)
-        .height(Fill)
-        .center_x(Fill)
-        .center_y(Fill),
-    )
-    .width(Length::Fixed(26.0))
-    .height(Length::Fixed(26.0))
-    .padding(0)
-    .on_press(on_add_workspace)
-    .style(|_: &Theme, status| {
-        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        button::Style {
-            background: if hovered {
-                Some(Background::Color(theme::palette().panel3))
-            } else {
-                None
-            },
-            text_color: if hovered {
-                theme::palette().text
-            } else {
-                theme::palette().text2
-            },
-            border: Border {
-                radius: theme::RADIUS_BUTTON.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    });
-
+    let RailActions {
+        keep_awake,
+        update_version,
+        on_add_workspace,
+        on_select_channel,
+        channel_editor,
+        on_toggle_channel_editor,
+        on_channel_name_change,
+        on_assign_channel,
+        on_toggle_keep_awake,
+        on_download_update,
+        on_dismiss_update,
+        on_settings,
+    } = actions;
     let header = container(
         row![
             text(labels::ICON_LAYERS)
@@ -85,7 +116,7 @@ pub fn view<'a, M: Clone + 'a>(
                 .size(theme::SIZE_TITLE)
                 .color(theme::palette().text),
             Space::new().width(Fill),
-            add_button,
+            footer_icon_button(labels::ICON_PLUS, on_add_workspace),
         ]
         .align_y(Alignment::Center),
     )
@@ -97,49 +128,101 @@ pub fn view<'a, M: Clone + 'a>(
     });
 
     let selected_idx = workspaces.selected_index();
+    let visible = workspaces.visible_indices();
     let mut list = column![].spacing(2.0).padding([0, 8]);
-    for (idx, item) in workspaces.items().iter().enumerate() {
-        let is_selected = idx == selected_idx;
-        list = list.push(workspace_row(item, is_selected, on_select(idx)));
+    if visible.is_empty() && workspaces.active_channel().is_some() {
+        list = list.push(text("Nenhum workspace neste canal").size(theme::SIZE_LABEL));
+    }
+    for idx in visible {
+        if let Some(workspace) = workspaces.items().get(idx) {
+            list = list.push(workspace_row(
+                workspace,
+                idx == selected_idx,
+                on_select(idx),
+            ));
+        }
     }
 
-    let footer = container(
-        row![
-            text(labels::ICON_LAYERS)
-                .font(theme::FONT_ICON)
-                .size(theme::SIZE_LABEL)
-                .color(theme::palette().text3),
-            Space::new().width(6.0),
-            text(labels::DEFAULT_REALM)
-                .font(theme::FONT_BODY_MEDIUM)
-                .size(theme::SIZE_LABEL)
-                .color(theme::palette().text2),
-            Space::new().width(4.0),
-            text(labels::ICON_CHEVRON_DOWN)
-                .font(theme::FONT_ICON)
-                .size(theme::SIZE_LABEL)
-                .color(theme::palette().text3),
-            Space::new().width(Fill),
-            footer_icon_button(labels::ICON_SETTINGS, on_settings),
-        ]
-        .align_y(Alignment::Center),
-    )
+    let bolt_color = if !keep_awake.active {
+        theme::palette().text3
+    } else if keep_awake.on_battery {
+        theme::palette().warn
+    } else {
+        theme::palette().accent
+    };
+    let bolt_tip = keep_awake_tooltip(keep_awake);
+    let keep_awake_btn = tooltip(
+        footer_icon_button_colored(labels::ICON_BOLT, bolt_color, on_toggle_keep_awake),
+        crate::pane_chrome::tip_bubble(bolt_tip),
+        tooltip::Position::Top,
+    );
+    let settings_btn = tooltip(
+        footer_icon_button(labels::ICON_SETTINGS, on_settings),
+        crate::pane_chrome::tip_bubble(labels::RAIL_SETTINGS_TOOLTIP),
+        tooltip::Position::Top,
+    );
+    let choices: Vec<_> = std::iter::once(ChannelChoice(None))
+        .chain(
+            workspaces
+                .channels()
+                .into_iter()
+                .map(|name| ChannelChoice(Some(name))),
+        )
+        .collect();
+    let current = ChannelChoice(workspaces.active_channel().map(str::to_owned));
+    let channel_picker = pick_list(choices, Some(current), move |choice| {
+        on_select_channel(choice.0)
+    })
     .width(Fill)
-    .height(Length::Fixed(theme::FOOTER_HEIGHT))
-    .padding([0, 12]);
+    .padding([4, 6])
+    .font(theme::FONT_BODY)
+    .text_size(theme::SIZE_LABEL);
+    let mut footer_items = row![channel_picker].spacing(4).align_y(Alignment::Center);
+    if workspaces.active().is_some() {
+        footer_items = footer_items.push(tooltip(
+            footer_icon_button(labels::ICON_EDIT, on_toggle_channel_editor),
+            crate::pane_chrome::tip_bubble("Alterar canal do workspace ativo"),
+            tooltip::Position::Top,
+        ));
+    }
+    let footer = container(footer_items.push(keep_awake_btn).push(settings_btn))
+        .width(Fill)
+        .height(Length::Fixed(theme::FOOTER_HEIGHT))
+        .padding([0, 12]);
 
-    let body = container(column![
-        header,
-        scrollable(list).width(Fill).height(Fill),
-        hairline_h(),
-        footer,
-    ])
-    .width(Length::Fixed(theme::RAIL_WIDTH - 1.0))
-    .height(Fill)
-    .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(theme::palette().bg)),
-        ..Default::default()
-    });
+    let mut main_col = column![header, scrollable(list).width(Fill).height(Fill)];
+    if let (Some(name), Some(workspace)) = (channel_editor, workspaces.active()) {
+        let submit = valid_channel_name(name).then_some(on_assign_channel);
+        let field = text_input("Nome do canal", name)
+            .size(theme::SIZE_LABEL)
+            .on_input(on_channel_name_change)
+            .on_submit_maybe(submit.clone());
+        let save = button(text("Salvar").size(theme::SIZE_LABEL))
+            .on_press_maybe(submit)
+            .style(theme::ghost_button);
+        main_col = main_col.push(
+            container(
+                column![
+                    text(format!("Canal de {}", workspace.name)).size(theme::SIZE_LABEL),
+                    row![field, save].spacing(4).align_y(Alignment::Center),
+                ]
+                .spacing(4),
+            )
+            .padding([4, 12]),
+        );
+    }
+    if let Some(version) = update_version {
+        main_col = main_col.push(update_card(version, on_download_update, on_dismiss_update));
+    }
+    main_col = main_col.push(hairline_h()).push(footer);
+
+    let body = container(main_col)
+        .width(Length::Fixed(theme::RAIL_WIDTH - 1.0))
+        .height(Fill)
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(theme::palette().bg)),
+            ..Default::default()
+        });
 
     row![body, hairline_v()]
         .width(Length::Fixed(theme::RAIL_WIDTH))
@@ -246,12 +329,20 @@ fn workspace_row<'a, M: Clone + 'a>(
 /// Botão pequeno do rodapé (`_SmallIcon` de `projects_rail.dart`): 26×26,
 /// ícone 16 em `text3`, raio 5, hover `panel3`.
 fn footer_icon_button<'a, M: Clone + 'a>(glyph: &'static str, on_press: M) -> Element<'a, M> {
+    footer_icon_button_colored(glyph, theme::palette().text3, on_press)
+}
+
+fn footer_icon_button_colored<'a, M: Clone + 'a>(
+    glyph: &'static str,
+    color: Color,
+    on_press: M,
+) -> Element<'a, M> {
     button(
         container(
             text(glyph)
                 .font(theme::FONT_ICON)
                 .size(theme::SIZE_ICON)
-                .color(theme::palette().text3),
+                .color(color),
         )
         .width(Fill)
         .height(Fill)
@@ -262,7 +353,7 @@ fn footer_icon_button<'a, M: Clone + 'a>(glyph: &'static str, on_press: M) -> El
     .height(Length::Fixed(26.0))
     .padding(0)
     .on_press(on_press)
-    .style(|_: &Theme, status| {
+    .style(move |_: &Theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
             background: if hovered {
@@ -270,7 +361,7 @@ fn footer_icon_button<'a, M: Clone + 'a>(glyph: &'static str, on_press: M) -> El
             } else {
                 None
             },
-            text_color: theme::palette().text3,
+            text_color: color,
             border: Border {
                 radius: theme::RADIUS_BUTTON.into(),
                 ..Default::default()
@@ -278,6 +369,67 @@ fn footer_icon_button<'a, M: Clone + 'a>(glyph: &'static str, on_press: M) -> El
             ..Default::default()
         }
     })
+    .into()
+}
+
+fn update_card<'a, M: Clone + 'a>(
+    version: &'a str,
+    on_download: M,
+    on_dismiss: M,
+) -> Element<'a, M> {
+    let subtitle = format!("v{version} — {}", labels::UPDATE_CARD_CLICK_TO_DOWNLOAD);
+    let download_btn = button(
+        column![
+            text(labels::UPDATE_CARD_TITLE)
+                .font(theme::FONT_BODY_SEMIBOLD)
+                .size(theme::SIZE_LABEL)
+                .color(theme::palette().text),
+            text(subtitle)
+                .font(theme::FONT_BODY)
+                .size(theme::SIZE_LABEL)
+                .color(theme::palette().text3),
+        ]
+        .spacing(1.0)
+        .width(Fill),
+    )
+    .width(Fill)
+    .padding(0)
+    .on_press(on_download)
+    .style(|_: &Theme, _| button::Style {
+        background: None,
+        text_color: theme::palette().text,
+        ..Default::default()
+    });
+    let dismiss_btn = tooltip(
+        footer_icon_button(labels::ICON_CLOSE, on_dismiss),
+        crate::pane_chrome::tip_bubble(labels::UPDATE_CARD_DISMISS_TOOLTIP),
+        tooltip::Position::Top,
+    );
+    container(
+        container(
+            row![download_btn, dismiss_btn]
+                .spacing(6.0)
+                .align_y(Alignment::Center),
+        )
+        .padding([8, 10])
+        .width(Fill)
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(theme::palette().panel2)),
+            border: Border {
+                color: theme::palette().accent,
+                width: 1.0,
+                radius: theme::RADIUS_CARD.into(),
+            },
+            ..Default::default()
+        }),
+    )
+    .padding(Padding {
+        top: 0.0,
+        right: 12.0,
+        bottom: 8.0,
+        left: 12.0,
+    })
+    .width(Fill)
     .into()
 }
 
@@ -317,5 +469,31 @@ mod tests {
         let idx = list.open_folder("/tmp/novo-projeto");
         assert_eq!(idx, 2);
         assert_eq!(list.active().map(|w| w.name.as_str()), Some("novo-projeto"));
+    }
+
+    #[test]
+    fn keep_awake_tooltip_includes_battery_warning_only_when_active_on_battery() {
+        let off = keep_awake_tooltip(KeepAwakeStatus {
+            active: false,
+            on_battery: true,
+        });
+        assert!(off.contains(labels::RAIL_KEEP_AWAKE_OFF));
+        assert!(!off.contains(labels::RAIL_KEEP_AWAKE_BATTERY));
+        assert!(off.contains(labels::RAIL_KEEP_AWAKE_LID));
+
+        let on_ac = keep_awake_tooltip(KeepAwakeStatus {
+            active: true,
+            on_battery: false,
+        });
+        assert!(on_ac.contains(labels::RAIL_KEEP_AWAKE_ON));
+        assert!(!on_ac.contains(labels::RAIL_KEEP_AWAKE_BATTERY));
+
+        let on_bat = keep_awake_tooltip(KeepAwakeStatus {
+            active: true,
+            on_battery: true,
+        });
+        assert!(on_bat.contains(labels::RAIL_KEEP_AWAKE_ON));
+        assert!(on_bat.contains(labels::RAIL_KEEP_AWAKE_BATTERY));
+        assert!(on_bat.contains(labels::RAIL_KEEP_AWAKE_LID));
     }
 }

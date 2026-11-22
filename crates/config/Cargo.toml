@@ -20,3 +20,6 @@ toml = { version = "1", default-features = false, features = ["std", "parse", "d
 dirs = "6"
 # Enum de erro tipado.
 thiserror.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+yaml-rust = "0.4"

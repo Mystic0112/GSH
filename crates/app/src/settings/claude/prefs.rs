@@ -2,11 +2,12 @@
 //! do Flutter): uma chave por vez, preservando o resto do arquivo.
 
 use crate::settings::{write_atomic, Error};
-use gsh_config::schema::{TranscriptView, TranscriptWidth};
+use gsh_config::schema::{ClaudeProfiles, TranscriptView, TranscriptWidth};
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pref {
+    ClaudeProfiles(ClaudeProfiles),
     ClassifySessionStates(bool),
     ChatRemoteControl(bool),
     OpenLinksInApp(bool),
@@ -49,6 +50,24 @@ pub fn save(path: &Path, pref: &Pref) -> Result<gsh_config::Config, Error> {
 
 fn apply(doc: &mut toml_edit::DocumentMut, pref: &Pref) -> Result<(), Error> {
     match pref {
+        Pref::ClaudeProfiles(claude) => {
+            let mut profiles = toml_edit::InlineTable::new();
+            for (name, directory) in &claude.profiles {
+                profiles.insert(name, directory.as_str().into());
+            }
+            set(
+                doc,
+                Some("claude"),
+                "profiles",
+                Some(toml_edit::value(profiles)),
+            )?;
+            set(
+                doc,
+                Some("claude"),
+                "activeProfile",
+                claude.active_profile.as_deref().map(toml_edit::value),
+            )
+        }
         Pref::ClassifySessionStates(on) => set(
             doc,
             Some("chat"),

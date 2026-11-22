@@ -201,7 +201,7 @@ pub fn read_storage_root(pointer: &Path) -> Result<Option<PathBuf>, ConfigError>
 /// Lê um arquivo de migração (`settings.json` ou `storage_root`) somente após
 /// checar que é arquivo regular (`metadata.is_file()`) e que não excede
 /// [`MAX_MIGRATION_FILE_BYTES`]. Devolve `Ok(None)` quando `NotFound`.
-fn read_migration_file(path: &Path) -> Result<Option<String>, ConfigError> {
+pub(crate) fn read_migration_file(path: &Path) -> Result<Option<String>, ConfigError> {
     let meta = match fs::metadata(path) {
         Ok(meta) => meta,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),

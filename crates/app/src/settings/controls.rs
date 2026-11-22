@@ -91,6 +91,44 @@ pub fn save(path: &Path, settings: &Settings) -> Result<gsh_config::Config, Erro
                 toml_edit::value(settings.permission_sound),
             );
         }
+        Section::Automations => {
+            let automation = table(&mut doc, "automation")?;
+            if let Some(harness) = settings.current.automation.harness_id {
+                automation.insert("harnessId", toml_edit::value(harness.name()));
+            } else {
+                automation.remove("harnessId");
+            }
+            if let Some(model) = settings.current.automation.model() {
+                automation.insert("modelId", toml_edit::value(model));
+            } else {
+                automation.remove("modelId");
+            }
+        }
+        Section::LanguageServers => {
+            for (key, values) in [
+                ("lspCommands", &settings.current.lsp_commands),
+                ("lspFormatters", &settings.current.lsp_formatters),
+            ] {
+                let target = table(&mut doc, key)?;
+                let old = target
+                    .iter()
+                    .map(|(key, _)| key.to_owned())
+                    .collect::<Vec<_>>();
+                for key in old {
+                    target.remove(&key);
+                }
+                for (language, command) in values {
+                    target.insert(language, toml_edit::value(command));
+                }
+            }
+        }
+        Section::Features => {
+            let mut hidden = toml_edit::Array::new();
+            for feature in &settings.current.features.hidden {
+                hidden.push(feature.name());
+            }
+            table(&mut doc, "features")?.insert("hidden", toml_edit::value(hidden));
+        }
         Section::General => return gsh_config::load(path).map_err(Error::Config),
         Section::LocalSend => return save_localsend(path, &settings.current.localsend),
     }
@@ -216,7 +254,8 @@ pub fn save_localsend(
         .parse::<toml_edit::DocumentMut>()
         .map_err(Error::Document)?;
     let table = table(&mut doc, "localsend")?;
-    table.insert("enabled", toml_edit::value(localsend.enabled));
+    table.remove("enabled");
+    table.insert("alwaysOn", toml_edit::value(localsend.always_on));
     table.insert("alias", toml_edit::value(localsend.alias.trim()));
     table.insert("receiveDir", toml_edit::value(localsend.receive_dir.trim()));
     table.insert(
@@ -399,7 +438,7 @@ mod tests {
         let config = save_localsend(
             &path,
             &gsh_config::schema::LocalSend {
-                enabled: true,
+                always_on: true,
                 alias: " GSH sala ".into(),
                 receive_dir: " /tmp/recebidos ".into(),
                 max_file_mb: 64,
@@ -407,7 +446,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(config.localsend.enabled);
+        assert!(config.localsend.always_on);
         assert_eq!(config.localsend.alias, "GSH sala");
         assert_eq!(config.localsend.receive_dir, "/tmp/recebidos");
         assert_eq!(config.localsend.max_file_mb, 64);

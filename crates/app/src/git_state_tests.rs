@@ -22,6 +22,66 @@ fn status() -> GitRepoStatus {
     s.staged.insert("a".into(), gsh_git::GitFileStatus::Staged);
     s
 }
+
+#[test]
+fn saved_notes_reopen_only_for_the_exact_diff_and_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Path::new("/workspace/repo");
+    let mut diff = FileDiff::unchanged("a", false);
+    diff.kind = gsh_git::FileDiffKind::Modified;
+    diff.hunks.push(gsh_git::DiffHunk {
+        header: "@@ -1 +1 @@".into(),
+        lines: vec![gsh_git::DiffLine {
+            kind: gsh_git::DiffLineKind::Added,
+            old_line: None,
+            new_line: Some(1),
+            text: "original change".into(),
+        }],
+    });
+    let fresh_state = || GitState {
+        notes_directory: Some(dir.path().to_path_buf()),
+        ..GitState::default()
+    };
+    let mut state = fresh_state();
+    state.show_diff(repo, diff.clone()).unwrap();
+    let mut stale = fresh_state();
+    stale.show_diff(repo, diff.clone()).unwrap();
+    state.start_note(0, 0);
+    state.update_note_draft("comentário pendente".into());
+    assert!(state.save_note());
+    drop(state);
+    stale.start_note(0, 0);
+    stale.update_note_draft("janela desatualizada".into());
+    assert!(!stale.save_note());
+    assert!(stale.active_note.is_some());
+
+    let mut state = fresh_state();
+    let mut different = diff.clone();
+    different
+        .hunks
+        .first_mut()
+        .unwrap()
+        .lines
+        .first_mut()
+        .unwrap()
+        .text = "changed on the same line".into();
+    state.show_diff(repo, different).unwrap();
+    assert!(state.diff_notes.is_empty());
+    state
+        .show_diff(Path::new("/workspace/other"), diff.clone())
+        .unwrap();
+    assert!(state.diff_notes.is_empty());
+    state.show_diff(repo, diff.clone()).unwrap();
+    assert_eq!(
+        state.diff_notes.get(&(0, 0)).map(String::as_str),
+        Some("comentário pendente")
+    );
+
+    state.remove_note(0, 0);
+    let mut state = fresh_state();
+    state.show_diff(repo, diff).unwrap();
+    assert!(state.diff_notes.is_empty());
+}
 #[test]
 fn busy_without_repo_and_stale_generation() {
     let mut state = GitState::default();
@@ -74,6 +134,26 @@ fn mutations_preserve_status_and_only_commit_clears_message() {
         }
     }
 }
+
+#[test]
+fn commit_message_suggestion_fills_draft_without_committing() {
+    let mut state = GitState {
+        repo: Some("repo".into()),
+        status: Some(status()),
+        ..Default::default()
+    };
+    let action = Action::SuggestCommit(Automation::default());
+    let (repo, generation) = state.begin(&action).unwrap();
+    assert!(state.suggesting && state.busy);
+    assert!(!state.finish(result(
+        repo,
+        generation,
+        action,
+        Ok(Value::CommitMessage("feat: add branch picker".into())),
+    )));
+    assert_eq!(state.message, "feat: add branch picker");
+    assert!(!state.suggesting && !state.busy);
+}
 #[test]
 fn snapshot_degrades_history_and_preserves_unchanged_diff() {
     let mut state = GitState {
@@ -89,6 +169,7 @@ fn snapshot_degrades_history_and_preserves_unchanged_diff() {
         history: Err(err()),
         renames: BTreeMap::new(),
         selected_diff: Some(Ok(FileDiff::unchanged("a", true))),
+        branches: vec!["main".into()],
     };
     state.finish(result(repo, generation, Action::Refresh, Ok(value)));
     assert!(state.error.is_some() && state.history.is_empty() && state.diff.is_some());
@@ -149,6 +230,7 @@ fn changed_file_status_invalidates_selected_diff() {
         history: Ok(vec![]),
         renames: BTreeMap::new(),
         selected_diff: None,
+        branches: vec!["main".into()],
     };
     state.finish(result(repo, generation, Action::Refresh, Ok(value)));
     assert!(state.diff.is_none());
