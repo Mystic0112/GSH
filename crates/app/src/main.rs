@@ -110,6 +110,7 @@ pub mod right_tabs;
 pub mod scheduled_automations;
 pub mod settings;
 pub mod ssh_prompts;
+mod tab_menu;
 pub mod team_markdown;
 pub mod telemetry_case_view;
 pub mod telemetry_panel;
@@ -624,6 +625,15 @@ enum Msg {
     TerminalActivityTick,
     AgentGraphPulse,
     TabHover(Option<(Pane, usize)>),
+    /// Botão direito na aba: abre o menu de contexto.
+    TabContextMenu(Pane, usize),
+    CloseTabContextMenu,
+    TabMenuAction(Pane, usize, tab_menu::TabAction),
+    TabRenameChanged(String),
+    TabRenameSubmit,
+    TabRenameCancel,
+    ConfirmCloseTabs,
+    CancelCloseTabs,
     TabDrag(Pane, TabDragEvent),
     TabStripWheel(Pane, f32),
     OpenTabList(Pane),
@@ -783,6 +793,14 @@ fn menu_shortcut_matches(
         })
 }
 
+fn is_close_tab_shortcut(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> bool {
+    modifiers.control()
+        && !modifiers.logo()
+        && !modifiers.alt()
+        && !modifiers.shift()
+        && matches!(key.as_ref(), iced::keyboard::Key::Character(value) if value.eq_ignore_ascii_case("w"))
+}
+
 /// Escolha do diálogo ao fechar uma query com alterações não salvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloseChoice {
@@ -909,6 +927,14 @@ struct Shell {
     pending_close_pane: Option<Pane>,
     hovered_tab: Option<(Pane, usize)>,
     tab_list_open: Option<Pane>,
+    /// Menu de contexto aberto na aba `(pane, índice)`.
+    tab_menu: Option<(Pane, usize)>,
+    /// Aba de terminal com o nome em edição inline.
+    tab_rename: Option<tab_menu::TabRename>,
+    /// "Fechar abas?" aguardando confirmação.
+    pending_close_tabs: Option<tab_menu::PendingCloseTabs>,
+    /// Último clique numa aba de terminal, para o duplo clique que renomeia.
+    last_tab_click: Option<(Pane, TermId, Instant)>,
     app_menu_open: bool,
     tab_drag_source: Option<(Pane, usize)>,
     tab_drag_target: Option<(Pane, usize, bool)>,
@@ -1189,6 +1215,10 @@ impl Default for Shell {
             pending_close_pane: None,
             hovered_tab: None,
             tab_list_open: None,
+            tab_menu: None,
+            tab_rename: None,
+            pending_close_tabs: None,
+            last_tab_click: None,
             app_menu_open: false,
             tab_drag_source: None,
             tab_drag_target: None,
@@ -6277,6 +6307,23 @@ impl Shell {
     }
 
     fn update_inner(&mut self, msg: Msg) -> Task<Msg> {
+        // o campo de renomear perdeu o foco (`_onFocusChange` confirma): qualquer clique em
+        // outra parte da barra de abas ou do pane fecha a edição
+        if self.tab_rename.is_some()
+            && matches!(
+                &msg,
+                Msg::SelectTabIn(..)
+                    | Msg::CloseTabIn(..)
+                    | Msg::NewTerminalIn(_)
+                    | Msg::FocusPane(_)
+                    | Msg::SplitPane(..)
+                    | Msg::ClosePane(_)
+                    | Msg::OpenTabList(_)
+                    | Msg::TabContextMenu(..)
+            )
+        {
+            self.commit_tab_rename();
+        }
         if matches!(
             &msg,
             Msg::SelectTab(_)
@@ -6294,6 +6341,39 @@ impl Shell {
                 self.hovered_tab = tab;
                 Task::none()
             }
+            Msg::TabContextMenu(pane, index) => {
+                self.tab_list_open = None;
+                self.tab_menu = Some((pane, index));
+                Task::none()
+            }
+            Msg::CloseTabContextMenu => {
+                self.tab_menu = None;
+                Task::none()
+            }
+            Msg::TabMenuAction(pane, index, action) => self.tab_menu_action(pane, index, action),
+            Msg::TabRenameChanged(text) => {
+                if let Some(rename) = self.tab_rename.as_mut() {
+                    // o campo troca o espaço por `-` ao digitar
+                    rename.text = text.replace(' ', "-");
+                }
+                Task::none()
+            }
+            Msg::TabRenameSubmit => {
+                self.commit_tab_rename();
+                Task::none()
+            }
+            Msg::TabRenameCancel => {
+                self.tab_rename = None;
+                Task::none()
+            }
+            Msg::CancelCloseTabs => {
+                self.pending_close_tabs = None;
+                Task::none()
+            }
+            Msg::ConfirmCloseTabs => self
+                .pending_close_tabs
+                .take()
+                .map_or_else(Task::none, |pending| self.close_tabs(pending)),
             Msg::TabDrag(pane, event) => {
                 match event {
                     TabDragEvent::Start { index, cursor } => {
@@ -6382,6 +6462,10 @@ impl Shell {
             Msg::AppMenuAction(message) => {
                 self.app_menu_open = false;
                 self.update_inner(*message)
+            }
+            Msg::AppMenuShortcut(key, modifiers) if is_close_tab_shortcut(&key, modifiers) => {
+                let active = self.panes.focused_model().active_index();
+                active.map_or_else(Task::none, |index| self.update_inner(Msg::CloseTab(index)))
             }
             Msg::AppMenuShortcut(key, modifiers) => self
                 .app_menu_shortcut_action(&key, modifiers)
@@ -6598,7 +6682,9 @@ impl Shell {
                 Task::none()
             }
             // diálogo modal aberto: o teclado não chega ao terminal
-            Msg::Terminal(TerminalMsg::Keyboard(_)) if self.pending_close_pane.is_some() => {
+            Msg::Terminal(TerminalMsg::Keyboard(_))
+                if self.pending_close_pane.is_some() || self.tab_modal_open() =>
+            {
                 Task::none()
             }
             Msg::Terminal(TerminalMsg::Keyboard(iced::keyboard::Event::KeyPressed {
@@ -7195,8 +7281,7 @@ impl Shell {
                     self.dispose_tab(removed);
                 }
                 // pane que perdeu a última aba some, se houver outro (como `_closeTabIn`)
-                self.panes.close_if_empty(self.panes.focused());
-                Task::none()
+                self.after_tab_close()
             }
             Msg::OpenSettings => {
                 self.settings.claude.workspace = self.active_workspace_dir().map(Path::to_path_buf);
@@ -8317,6 +8402,10 @@ impl Shell {
             Msg::SelectTabIn(pane, idx) => {
                 self.tab_list_open = None;
                 self.panes.focus(pane);
+                // segundo clique em menos de 300 ms na mesma aba de terminal: renomeia
+                if self.register_tab_click(pane, idx, Instant::now()) {
+                    return self.start_tab_rename(pane, idx);
+                }
                 self.update(Msg::SelectTab(idx))
             }
             Msg::CloseTabIn(pane, idx) => {
@@ -8884,6 +8973,21 @@ impl Shell {
         } else {
             Subscription::none()
         };
+        // renomeando a aba: Esc cancela e clicar fora do campo confirma (perda de foco)
+        let tab_rename_events = if self.tab_rename.is_some() {
+            iced::event::listen_with(|event, status, _| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Msg::TabRenameCancel),
+                iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+                    iced::mouse::Button::Left,
+                )) if status == iced::event::Status::Ignored => Some(Msg::TabRenameSubmit),
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
         let menu_shortcuts =
             iced::event::listen_with(|event, _, _| match event {
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
@@ -9019,6 +9123,7 @@ impl Shell {
                 windows,
                 cancel_create,
                 menu_shortcuts,
+                tab_rename_events,
                 localsend_popup_escape,
                 search_clear,
                 search_spinner,
@@ -9397,7 +9502,8 @@ impl Shell {
                 on_split_down: Msg::SplitPane(pane, Axis::Horizontal),
                 on_close_pane: Msg::ClosePane(pane),
                 // a dica é uma camada acima de tudo: não pode vazar por cima do diálogo
-                show_tooltips: self.pending_close_pane.is_none(),
+                show_tooltips: self.pending_close_pane.is_none()
+                    && self.pending_close_tabs.is_none(),
                 on_focus,
             },
             &dirty,
@@ -9405,10 +9511,36 @@ impl Shell {
             move |index| Msg::TabHover(index.map(|index| (pane, index))),
             pane_strip::StripInput {
                 pane,
+                focused: self.panes.focused() == pane,
                 on_wheel: move |delta| Msg::TabStripWheel(pane, delta),
                 menu_open: self.tab_list_open == Some(pane),
                 on_open_menu: Msg::OpenTabList(pane),
                 on_close_menu: Msg::CloseTabList,
+                on_tab_menu: std::rc::Rc::new(move |index| Msg::TabContextMenu(pane, index)),
+                tab_menu: self
+                    .tab_menu
+                    .filter(|(menu_pane, _)| *menu_pane == pane)
+                    .map(|(_, index)| pane_strip::TabMenu {
+                        index,
+                        entries: tab_menu::menu_entries(pane, index, model),
+                        on_dismiss: Msg::CloseTabContextMenu,
+                    }),
+                rename: self
+                    .tab_rename
+                    .as_ref()
+                    .filter(|rename| rename.pane == pane)
+                    .and_then(|rename| {
+                        model
+                            .tabs()
+                            .iter()
+                            .position(|tab| *tab == PaneTab::Terminal(rename.term))
+                            .map(|index| pane_strip::TabRename {
+                                index,
+                                value: rename.text.clone(),
+                                on_input: Msg::TabRenameChanged,
+                                on_submit: Msg::TabRenameSubmit,
+                            })
+                    }),
             },
         )
     }
@@ -9787,6 +9919,21 @@ impl Shell {
                     model.tabs().len(),
                     Msg::CancelClosePane,
                     Msg::ConfirmClosePane,
+                    Msg::Noop,
+                )
+            ]
+            .into(),
+            None => layered,
+        };
+        let layered: Element<'_, Msg> = match self.pending_close_tabs.as_ref() {
+            Some(pending) => stack![
+                layered,
+                pane_close_dialog::confirm(
+                    labels::PANE_CLOSE_TABS_TITLE.to_owned(),
+                    labels::pane_close_tabs_message(pending.tabs.len()),
+                    labels::PANE_CLOSE_CONFIRM,
+                    Msg::CancelCloseTabs,
+                    Msg::ConfirmCloseTabs,
                     Msg::Noop,
                 )
             ]
@@ -10195,6 +10342,8 @@ mod db_interaction_tests;
 #[cfg(test)]
 mod localsend_popup_tests;
 #[cfg(test)]
+mod tab_menu_shell_tests;
+#[cfg(test)]
 mod telemetry_interaction_tests;
 
 #[cfg(test)]
@@ -10206,6 +10355,16 @@ mod tests {
     use iced_test::simulator::Simulator;
 
     use crate::island::IslandAgentState;
+
+    #[test]
+    fn ctrl_w_is_the_close_tab_shortcut_without_other_modifiers() {
+        let key = keyboard::Key::Character("W".into());
+        assert!(is_close_tab_shortcut(&key, keyboard::Modifiers::CTRL));
+        assert!(!is_close_tab_shortcut(
+            &key,
+            keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT
+        ));
+    }
 
     #[path = "channel_popup_tests.rs"]
     mod channel_popup_tests;
@@ -10372,6 +10531,10 @@ mod tests {
             pending_close_pane: None,
             hovered_tab: None,
             tab_list_open: None,
+            tab_menu: None,
+            tab_rename: None,
+            pending_close_tabs: None,
+            last_tab_click: None,
             app_menu_open: false,
             tab_drag_source: None,
             tab_drag_target: None,

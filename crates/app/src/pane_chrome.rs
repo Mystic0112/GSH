@@ -357,18 +357,9 @@ pub fn grid_style(_: &Theme) -> pane_grid::Style {
     }
 }
 
-/// Estado visual vazio quando todas as abas do pane foram fechadas.
+/// Corpo vazio transitório enquanto uma aba nova está sendo aberta.
 pub fn view_empty_body<'a, M: 'a>() -> Element<'a, M> {
-    container(
-        text(labels::PANE_EMPTY_STATE)
-            .font(theme::FONT_BODY)
-            .size(theme::SIZE_LABEL)
-            .color(theme::palette().text3),
-    )
-    .padding([20, 24])
-    .width(Fill)
-    .height(Fill)
-    .into()
+    container(Space::new()).width(Fill).height(Fill).into()
 }
 
 #[cfg(test)]

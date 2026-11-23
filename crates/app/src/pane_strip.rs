@@ -4,7 +4,7 @@ use crate::{
     labels,
     pane_chrome::ChromeCallbacks,
     pane_model::{PaneModel, PaneTab},
-    pane_tab::view_tab,
+    pane_tab::{view_tab, RenameField, TabActions},
     theme,
 };
 
@@ -25,17 +25,49 @@ pub enum TabDragEvent {
     },
 }
 
+/// Item do menu de contexto da aba (`AppMenuItem` de `_showTabMenu`).
+#[derive(Clone)]
+pub struct TabMenuEntry<M> {
+    pub label: &'static str,
+    pub glyph: &'static str,
+    pub message: M,
+}
+
+/// Menu de contexto aberto na aba `index`.
+pub struct TabMenu<M> {
+    pub index: usize,
+    pub entries: Vec<TabMenuEntry<M>>,
+    /// Clique fora ou Esc.
+    pub on_dismiss: M,
+}
+
+/// Aba `index` em edição inline do nome.
+pub struct TabRename<M> {
+    pub index: usize,
+    pub value: String,
+    pub on_input: fn(String) -> M,
+    pub on_submit: M,
+}
+
 pub struct StripInput<FWheel, M> {
     pub pane: iced::widget::pane_grid::Pane,
+    pub focused: bool,
     pub on_wheel: FWheel,
     pub menu_open: bool,
     pub on_open_menu: M,
     pub on_close_menu: M,
+    /// Abre o menu de contexto da aba (botão direito).
+    pub on_tab_menu: std::rc::Rc<dyn Fn(usize) -> M>,
+    pub tab_menu: Option<TabMenu<M>>,
+    pub rename: Option<TabRename<M>>,
 }
 use iced::widget::{
     button, column, container, mouse_area, responsive, row, scrollable, text, Space,
 };
 use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
+
+/// `minWidth` do `showAppMenu` do menu da aba.
+const TAB_MENU_MIN_WIDTH: f32 = 150.0;
 
 pub(crate) fn view_tab_strip<
     'a,
@@ -69,10 +101,14 @@ where
 {
     let StripInput {
         pane,
+        focused,
         on_wheel,
         menu_open,
         on_open_menu,
         on_close_menu,
+        on_tab_menu,
+        tab_menu,
+        rename,
     } = input;
     let active_idx = model.active_index();
     let tab_count = model.tabs().len();
@@ -98,6 +134,20 @@ where
     let close = callbacks.on_close_tab.clone();
     let hover = on_hover.clone();
     let drag = std::rc::Rc::new(callbacks.on_tab_drag.clone());
+    let dismiss_tab_menu = tab_menu
+        .as_ref()
+        .map_or_else(|| on_close_menu.clone(), |menu| menu.on_dismiss.clone());
+    let tab_menu = tab_menu.map(|menu| (menu.index, menu.entries));
+    let rename = rename.map(|rename| {
+        (
+            rename.index,
+            RenameField {
+                value: rename.value,
+                on_input: rename.on_input,
+                on_submit: rename.on_submit,
+            },
+        )
+    });
     let icon = callbacks.terminal_icon.clone();
     let title = callbacks.terminal_title.clone();
     let drop_target = callbacks.drop_target;
@@ -114,11 +164,22 @@ where
                 }
                 _ => tab_model.display_title(tab),
             };
-            tabs_row = tabs_row.push(view_tab(
+            let actions = TabActions {
+                on_close: close(idx),
+                hover: (hover(Some(idx)), hover(None)),
+                on_context_menu: on_tab_menu(idx),
+                on_middle_click: close(idx),
+                rename: rename
+                    .as_ref()
+                    .filter(|(index, _)| *index == idx)
+                    .map(|(_, field)| field.clone()),
+            };
+            let tab_view = view_tab(
                 tab,
                 crate::pane_tab::TabPresentation {
                     title: tab_title,
                     active: active_idx == Some(idx),
+                    focused,
                     dirty: dirty_flags.get(idx).copied().unwrap_or(false),
                     hovered: hovered == Some(idx),
                     drop_before: drop_target
@@ -127,8 +188,7 @@ where
                     dragging: drag_source == Some(idx),
                 },
                 select(idx),
-                close(idx),
-                (hover(Some(idx)), hover(None)),
+                actions,
                 (
                     move |cursor| on_drag_start(idx, TabDragEvent::Start { index: idx, cursor }),
                     move |point, cursor| {
@@ -155,7 +215,26 @@ where
                     PaneTab::Terminal(id) => icon(*id),
                     _ => None,
                 },
-            ));
+            );
+            // o popup nasce embaixo da aba, como o `showAppMenu(menuCtx)` do Flutter
+            let popup = tab_menu
+                .as_ref()
+                .filter(|(index, _)| *index == idx)
+                .map(|(_, entries)| {
+                    app_menu::menu(
+                        entries
+                            .iter()
+                            .map(|entry| {
+                                Item::Entry(
+                                    Entry::new(entry.label, entry.message.clone())
+                                        .leading(Leading::Glyph(entry.glyph)),
+                                )
+                            })
+                            .collect(),
+                        TAB_MENU_MIN_WIDTH,
+                    )
+                });
+            tabs_row = tabs_row.push(Anchored::new(tab_view, popup, dismiss_tab_menu.clone()));
         }
         tabs_row
     };
@@ -414,6 +493,12 @@ fn view_add_tab_button<'a, M: Clone + 'a>(on_new_terminal: M) -> Element<'a, M> 
             ..Default::default()
         }
     });
+
+    let btn = iced::widget::tooltip(
+        btn,
+        labels::PANE_VIEW_NEW_TAB,
+        iced::widget::tooltip::Position::Bottom,
+    );
 
     row![btn, hairline_v()]
         .width(Length::Fixed(theme::PANE_TAB_ADD_WIDTH + 1.0))

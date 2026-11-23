@@ -204,6 +204,19 @@ impl PaneModel {
         self.terminal_labels.get(&id).map(String::as_str)
     }
 
+    /// Remove abas indicadas na ordem visual; o chamador descarta as sessões removidas.
+    pub fn close_many(&mut self, indices: &[usize]) -> Vec<PaneTab> {
+        let mut ordered = indices.to_vec();
+        ordered.sort_unstable();
+        ordered.dedup();
+        let removed = ordered
+            .into_iter()
+            .rev()
+            .filter_map(|index| self.close(index))
+            .collect::<Vec<_>>();
+        removed.into_iter().rev().collect()
+    }
+
     /// Abre uma aba de terminal `id` ao final da lista e a torna ativa.
     pub fn open_terminal(&mut self, id: TermId) {
         self.tabs.push(PaneTab::Terminal(id));
@@ -446,7 +459,7 @@ impl PaneModel {
             if index < curr {
                 Some(curr.saturating_sub(1))
             } else if index == curr {
-                Some(curr.min(self.tabs.len().saturating_sub(1)))
+                Some(index.saturating_sub(1))
             } else {
                 Some(curr)
             }
@@ -536,6 +549,51 @@ mod tests {
         assert_eq!(model.active_index(), None);
         assert!(model.tabs().is_empty());
         assert_eq!(model.close(0), None);
+    }
+
+    #[test]
+    fn fechar_aba_ativa_seleciona_a_anterior_quando_ha_uma_a_direita() {
+        let mut model = with_terminal();
+        model.open_file("/proj/previous.rs");
+        model.open_file("/proj/active.rs");
+        model.activate(1);
+
+        assert_eq!(
+            model.close(2),
+            Some(PaneTab::File(PathBuf::from("/proj/active.rs")))
+        );
+        assert_eq!(model.active_index(), Some(1));
+        assert_eq!(
+            model.active_tab(),
+            Some(&PaneTab::File(PathBuf::from("/proj/previous.rs")))
+        );
+    }
+
+    #[test]
+    fn fechar_varias_abas_preserva_ordem_dos_removidos_e_ativa_restante() {
+        let mut model = with_terminal();
+        model.open_file("/proj/a.rs");
+        model.open_file("/proj/b.rs");
+        model.open_terminal(2);
+        model.activate(2);
+
+        let removed = model.close_many(&[3, 1, 3, 99]);
+
+        assert_eq!(
+            removed,
+            vec![
+                PaneTab::File(PathBuf::from("/proj/a.rs")),
+                PaneTab::Terminal(2),
+            ]
+        );
+        assert_eq!(
+            model.tabs(),
+            &[
+                PaneTab::Terminal(1),
+                PaneTab::File(PathBuf::from("/proj/b.rs")),
+            ]
+        );
+        assert_eq!(model.active_index(), Some(1));
     }
 
     #[test]
