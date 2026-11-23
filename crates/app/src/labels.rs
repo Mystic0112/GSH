@@ -173,11 +173,6 @@ pub const CHAT_TOOL_NAME_PAD: &str = "  ";
 
 // Viewer de arquivo (estados tipados de limite, binário e erro de leitura)
 pub const VIEWER_TOO_LARGE_PREFIX: &str = "Arquivo acima do limite de edição (";
-pub const EDITOR_CONFIRM_CLOSE: &str =
-    "Alterações não salvas. Clique novamente em fechar para descartá-las.";
-pub const EDITOR_CONFIRM_WINDOW: &str = "Há alterações não salvas. Descartar e fechar a janela?";
-pub const EDITOR_DISCARD: &str = "Descartar e fechar";
-pub const EDITOR_CANCEL: &str = "Cancelar";
 pub const EDITOR_EXTERNAL_CHANGE: &str = "O arquivo mudou no disco. Confirme para sobrescrever.";
 pub const EDITOR_OVERWRITE: &str = "Sobrescrever arquivo";
 #[cfg(target_os = "linux")]

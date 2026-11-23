@@ -614,8 +614,8 @@ enum Msg {
     Editor(PathBuf, editor_pane::EditorMsg),
     FileViewer(file_viewer::FileViewerMsg),
     WindowCloseRequested(iced::window::Id),
-    ConfirmWindowClose,
-    CancelWindowClose,
+    /// Resposta do diálogo de arquivo com alteração não salva (fechar aba ou janela).
+    CloseFile(CloseChoice),
     WindowUnfocused,
     WindowFocused,
     StatusTick,
@@ -803,7 +803,23 @@ fn is_close_tab_shortcut(key: &iced::keyboard::Key, modifiers: iced::keyboard::M
         && matches!(key.as_ref(), iced::keyboard::Key::Character(value) if value.eq_ignore_ascii_case("w"))
 }
 
-/// Escolha do diálogo ao fechar uma query com alterações não salvas.
+/// Arquivo com alteração não salva e o que fazer depois da escolha do diálogo.
+struct PendingCloseFile {
+    path: PathBuf,
+    then: AfterCloseFile,
+}
+
+enum AfterCloseFile {
+    /// Fecha a aba do arquivo naquele pane.
+    Tab(Pane),
+    /// Fecha a janela; `rest` são os próximos arquivos sujos a perguntar.
+    Window {
+        id: iced::window::Id,
+        rest: Vec<PathBuf>,
+    },
+}
+
+/// Escolha do diálogo ao fechar um arquivo ou uma query com alterações não salvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloseChoice {
     Cancel,
@@ -969,7 +985,8 @@ struct Shell {
     editors: BTreeMap<PathBuf, editor_pane::EditorPane>,
     #[cfg(target_os = "linux")]
     lsp: lsp_runtime::Pool,
-    pending_window_close: Option<iced::window::Id>,
+    /// Arquivo com alteração não salva esperando a escolha do diálogo (`showCloseDirtyDialog`).
+    pending_close_file: Option<PendingCloseFile>,
     workspaces: WorkspaceList,
     channel_editor: Option<rail::ChannelEditor>,
     channel_popup_open: bool,
@@ -1254,7 +1271,7 @@ impl Default for Shell {
             editors: BTreeMap::new(),
             #[cfg(target_os = "linux")]
             lsp: lsp_runtime::Pool::default(),
-            pending_window_close: None,
+            pending_close_file: None,
             workspaces,
             channel_editor: None,
             channel_popup_open: false,
@@ -5423,9 +5440,6 @@ impl Shell {
     }
 
     fn reveal_terminal_by_pane_id(&mut self, pane_id: &str) {
-        for editor in self.editors.values_mut() {
-            editor.state.cancel_close();
-        }
         let Some(target_id) = term_id_from_pane_id(pane_id) else {
             return;
         };
@@ -5594,6 +5608,45 @@ impl Shell {
     }
 
     /// Encerra a sessão de uma aba que já saiu da árvore de panes.
+    fn finish_window_close(&mut self, id: iced::window::Id) -> Task<Msg> {
+        self.stop_localsend_sender();
+        self.save_layout();
+        gsh_db::ssh::SshTunnelManager::global().close_all();
+        iced::window::close(id)
+    }
+
+    /// Segue depois de resolvido um arquivo sujo: fecha a aba, ou pergunta o próximo / fecha a janela.
+    fn after_close_file(&mut self, path: &Path, then: AfterCloseFile) -> Task<Msg> {
+        match then {
+            AfterCloseFile::Tab(pane) => {
+                let tab = PaneTab::File(path.to_path_buf());
+                let Some(index) = self
+                    .panes
+                    .model(pane)
+                    .and_then(|model| model.tabs().iter().position(|open| *open == tab))
+                else {
+                    return Task::none();
+                };
+                self.panes.focus(pane);
+                if let Some(removed) = self.panes.focused_model_mut().close(index) {
+                    self.dispose_tab(removed);
+                }
+                self.after_tab_close()
+            }
+            AfterCloseFile::Window { id, mut rest } => {
+                if rest.is_empty() {
+                    return self.finish_window_close(id);
+                }
+                let path = rest.remove(0);
+                self.pending_close_file = Some(PendingCloseFile {
+                    path,
+                    then: AfterCloseFile::Window { id, rest },
+                });
+                Task::none()
+            }
+        }
+    }
+
     fn dispose_tab(&mut self, tab: PaneTab) {
         match tab {
             PaneTab::Terminal(id) => {
@@ -6364,18 +6417,6 @@ impl Shell {
         {
             self.commit_tab_rename();
         }
-        if matches!(
-            &msg,
-            Msg::SelectTab(_)
-                | Msg::Files(FilesMsg::SelectFile(_))
-                | Msg::NewTerminalTab
-                | Msg::NewChatTab
-                | Msg::WindowUnfocused
-        ) {
-            for editor in self.editors.values_mut() {
-                editor.state.cancel_close();
-            }
-        }
         match msg {
             Msg::TabHover(tab) => {
                 self.hovered_tab = tab;
@@ -6569,31 +6610,50 @@ impl Shell {
                 Task::none()
             }
             Msg::WindowCloseRequested(id) => {
-                if self.editors.values().any(|e| e.state.buffer.is_dirty()) {
-                    self.pending_window_close = Some(id);
-                    Task::none()
-                } else {
-                    self.stop_localsend_sender();
-                    self.save_layout();
-                    gsh_db::ssh::SshTunnelManager::global().close_all();
-                    iced::window::close(id)
+                let mut dirty = self
+                    .editors
+                    .iter()
+                    .filter(|(_, editor)| editor.state.buffer.is_dirty())
+                    .map(|(path, _)| path.clone());
+                match dirty.next() {
+                    // mesmo diálogo do fechar aba, arquivo por arquivo
+                    Some(path) => {
+                        self.pending_close_file = Some(PendingCloseFile {
+                            path,
+                            then: AfterCloseFile::Window {
+                                id,
+                                rest: dirty.collect(),
+                            },
+                        });
+                        Task::none()
+                    }
+                    None => self.finish_window_close(id),
                 }
             }
-            Msg::ConfirmWindowClose => {
-                self.stop_localsend_sender();
-                self.save_layout();
-                gsh_db::ssh::SshTunnelManager::global().close_all();
-                self.pending_window_close
-                    .take()
-                    .map_or_else(Task::none, iced::window::close)
-            }
-            Msg::CancelWindowClose => {
-                self.pending_window_close = None;
-                Task::none()
+            Msg::CloseFile(choice) => {
+                let Some(PendingCloseFile { path, then }) = self.pending_close_file.take() else {
+                    return Task::none();
+                };
+                match choice {
+                    CloseChoice::Cancel => Task::none(),
+                    CloseChoice::DontSave => self.after_close_file(&path, then),
+                    CloseChoice::SaveAndClose => {
+                        let save = self
+                            .update_inner(Msg::Editor(path.clone(), editor_pane::EditorMsg::Save));
+                        // só fecha se gravou: erro de IO ou arquivo mudado no disco mantém aberto
+                        if self
+                            .editors
+                            .get(&path)
+                            .is_some_and(|editor| editor.state.buffer.is_dirty())
+                        {
+                            return save;
+                        }
+                        Task::batch([save, self.after_close_file(&path, then)])
+                    }
+                }
             }
             Msg::WindowUnfocused => {
                 self.window_focused = false;
-                self.pending_window_close = None;
                 self.hovered_tab = None;
                 Task::none()
             }
@@ -7299,11 +7359,6 @@ impl Shell {
                 Task::none()
             }
             Msg::CloseTab(idx) => {
-                if self.panes.focused_model().active_index() != Some(idx) {
-                    for editor in self.editors.values_mut() {
-                        editor.state.cancel_close();
-                    }
-                }
                 if let Some(PaneTab::Query { id, .. }) = self.panes.focused_model().tabs().get(idx)
                 {
                     let id = *id;
@@ -7314,11 +7369,18 @@ impl Shell {
                     }
                 }
                 if let Some(PaneTab::File(path)) = self.panes.focused_model().tabs().get(idx) {
-                    if let Some(editor) = self.editors.get_mut(path) {
-                        if !editor.state.request_close() {
-                            self.panes.focused_model_mut().activate(idx);
-                            return Task::none();
-                        }
+                    if self
+                        .editors
+                        .get(path)
+                        .is_some_and(|editor| editor.state.buffer.is_dirty())
+                    {
+                        // `showCloseDirtyDialog`: salvar e fechar, não salvar ou cancelar
+                        self.pending_close_file = Some(PendingCloseFile {
+                            path: path.clone(),
+                            then: AfterCloseFile::Tab(self.panes.focused()),
+                        });
+                        self.panes.focused_model_mut().activate(idx);
+                        return Task::none();
                     }
                 }
                 if let Some(removed) = self.panes.focused_model_mut().close(idx) {
@@ -9894,17 +9956,7 @@ impl Shell {
             ));
         }
 
-        let mut root = column![top].width(Fill).height(Fill);
-        if self.pending_window_close.is_some() {
-            root = root.push(
-                row![
-                    iced::widget::text(labels::EDITOR_CONFIRM_WINDOW).color(theme::palette().warn),
-                    iced::widget::button(labels::EDITOR_DISCARD).on_press(Msg::ConfirmWindowClose),
-                    iced::widget::button(labels::EDITOR_CANCEL).on_press(Msg::CancelWindowClose),
-                ]
-                .spacing(12),
-            );
-        }
+        let root = column![top].width(Fill).height(Fill);
         let base = container(root.push(body))
             .width(Fill)
             .height(Fill)
@@ -10034,7 +10086,21 @@ impl Shell {
             .pending_close_query
             .and_then(|id| self.queries.get(&id).map(|query| (id, query.title())))
         {
-            Some((id, title)) => stack![layered, close_query_dialog(id, &title)].into(),
+            Some((id, title)) => stack![
+                layered,
+                close_dirty_dialog(&title, move |choice| Msg::CloseQuery(id, choice))
+            ]
+            .into(),
+            None => layered,
+        };
+        let layered: Element<'_, Msg> = match self.pending_close_file.as_ref() {
+            Some(pending) => {
+                let name = pending
+                    .path
+                    .file_name()
+                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+                stack![layered, close_dirty_dialog(&name, Msg::CloseFile)].into()
+            }
             None => layered,
         };
         let layered: Element<'_, Msg> = match self.harness.name_dialog() {
@@ -10317,7 +10383,10 @@ impl Shell {
 }
 
 /// `showCloseDirtyDialog`: descartar, cancelar ou salvar e fechar.
-fn close_query_dialog(id: QueryId, title: &str) -> Element<'static, Msg> {
+fn close_dirty_dialog(
+    title: &str,
+    on_choice: impl Fn(CloseChoice) -> Msg,
+) -> Element<'static, Msg> {
     use pane_close_dialog::{action, ButtonKind};
     let heading = iced::widget::text(labels::UNSAVED_CHANGES_TITLE)
         .font(theme::FONT_TITLE)
@@ -10334,17 +10403,17 @@ fn close_query_dialog(id: QueryId, title: &str) -> Element<'static, Msg> {
         action(
             labels::UNSAVED_DONT_SAVE,
             ButtonKind::Danger,
-            Some(Msg::CloseQuery(id, CloseChoice::DontSave))
+            Some(on_choice(CloseChoice::DontSave))
         ),
         action(
             labels::DIALOG_CANCEL,
             ButtonKind::Outline,
-            Some(Msg::CloseQuery(id, CloseChoice::Cancel))
+            Some(on_choice(CloseChoice::Cancel))
         ),
         action(
             labels::UNSAVED_SAVE_AND_CLOSE,
             ButtonKind::Primary,
-            Some(Msg::CloseQuery(id, CloseChoice::SaveAndClose))
+            Some(on_choice(CloseChoice::SaveAndClose))
         ),
     ]
     .spacing(theme::DIALOG_ACTIONS_GAP)
@@ -10354,7 +10423,7 @@ fn close_query_dialog(id: QueryId, title: &str) -> Element<'static, Msg> {
         message.into(),
         actions.into(),
         None,
-        Msg::CloseQuery(id, CloseChoice::Cancel),
+        on_choice(CloseChoice::Cancel),
         Msg::Noop,
     )
 }
@@ -10396,6 +10465,8 @@ fn main() -> iced::Result {
 
 #[cfg(test)]
 mod db_interaction_tests;
+#[cfg(test)]
+mod dirty_close_shell_tests;
 #[cfg(test)]
 mod localsend_popup_tests;
 #[cfg(test)]
@@ -10625,7 +10696,7 @@ mod tests {
             editors: BTreeMap::new(),
             #[cfg(target_os = "linux")]
             lsp: lsp_runtime::Pool::default(),
-            pending_window_close: None,
+            pending_close_file: None,
             workspaces,
             channel_editor: None,
             channel_popup_open: false,
@@ -12423,26 +12494,6 @@ mod tests {
         assert_eq!(shell.panes.focused_model().tabs().len(), 2);
     }
 
-    #[test]
-    fn janela_suja_pede_confirmacao_e_perda_de_foco_cancela() {
-        use iced::widget::text_editor::{Action, Edit};
-        let mut shell = test_shell();
-        let path = std::env::temp_dir().join(format!("gsh-window-editor-{}", std::process::id()));
-        std::fs::write(&path, "original").unwrap();
-        let _ = shell.update(Msg::Files(FilesMsg::SelectFile(path.clone())));
-        let _ = shell.update(Msg::Editor(
-            path.clone(),
-            editor_pane::EditorMsg::Action(Action::Edit(Edit::Insert('x'))),
-        ));
-        let id = iced::window::Id::unique();
-        let _ = shell.update(Msg::WindowCloseRequested(id));
-        assert_eq!(shell.pending_window_close, Some(id));
-        let _ = shell.update(Msg::WindowUnfocused);
-        assert!(shell.pending_window_close.is_none());
-        assert!(shell.editors.get(&path).unwrap().state.buffer.is_dirty());
-        let _ = std::fs::remove_file(path);
-    }
-
     #[cfg(unix)]
     #[test]
     fn alias_de_arquivo_abre_uma_unica_aba() {
@@ -12458,33 +12509,6 @@ mod tests {
         assert_eq!(shell.editors.len(), 1);
         assert_eq!(shell.panes.focused_model().tabs().len(), 2);
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn editor_confirma_fechamento_e_preserva_arquivo_sem_salvar() {
-        use iced::widget::text_editor::{Action, Edit};
-        let mut shell = test_shell();
-        let path = std::env::temp_dir().join(format!("gsh-shell-editor-{}", std::process::id()));
-        std::fs::write(&path, "original\n").expect("arquivo de teste");
-        let _ = shell.update(Msg::Files(FilesMsg::SelectFile(path.clone())));
-        let _ = shell.update(Msg::Editor(
-            path.clone(),
-            editor_pane::EditorMsg::Action(Action::Edit(Edit::Insert('x'))),
-        ));
-        assert!(shell.editors.get(&path).unwrap().state.buffer.is_dirty());
-        let _ = shell.update(Msg::CloseTab(1));
-        assert_eq!(shell.panes.focused_model().tabs().len(), 2);
-        assert!(matches!(
-            shell.editors.get(&path).unwrap().state.notice,
-            Some(editor_state::EditorNotice::ConfirmClose)
-        ));
-        let _ = shell.update(Msg::SelectTab(0));
-        let _ = shell.update(Msg::CloseTab(1));
-        assert!(shell.editors.contains_key(&path));
-        let _ = shell.update(Msg::CloseTab(1));
-        assert!(!shell.editors.contains_key(&path));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original\n");
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
