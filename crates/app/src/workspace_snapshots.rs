@@ -88,7 +88,8 @@ mod tests {
             rail::RailActions {
                 keep_awake: rail::KeepAwakeStatus::default(),
                 update_version: None,
-                on_add_workspace: (),
+                new_workspace_menu_open: false,
+                on_new_workspace_menu: |_| (),
                 channels: rail::ChannelActions {
                     editor: editor.as_ref(),
                     members: Vec::new(),
@@ -112,7 +113,8 @@ mod tests {
             rail::RailActions {
                 keep_awake: rail::KeepAwakeStatus::default(),
                 update_version: None,
-                on_add_workspace: (),
+                new_workspace_menu_open: false,
+                on_new_workspace_menu: |_| (),
                 channels: rail::ChannelActions {
                     editor: editor.as_ref(),
                     members: Vec::new(),
@@ -130,5 +132,30 @@ mod tests {
             },
         );
         capture("gsh-ws-rail-cores.png", rail);
+        let plus = rail::view(
+            &workspaces,
+            |_| (),
+            rail::RailActions {
+                keep_awake: rail::KeepAwakeStatus::default(),
+                update_version: None,
+                new_workspace_menu_open: true,
+                on_new_workspace_menu: |_| (),
+                channels: rail::ChannelActions {
+                    editor: editor.as_ref(),
+                    members: Vec::new(),
+                    on_action: |_| (),
+                },
+                channel_popup_open: false,
+                on_toggle_channel_popup: (),
+                on_close_channel_popup: (),
+                on_toggle_keep_awake: (),
+                on_download_update: (),
+                on_dismiss_update: (),
+                on_settings: (),
+                workspace_menu_open: None,
+                on_workspace_menu: no_op,
+            },
+        );
+        capture("gsh-plus-menu.png", plus);
     }
 }

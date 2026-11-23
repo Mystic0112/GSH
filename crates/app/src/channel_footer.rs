@@ -221,7 +221,8 @@ fn capture_channel_footer_snapshots() {
             super::RailActions {
                 keep_awake: super::KeepAwakeStatus::default(),
                 update_version: None,
-                on_add_workspace: (),
+                new_workspace_menu_open: false,
+                on_new_workspace_menu: |_| (),
                 channels: ChannelActions {
                     editor: editor.as_ref(),
                     members: Vec::new(),

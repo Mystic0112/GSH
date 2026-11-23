@@ -282,6 +282,17 @@ impl<Message: Clone> overlay::Overlay<Message, iced::Theme, iced::Renderer>
         );
     }
 
+    fn operate(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        self.content
+            .as_widget_mut()
+            .operate(self.tree, layout, renderer, operation);
+    }
+
     fn update(
         &mut self,
         event: &Event,

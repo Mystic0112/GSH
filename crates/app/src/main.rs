@@ -717,6 +717,8 @@ enum Msg {
     WorkspaceSettings(workspace_settings_dialog::Message),
     ConfigureWorkspace(usize),
     WorkspaceMenu(usize, rail::WorkspaceMenuAction),
+    ToggleNewWorkspaceMenu,
+    CloseNewWorkspaceMenu,
     ConfirmCloseWorkspace,
     CancelCloseWorkspace,
     WorkspacePhotoPicked(Option<PathBuf>),
@@ -967,6 +969,7 @@ struct Shell {
     workspace_switch_notice: Option<&'static str>,
     workspace_settings: Option<workspace_settings_dialog::Draft>,
     workspace_menu_open: Option<usize>,
+    new_workspace_menu_open: bool,
     pending_workspace_close: Option<usize>,
     layout_save_due: Option<Instant>,
     layout_restore_browsers_pending: bool,
@@ -1249,6 +1252,7 @@ impl Default for Shell {
             workspace_switch_notice: None,
             workspace_settings: None,
             workspace_menu_open: None,
+            new_workspace_menu_open: false,
             pending_workspace_close: None,
             layout_save_due: None,
             layout_restore_browsers_pending,
@@ -1511,6 +1515,17 @@ fn empty_test_snapshot() -> gsh_term::TermSnapshot {
         },
         display_offset: 0,
         history_size: 0,
+    }
+}
+
+/// Ações do menu do "+" do rail viram mensagens do Shell.
+fn new_workspace_menu_msg(action: rail::NewWorkspaceMenuAction) -> Msg {
+    match action {
+        rail::NewWorkspaceMenuAction::Toggle => Msg::ToggleNewWorkspaceMenu,
+        rail::NewWorkspaceMenuAction::Local => Msg::PickWorkspaceFolder,
+        #[cfg(target_os = "linux")]
+        rail::NewWorkspaceMenuAction::Remote => Msg::OpenRemoteConnect,
+        _ => Msg::CloseNewWorkspaceMenu,
     }
 }
 
@@ -8370,6 +8385,7 @@ impl Shell {
             }
             #[cfg(target_os = "linux")]
             Msg::OpenRemoteConnect => {
+                self.new_workspace_menu_open = false;
                 self.remote_connect_generation = self.remote_connect_generation.wrapping_add(1);
                 self.remote_connect = Some(remote_connect_dialog::Draft::default());
                 Task::none()
@@ -8582,6 +8598,7 @@ impl Shell {
                 Task::none()
             }
             Msg::PickWorkspaceFolder => {
+                self.new_workspace_menu_open = false;
                 Task::perform(pick_workspace_folder(), Msg::WorkspaceFolderPicked)
             }
             Msg::WorkspaceFolderPicked(Some(folder)) => {
@@ -8627,6 +8644,14 @@ impl Shell {
                         image: workspace.image_path.clone(),
                     });
                 }
+                Task::none()
+            }
+            Msg::ToggleNewWorkspaceMenu => {
+                self.new_workspace_menu_open = !self.new_workspace_menu_open;
+                Task::none()
+            }
+            Msg::CloseNewWorkspaceMenu => {
+                self.new_workspace_menu_open = false;
                 Task::none()
             }
             Msg::WorkspaceMenu(index, action) => match action {
@@ -9615,7 +9640,8 @@ impl Shell {
                         on_battery: self.settings.claude.keep_awake_on_battery(),
                     },
                     update_version: self.update_state.available_version(),
-                    on_add_workspace: Msg::PickWorkspaceFolder,
+                    new_workspace_menu_open: self.new_workspace_menu_open,
+                    on_new_workspace_menu: new_workspace_menu_msg,
                     channels: rail::ChannelActions {
                         editor: self.channel_editor.as_ref(),
                         members: self.channel_member_options(),
@@ -10400,6 +10426,7 @@ mod tests {
             workspace_switch_notice: None,
             workspace_settings: None,
             workspace_menu_open: None,
+            new_workspace_menu_open: false,
             pending_workspace_close: None,
             layout_save_due: None,
             layout_restore_browsers_pending: false,
@@ -12389,6 +12416,106 @@ mod tests {
         assert_eq!(item.name, "Projeto editado");
         assert_eq!(item.color, Some(0xFF2F6FF0));
         assert_eq!(item.image_path, Some(folder.join("avatar.webp")));
+    }
+
+    fn plus_menu_sim(shell: &Shell) -> Simulator<'_, Msg> {
+        std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
+        let settings = iced::Settings {
+            fonts: theme::EMBEDDED_FONTS
+                .iter()
+                .map(|font| (*font).into())
+                .collect(),
+            default_font: theme::FONT_BODY,
+            ..Default::default()
+        };
+        Simulator::with_size(settings, Size::new(1024.0, 700.0), shell.view())
+    }
+
+    fn apply(shell: &mut Shell, messages: Vec<Msg>) {
+        for message in messages {
+            let _ = shell.update(message);
+        }
+    }
+
+    #[test]
+    fn plus_button_opens_local_remote_menu_and_esc_or_outside_click_close_it() {
+        let mut shell = test_shell();
+        let mut ui = plus_menu_sim(&shell);
+        assert!(ui.find(labels::NEW_WORKSPACE_LOCAL).is_err());
+        assert!(ui.click(labels::ICON_PLUS).is_ok());
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Msg::ToggleNewWorkspaceMenu)),
+            "{messages:?}"
+        );
+        assert!(!shell.new_workspace_menu_open);
+        apply(&mut shell, messages);
+        assert!(shell.new_workspace_menu_open);
+        let mut ui = plus_menu_sim(&shell);
+        assert!(ui.find(labels::NEW_WORKSPACE_LOCAL).is_ok());
+        assert!(ui.find(labels::NEW_WORKSPACE_REMOTE).is_ok());
+
+        let _ = ui.tap_key(keyboard::key::Named::Escape);
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Msg::CloseNewWorkspaceMenu)),
+            "{messages:?}"
+        );
+        apply(&mut shell, messages);
+        assert!(!shell.new_workspace_menu_open);
+
+        let _ = shell.update(Msg::ToggleNewWorkspaceMenu);
+        let mut ui = plus_menu_sim(&shell);
+        ui.point_at(iced::Point::new(900.0, 600.0));
+        ui.simulate(iced_test::simulator::click());
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Msg::CloseNewWorkspaceMenu)),
+            "{messages:?}"
+        );
+        apply(&mut shell, messages);
+        assert!(!shell.new_workspace_menu_open);
+    }
+
+    #[test]
+    fn plus_menu_local_picks_folder_and_closes() {
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::ToggleNewWorkspaceMenu);
+        let mut ui = plus_menu_sim(&shell);
+        assert!(ui.click(labels::NEW_WORKSPACE_LOCAL).is_ok());
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Msg::PickWorkspaceFolder)),
+            "{messages:?}"
+        );
+        apply(&mut shell, messages);
+        assert!(!shell.new_workspace_menu_open);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn plus_menu_remote_opens_remote_connect_dialog() {
+        let mut shell = test_shell();
+        let _ = shell.update(Msg::ToggleNewWorkspaceMenu);
+        let mut ui = plus_menu_sim(&shell);
+        assert!(ui.click(labels::NEW_WORKSPACE_REMOTE).is_ok());
+        let messages: Vec<_> = ui.into_messages().collect();
+        assert!(
+            messages.iter().any(|m| matches!(m, Msg::OpenRemoteConnect)),
+            "{messages:?}"
+        );
+        assert!(shell.remote_connect.is_none());
+        apply(&mut shell, messages);
+        assert!(shell.remote_connect.is_some());
+        assert!(!shell.new_workspace_menu_open);
     }
 
     #[test]

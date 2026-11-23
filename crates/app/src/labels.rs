@@ -26,6 +26,8 @@ pub const WORKSPACE_CLOSE_TITLE: &str = "Fechar workspace?";
 pub const WORKSPACE_CLOSE_MESSAGE: &str =
     "O workspace será removido da lista do GSH. A pasta e os arquivos no disco não serão apagados.";
 pub const WORKSPACE_CLOSE_CONFIRM: &str = "Fechar";
+pub const NEW_WORKSPACE_LOCAL: &str = "Local";
+pub const NEW_WORKSPACE_REMOTE: &str = "Remoto";
 pub const WORKSPACE_MENU_CONFIGURE: &str = "Configurações";
 pub const WORKSPACE_MENU_COPY_ID: &str = "Copiar ID do workspace";
 pub const WORKSPACE_MENU_MOVE_TO: &str = "Mover para";
@@ -237,6 +239,7 @@ pub const ICON_TERMINAL: &str = "\u{eb8e}";
 pub const ICON_SPLIT_H: &str = "\u{e949}";
 pub const ICON_SPLIT_V: &str = "\u{e947}";
 pub const ICON_FOLDER: &str = "\u{e2c7}";
+pub const ICON_CLOUD: &str = "\u{e2bd}";
 pub const ICON_REFRESH: &str = "\u{e5d5}";
 pub const ICON_COLLAPSE: &str = "\u{e5d6}";
 pub const ICON_SETTINGS: &str = "\u{e8b8}";

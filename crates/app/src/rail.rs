@@ -23,6 +23,15 @@ pub enum WorkspaceMenuAction {
     Dismiss,
 }
 
+/// Ações do menu do "+" do cabeçalho (`newWorkspaceMenu` do Flutter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewWorkspaceMenuAction {
+    Toggle,
+    Dismiss,
+    Local,
+    Remote,
+}
+
 /// Estado visual do botão de manter acordado no rodapé do rail.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct KeepAwakeStatus {
@@ -70,7 +79,8 @@ pub fn default_workspace_list() -> WorkspaceList {
 pub struct RailActions<'a, M> {
     pub keep_awake: KeepAwakeStatus,
     pub update_version: Option<&'a str>,
-    pub on_add_workspace: M,
+    pub new_workspace_menu_open: bool,
+    pub on_new_workspace_menu: fn(NewWorkspaceMenuAction) -> M,
     pub channels: ChannelActions<'a, M>,
     pub channel_popup_open: bool,
     pub on_toggle_channel_popup: M,
@@ -92,7 +102,8 @@ pub fn view<'a, M: Clone + 'a>(
     let RailActions {
         keep_awake,
         update_version,
-        on_add_workspace,
+        new_workspace_menu_open,
+        on_new_workspace_menu,
         channels,
         channel_popup_open,
         on_toggle_channel_popup,
@@ -116,7 +127,7 @@ pub fn view<'a, M: Clone + 'a>(
                 .size(theme::SIZE_TITLE)
                 .color(theme::palette().text),
             Space::new().width(Fill),
-            footer_icon_button(labels::ICON_PLUS, on_add_workspace),
+            new_workspace_button(new_workspace_menu_open, on_new_workspace_menu),
         ]
         .align_y(Alignment::Center),
     )
@@ -361,6 +372,38 @@ fn workspace_row<'a, M: Clone + 'a>(
     crate::anchored::Anchored::new(base, menu, on_menu(index, WorkspaceMenuAction::Dismiss))
         .side()
         .on_escape(on_menu(index, WorkspaceMenuAction::Dismiss))
+        .into()
+}
+
+/// "+" do cabeçalho: abre o menu Local/Remoto ancorado no botão.
+fn new_workspace_button<'a, M: Clone + 'a>(
+    open: bool,
+    on_menu: fn(NewWorkspaceMenuAction) -> M,
+) -> Element<'a, M> {
+    let base = footer_icon_button(labels::ICON_PLUS, on_menu(NewWorkspaceMenuAction::Toggle));
+    let menu = open.then(|| {
+        crate::app_menu::menu(
+            vec![
+                crate::app_menu::Item::Entry(
+                    crate::app_menu::Entry::new(
+                        labels::NEW_WORKSPACE_LOCAL,
+                        on_menu(NewWorkspaceMenuAction::Local),
+                    )
+                    .leading(crate::app_menu::Leading::Glyph(labels::ICON_FOLDER)),
+                ),
+                crate::app_menu::Item::Entry(
+                    crate::app_menu::Entry::new(
+                        labels::NEW_WORKSPACE_REMOTE,
+                        on_menu(NewWorkspaceMenuAction::Remote),
+                    )
+                    .leading(crate::app_menu::Leading::Glyph(labels::ICON_CLOUD)),
+                ),
+            ],
+            140.0,
+        )
+    });
+    crate::anchored::Anchored::new(base, menu, on_menu(NewWorkspaceMenuAction::Dismiss))
+        .on_escape(on_menu(NewWorkspaceMenuAction::Dismiss))
         .into()
 }
 
