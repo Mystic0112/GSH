@@ -144,9 +144,10 @@ pub fn view<'a>(draft: &'a Draft) -> Element<'a, Message> {
             .color(theme::palette().text3),
     ]
     .spacing(10)
-    .width(Fill)
+    .width(Length::Fixed(420.0))
     .into();
     let actions = row![
+        Space::new().width(Fill),
         pane_close_dialog::action(
             labels::WORKSPACE_CANCEL,
             pane_close_dialog::ButtonKind::Outline,
