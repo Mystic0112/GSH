@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>GSH</string>
+	<key>CFBundleDisplayName</key>
+	<string>GSH</string>
+	<key>CFBundleIdentifier</key>
+	<string>@BUNDLE_ID@</string>
+	<key>CFBundleExecutable</key>
+	<string>GSH</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@BUILD@</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>@MIN_OS@</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.developer-tools</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>O GSH usa a rede local para mostrar a fazenda dos colegas do seu time e trocar mensagens entre agentes.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>MIT License</string>
+</dict>
+</plist>

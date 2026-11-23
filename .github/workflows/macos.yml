@@ -1,0 +1,36 @@
+name: macOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "packaging/macos/**"
+      - ".github/workflows/macos.yml"
+      - "crates/**"
+      - "Cargo.*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  app:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Monta o GSH.app e o DMG (assinatura ad-hoc)
+        run: packaging/macos/build-app.sh --dmg
+      - name: Confere o bundle
+        run: |
+          plutil -lint target/macos/GSH.app/Contents/Info.plist
+          codesign --verify --strict target/macos/GSH.app
+          target/macos/GSH.app/Contents/Resources/bin/gsh --help | head -1
+          hdiutil verify target/macos/GSH-*.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gsh-macos
+          path: target/macos/GSH-*.dmg
+          if-no-files-found: error
