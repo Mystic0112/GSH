@@ -693,6 +693,26 @@ pub const DIALOG_CANCEL: &str = "Cancelar";
 pub fn pane_close_message(count: usize) -> String {
     format!("Isso fecha todas as {count} aba(s) deste painel e encerra os agentes/terminais nele.")
 }
+/// Menu de contexto da aba (`paneView.*` do Flutter, `_showTabMenu`).
+pub const PANE_TAB_RENAME: &str = "Renomear";
+pub const PANE_TAB_RESET_TITLE: &str = "Redefinir título";
+pub const PANE_TAB_COPY_ID: &str = "Copiar Id";
+pub const PANE_TAB_RESTART: &str = "Reiniciar";
+pub const PANE_TAB_CLOSE: &str = "Fechar";
+pub const PANE_TAB_CLOSE_OTHERS: &str = "Fechar as outras";
+pub const PANE_TAB_CLOSE_TO_THE_RIGHT: &str = "Fechar à direita";
+pub const PANE_TAB_CLOSE_ALL: &str = "Fechar todas";
+pub const PANE_CLOSE_TABS_TITLE: &str = "Fechar abas?";
+/// Ícones `Symbols.tab_close_*` e `Icons.restart_alt` do `_showTabMenu`.
+pub const ICON_RESTART_ALT: &str = "\u{f053}";
+pub const ICON_TAB_CLOSE_INACTIVE: &str = "\u{f3d0}";
+pub const ICON_TAB_CLOSE_RIGHT: &str = "\u{f746}";
+pub const ICON_TAB_CLOSE: &str = "\u{f745}";
+
+/// Aviso do diálogo de fechar abas em lote (`closeTabsMessage` do Flutter).
+pub fn pane_close_tabs_message(count: usize) -> String {
+    format!("Isso fecha {count} aba(s) e encerra os agentes/terminais nelas.")
+}
 pub const FARM_NEED_YOU_ONE: &str = "1 precisa de você";
 pub const FARM_NEED_YOU_MANY: &str = "precisam de você";
 

@@ -1,6 +1,6 @@
 use crate::{db_engine_icon, labels, pane_model::PaneTab, pane_strip::hairline_v, theme};
 use gsh_db::Engine;
-use iced::widget::{button, column, container, mouse_area, row, svg, text, Space};
+use iced::widget::{button, column, container, mouse_area, row, svg, text, text_input, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Point, Theme};
 
 pub(crate) fn drag_feedback<'a, M: 'a>(
@@ -86,12 +86,33 @@ pub(crate) struct TabPresentation {
     pub dragging: bool,
 }
 
+/// Id do campo de renomear da aba (só existe um por vez).
+pub(crate) const RENAME_INPUT_ID: &str = "pane-tab-rename";
+
+/// Campo inline que troca o título da aba ao renomear (`TextField` de `_Tab` em `pane_view.dart`).
+#[derive(Clone)]
+pub(crate) struct RenameField<M> {
+    pub value: String,
+    pub on_input: fn(String) -> M,
+    pub on_submit: M,
+}
+
+/// Mensagens das interações da aba além de selecionar e arrastar.
+pub(crate) struct TabActions<M> {
+    pub on_close: M,
+    pub hover: (M, M),
+    /// Botão direito (`onSecondaryTapUp`): abre o menu da aba.
+    pub on_context_menu: M,
+    /// Botão do meio (`onTertiaryTapUp`): fecha a aba.
+    pub on_middle_click: M,
+    pub rename: Option<RenameField<M>>,
+}
+
 pub(crate) fn view_tab<'a, M, FDragStart, FDragHover, FDragDrop>(
     tab: &PaneTab,
     presentation: TabPresentation,
     on_select: M,
-    on_close: M,
-    hover_messages: (M, M),
+    actions: TabActions<M>,
     drag: (FDragStart, FDragHover, FDragDrop),
     terminal_icon: Option<(&'static [u8], bool)>,
 ) -> Element<'a, M>
@@ -101,6 +122,13 @@ where
     FDragHover: Fn(Point, Point) -> M + 'a,
     FDragDrop: Fn(Point) -> M + 'a,
 {
+    let TabActions {
+        on_close,
+        hover: hover_messages,
+        on_context_menu,
+        on_middle_click,
+        rename,
+    } = actions;
     let TabPresentation {
         title,
         active: is_active,
@@ -160,10 +188,19 @@ where
         }
     };
 
-    let tab_label = row![
-        leading_icon,
-        Space::new().width(theme::PANE_TAB_ICON_GAP),
-        container(
+    let editing = rename.is_some();
+    let title_element: Element<'a, M> = match rename {
+        Some(field) => text_input("", &field.value)
+            .id(RENAME_INPUT_ID)
+            .on_input(field.on_input)
+            .on_submit(field.on_submit)
+            .font(theme::FONT_TAB)
+            .size(12.0)
+            .padding([2, 6])
+            .width(Fill)
+            .style(rename_input_style)
+            .into(),
+        None => container(
             text(title)
                 .font(theme::FONT_TAB)
                 .size(theme::SIZE_TAB)
@@ -171,27 +208,40 @@ where
                 .wrapping(text::Wrapping::None),
         )
         .width(Fill)
-        .clip(true),
+        .clip(true)
+        .into(),
+    };
+    let tab_label = row![
+        leading_icon,
+        Space::new().width(theme::PANE_TAB_ICON_GAP),
+        title_element,
     ];
     // o button não centra o conteúdo: a linha ocupa a altura toda e centra ícone e título
-    let select_btn = button(tab_label.height(Fill).align_y(Alignment::Center))
-        .width(Fill)
-        .height(Fill)
-        .padding(0)
-        .on_press(on_select)
-        .style(move |_: &Theme, _status| {
-            let bg = if is_active {
-                theme::palette().panel
-            } else {
-                theme::palette().bg
-            };
-            button::Style {
-                background: Some(Background::Color(bg.scale_alpha(drag_alpha))),
-                text_color: title_color,
-                border: Border::default(),
-                ..Default::default()
-            }
-        });
+    let tab_label = tab_label.height(Fill).align_y(Alignment::Center);
+    // renomeando, o título é um campo: sem botão de seleção por baixo (nem arraste)
+    let select_btn: Element<'a, M> = if editing {
+        container(tab_label).width(Fill).height(Fill).into()
+    } else {
+        button(tab_label)
+            .width(Fill)
+            .height(Fill)
+            .padding(0)
+            .on_press(on_select)
+            .style(move |_: &Theme, _status| {
+                let bg = if is_active {
+                    theme::palette().panel
+                } else {
+                    theme::palette().bg
+                };
+                button::Style {
+                    background: Some(Background::Color(bg.scale_alpha(drag_alpha))),
+                    text_color: title_color,
+                    border: Border::default(),
+                    ..Default::default()
+                }
+            })
+            .into()
+    };
 
     let close_icon: Element<'a, M> = if show_dirty_dot(dirty, hovered) {
         container(
@@ -322,9 +372,18 @@ where
     let tab = row![tab_col, hairline_v()]
         .width(Length::Fixed(theme::TAB_WIDTH))
         .height(Fill);
-    let Some(before) = drop_before else {
-        return tab.into();
+    let tab: Element<'a, M> = match drop_before {
+        Some(before) => with_drop_caret(tab.into(), before),
+        None => tab.into(),
     };
+    // Flutter: `onSecondaryTapUp` abre o menu e `onTertiaryTapUp` fecha (ambos no soltar)
+    mouse_area(tab)
+        .on_right_release(on_context_menu)
+        .on_middle_release(on_middle_click)
+        .into()
+}
+
+fn with_drop_caret<'a, M: 'a>(tab: Element<'a, M>, before: bool) -> Element<'a, M> {
     let caret = container(Space::new().width(2.5).height(Fill))
         .padding(iced::Padding {
             top: 6.0,
@@ -350,6 +409,13 @@ where
         .width(Length::Fixed(theme::TAB_WIDTH))
         .height(Fill)
         .into()
+}
+
+/// Campo de renomear (`TextField` do shadcn com `borderRadius: 7`): `input_style` do app.
+fn rename_input_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let mut style = crate::panel_widgets::input_style(theme, status);
+    style.border.radius = 7.0.into();
+    style
 }
 
 fn is_focused_active(active: bool, focused: bool) -> bool {

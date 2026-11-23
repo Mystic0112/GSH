@@ -204,6 +204,19 @@ impl PaneModel {
         self.terminal_labels.get(&id).map(String::as_str)
     }
 
+    /// Remove abas indicadas na ordem visual; o chamador descarta as sessões removidas.
+    pub fn close_many(&mut self, indices: &[usize]) -> Vec<PaneTab> {
+        let mut ordered = indices.to_vec();
+        ordered.sort_unstable();
+        ordered.dedup();
+        let removed = ordered
+            .into_iter()
+            .rev()
+            .filter_map(|index| self.close(index))
+            .collect::<Vec<_>>();
+        removed.into_iter().rev().collect()
+    }
+
     /// Abre uma aba de terminal `id` ao final da lista e a torna ativa.
     pub fn open_terminal(&mut self, id: TermId) {
         self.tabs.push(PaneTab::Terminal(id));
@@ -554,6 +567,33 @@ mod tests {
             model.active_tab(),
             Some(&PaneTab::File(PathBuf::from("/proj/previous.rs")))
         );
+    }
+
+    #[test]
+    fn fechar_varias_abas_preserva_ordem_dos_removidos_e_ativa_restante() {
+        let mut model = with_terminal();
+        model.open_file("/proj/a.rs");
+        model.open_file("/proj/b.rs");
+        model.open_terminal(2);
+        model.activate(2);
+
+        let removed = model.close_many(&[3, 1, 3, 99]);
+
+        assert_eq!(
+            removed,
+            vec![
+                PaneTab::File(PathBuf::from("/proj/a.rs")),
+                PaneTab::Terminal(2),
+            ]
+        );
+        assert_eq!(
+            model.tabs(),
+            &[
+                PaneTab::Terminal(1),
+                PaneTab::File(PathBuf::from("/proj/b.rs")),
+            ]
+        );
+        assert_eq!(model.active_index(), Some(1));
     }
 
     #[test]

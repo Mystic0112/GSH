@@ -107,6 +107,9 @@ fn capture_pane_tab_strip_states() {
                 menu_open: false,
                 on_open_menu: (),
                 on_close_menu: (),
+                on_tab_menu: std::rc::Rc::new(|_| ()),
+                tab_menu: None,
+                rename: None,
             },
         ))
         .width(Length::Fixed(1360.0)),
@@ -141,6 +144,9 @@ fn capture_pane_tab_strip_states() {
                 menu_open: true,
                 on_open_menu: (),
                 on_close_menu: (),
+                on_tab_menu: std::rc::Rc::new(|_| ()),
+                tab_menu: None,
+                rename: None,
             },
         ))
         .width(Length::Fixed(640.0)),
