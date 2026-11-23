@@ -182,6 +182,12 @@ impl LocalSendHost {
             .unwrap_or_default()
     }
 
+    pub fn rescan(&self) {
+        if let Some(discovery) = &self.discovery {
+            discovery.rescan();
+        }
+    }
+
     pub fn sender(&self) -> LocalSendSender {
         LocalSendSender {
             identity: self.identity(),

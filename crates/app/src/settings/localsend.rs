@@ -279,4 +279,37 @@ mod snapshots {
             Size::new(1280.0, 760.0),
         );
     }
+
+    #[test]
+    fn localsend_popup_receive_settings_persist_for_the_next_request() {
+        let directory = tempfile::tempdir().expect("temporary config directory");
+        let path = directory.path().join("config.toml");
+        std::fs::write(&path, "").expect("create isolated config");
+        let mut settings = Settings {
+            path: Ok(path.clone()),
+            ..Settings::default()
+        };
+
+        let receive_dir = directory.path().join("recebidos");
+        let _ = settings.update(crate::settings::Message::LocalSend(
+            LocalSendMessage::ReceiveDirPicked(Some(receive_dir.clone())),
+        ));
+        let _ = settings.update(crate::settings::Message::LocalSend(
+            LocalSendMessage::LimitsChanged {
+                max_file_mb: "32".to_owned(),
+                max_files: "7".to_owned(),
+            },
+        ));
+
+        assert_eq!(settings.localsend.receive_dir, receive_dir);
+        assert_eq!(settings.current.localsend.max_file_mb, 32);
+        assert_eq!(settings.current.localsend.max_files, 7);
+        let persisted = gsh_config::load(&path).expect("read persisted LocalSend settings");
+        assert_eq!(
+            persisted.localsend.receive_dir,
+            receive_dir.to_string_lossy()
+        );
+        assert_eq!(persisted.localsend.max_file_mb, 32);
+        assert_eq!(persisted.localsend.max_files, 7);
+    }
 }

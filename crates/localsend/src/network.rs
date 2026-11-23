@@ -55,6 +55,7 @@ pub enum NetworkError {
 pub struct Discovery {
     peers: Arc<RwLock<HashMap<String, Peer>>>,
     stop: Arc<AtomicBool>,
+    rescan: mpsc::SyncSender<()>,
     worker: Option<thread::JoinHandle<()>>,
 }
 impl Discovery {
@@ -66,6 +67,7 @@ impl Discovery {
         let peers = Arc::new(RwLock::new(HashMap::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let registers = start_register_worker(identity.info.clone(), Arc::clone(&stop))?;
+        let (rescan, rescan_requests) = mpsc::sync_channel(1);
         let peer_map = Arc::clone(&peers);
         let worker_stop = Arc::clone(&stop);
         let worker = thread::Builder::new()
@@ -74,6 +76,9 @@ impl Discovery {
                 let mut last_announce = Instant::now() - DISCOVERY_TICK;
                 let mut buffer = [0u8; 65536];
                 while !worker_stop.load(Ordering::Relaxed) {
+                    if rescan_requests.try_recv().is_ok() {
+                        last_announce = Instant::now() - DISCOVERY_TICK;
+                    }
                     if last_announce.elapsed() >= DISCOVERY_TICK {
                         let announce = Announcement {
                             info: identity.info.clone(),
@@ -125,6 +130,7 @@ impl Discovery {
         Ok(Self {
             peers,
             stop,
+            rescan,
             worker: Some(worker),
         })
     }
@@ -133,6 +139,11 @@ impl Discovery {
             .read()
             .map(|peers| peers.values().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Enfileira um anúncio multicast imediato para atualizar a descoberta dos pares.
+    pub fn rescan(&self) {
+        let _ = self.rescan.try_send(());
     }
 }
 
