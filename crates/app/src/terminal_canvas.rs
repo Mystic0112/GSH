@@ -13,6 +13,99 @@ use crate::terminal_grid::{
 };
 use crate::terminal_pane::TerminalMsg;
 use crate::theme;
+use gsh_term::TerminalInputModes;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalLinkTarget {
+    Url(String),
+    File {
+        path: std::path::PathBuf,
+        line: Option<usize>,
+    },
+}
+
+pub fn terminal_link_at(
+    snapshot: &TermSnapshot,
+    position: GridPos,
+    cwd: Option<&std::path::Path>,
+) -> Option<TerminalLinkTarget> {
+    let line = snapshot.lines.get(position.row)?;
+    let chars = line.iter().map(|cell| cell.ch).collect::<Vec<_>>();
+    let is_delimiter = |ch: char| {
+        ch.is_whitespace()
+            || matches!(
+                ch,
+                '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\'' | '`'
+            )
+    };
+    if chars.get(position.col).is_some_and(|ch| is_delimiter(*ch)) {
+        return None;
+    }
+    let token_start = chars
+        .iter()
+        .enumerate()
+        .take(position.col.saturating_add(1))
+        .rev()
+        .find_map(|(index, ch)| is_delimiter(*ch).then_some(index.saturating_add(1)))
+        .unwrap_or(0);
+    let token_end = chars
+        .iter()
+        .enumerate()
+        .skip(position.col)
+        .find_map(|(index, ch)| is_delimiter(*ch).then_some(index))
+        .unwrap_or(chars.len());
+    if position.col < token_start || position.col >= token_end {
+        return None;
+    }
+    let token = chars
+        .get(token_start..token_end)?
+        .iter()
+        .collect::<String>();
+    let trimmed = token.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+    let trimmed_end = token_start.saturating_add(trimmed.chars().count());
+    if position.col >= trimmed_end {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        let host = trimmed.split_once("://")?.1;
+        if !host.is_empty() {
+            return Some(TerminalLinkTarget::Url(trimmed.to_owned()));
+        }
+    }
+    if lower.starts_with("www.") {
+        return Some(TerminalLinkTarget::Url(format!("https://{trimmed}")));
+    }
+
+    let raw = trimmed.trim_end_matches([')', ']', '}']);
+    let (path_text, line_number) = raw
+        .rsplit_once(':')
+        .and_then(|(path, line)| line.parse::<usize>().ok().map(|line| (path, Some(line))))
+        .unwrap_or((raw, None));
+    let anchored = path_text.starts_with('/')
+        || path_text.starts_with("./")
+        || path_text.starts_with("../")
+        || path_text.starts_with("~/");
+    if !path_text.contains('/') || (!anchored && !path_text.contains('.')) {
+        return None;
+    }
+    let expanded = if let Some(rest) = path_text.strip_prefix("~/") {
+        std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)?
+            .join(rest)
+    } else {
+        std::path::PathBuf::from(path_text)
+    };
+    let resolved = if expanded.is_absolute() {
+        expanded
+    } else {
+        cwd?.join(expanded)
+    };
+    resolved.exists().then_some(TerminalLinkTarget::File {
+        path: resolved,
+        line: line_number,
+    })
+}
 
 /// Estado efêmero de interação de ponteiro e última dimensão observada no canvas.
 #[derive(Debug, Default)]
@@ -22,6 +115,7 @@ pub struct TerminalCanvasState {
     anchor_pos: Option<GridPos>,
     dragging: bool,
     last_focus: Option<GridPos>,
+    forwarding_mouse: bool,
 }
 
 /// Programa de `Canvas` que desenha o [`TermSnapshot`] usando um [`canvas::Cache`].
@@ -30,6 +124,9 @@ pub struct TerminalCanvasProgram<'a> {
     pub selection: Option<SelectionRange>,
     pub cache: &'a canvas::Cache,
     pub metrics: CellMetrics,
+    pub input_modes: TerminalInputModes,
+    pub modifiers: iced::keyboard::Modifiers,
+    pub cwd: Option<&'a std::path::Path>,
 }
 
 impl canvas::Program<TerminalMsg> for TerminalCanvasProgram<'_> {
@@ -91,6 +188,20 @@ impl canvas::Program<TerminalMsg> for TerminalCanvasProgram<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        if self.modifiers.command() {
+            if let Some(position) = cursor.position_in(bounds) {
+                let cell = pixel_to_grid(
+                    position.x,
+                    position.y,
+                    self.metrics,
+                    self.snapshot.cols,
+                    self.snapshot.rows,
+                );
+                if terminal_link_at(self.snapshot, cell, self.cwd).is_some() {
+                    return mouse::Interaction::Pointer;
+                }
+            }
+        }
         if cursor.is_over(bounds) {
             mouse::Interaction::Text
         } else {
@@ -109,6 +220,37 @@ impl TerminalCanvasProgram<'_> {
     ) -> Option<Action<TerminalMsg>> {
         match mouse_event {
             mouse::Event::WheelScrolled { delta } if cursor.is_over(bounds) => {
+                if self.mouse_reporting() {
+                    let step = scroll_delta_to_step(*delta, self.metrics.cell_height)?;
+                    let (button, count) = match step {
+                        ScrollStep::Up(lines) => (64, lines),
+                        ScrollStep::Down(lines) => (65, lines),
+                    };
+                    let pos = cursor.position_in(bounds)?;
+                    let cell = pixel_to_grid(
+                        pos.x,
+                        pos.y,
+                        self.metrics,
+                        self.snapshot.cols,
+                        self.snapshot.rows,
+                    );
+                    let mut bytes = Vec::new();
+                    for _ in 0..count.min(32) {
+                        bytes.extend(crate::terminal_input::mouse_report_bytes(
+                            button,
+                            cell.col,
+                            cell.row,
+                            crate::terminal_input::MouseReportOptions {
+                                release: false,
+                                motion: false,
+                                modifiers: self.modifiers,
+                                utf8: self.input_modes.mouse_utf8,
+                                sgr: self.input_modes.mouse_sgr,
+                            },
+                        ));
+                    }
+                    return Some(Action::publish(TerminalMsg::MouseReport(bytes)).and_capture());
+                }
                 let step = scroll_delta_to_step(*delta, self.metrics.cell_height)?;
                 let msg = match step {
                     ScrollStep::Up(lines) => TerminalMsg::ScrollUp(lines),
@@ -116,7 +258,7 @@ impl TerminalCanvasProgram<'_> {
                 };
                 Some(Action::publish(msg).and_capture())
             }
-            mouse::Event::ButtonPressed(mouse::Button::Left) => {
+            mouse::Event::ButtonPressed(button) => {
                 let local_pt = cursor.position_in(bounds)?;
                 let pos = pixel_to_grid(
                     local_pt.x,
@@ -125,13 +267,91 @@ impl TerminalCanvasProgram<'_> {
                     self.snapshot.cols,
                     self.snapshot.rows,
                 );
+                if matches!(button, mouse::Button::Right) {
+                    if let Some(target) = terminal_link_at(self.snapshot, pos, self.cwd) {
+                        return Some(
+                            Action::publish(TerminalMsg::ShowLinkMenu {
+                                target,
+                                position: local_pt,
+                            })
+                            .and_capture(),
+                        );
+                    }
+                }
+                if matches!(button, mouse::Button::Left) && self.modifiers.command() {
+                    if let Some(target) = terminal_link_at(self.snapshot, pos, self.cwd) {
+                        return Some(
+                            Action::publish(TerminalMsg::OpenTerminalLink(target)).and_capture(),
+                        );
+                    }
+                }
                 state.press_origin = Some(local_pt);
                 state.anchor_pos = Some(pos);
                 state.dragging = false;
                 state.last_focus = None;
+                if self.mouse_reporting() && !self.modifiers.alt() {
+                    let code = match button {
+                        mouse::Button::Left => 0,
+                        mouse::Button::Middle => 1,
+                        mouse::Button::Right => 2,
+                        _ => return None,
+                    };
+                    state.forwarding_mouse = true;
+                    return Some(
+                        Action::publish(TerminalMsg::MouseReport(
+                            crate::terminal_input::mouse_report_bytes(
+                                code,
+                                pos.col,
+                                pos.row,
+                                crate::terminal_input::MouseReportOptions {
+                                    release: false,
+                                    motion: false,
+                                    modifiers: self.modifiers,
+                                    utf8: self.input_modes.mouse_utf8,
+                                    sgr: self.input_modes.mouse_sgr,
+                                },
+                            ),
+                        ))
+                        .and_capture(),
+                    );
+                }
+                if !matches!(button, mouse::Button::Left) {
+                    return None;
+                }
                 Some(Action::publish(TerminalMsg::ClearSelection).and_capture())
             }
             mouse::Event::CursorMoved { .. } => {
+                if state.forwarding_mouse
+                    && (self.input_modes.mouse_drag || self.input_modes.mouse_motion)
+                {
+                    let global = cursor.position()?;
+                    let local = Point::new(global.x - bounds.x, global.y - bounds.y);
+                    let pos = pixel_to_grid(
+                        local.x,
+                        local.y,
+                        self.metrics,
+                        self.snapshot.cols,
+                        self.snapshot.rows,
+                    );
+                    let button = if self.input_modes.mouse_motion && !self.input_modes.mouse_drag {
+                        3
+                    } else {
+                        0
+                    };
+                    let bytes = crate::terminal_input::mouse_report_bytes(
+                        button,
+                        pos.col,
+                        pos.row,
+                        crate::terminal_input::MouseReportOptions {
+                            release: false,
+                            motion: true,
+                            modifiers: self.modifiers,
+                            utf8: self.input_modes.mouse_utf8,
+                            sgr: self.input_modes.mouse_sgr,
+                        },
+                    );
+                    return Some(Action::publish(TerminalMsg::MouseReport(bytes)).and_capture());
+                }
                 let anchor = state.anchor_pos?;
                 let origin = state.press_origin?;
                 let global_pt = cursor.position()?;
@@ -161,7 +381,44 @@ impl TerminalCanvasProgram<'_> {
                 }
                 None
             }
-            mouse::Event::ButtonReleased(mouse::Button::Left) => {
+            mouse::Event::ButtonReleased(button) => {
+                if state.forwarding_mouse {
+                    state.forwarding_mouse = false;
+                    let local = cursor.position_in(bounds)?;
+                    let pos = pixel_to_grid(
+                        local.x,
+                        local.y,
+                        self.metrics,
+                        self.snapshot.cols,
+                        self.snapshot.rows,
+                    );
+                    let code = match button {
+                        mouse::Button::Left => 0,
+                        mouse::Button::Middle => 1,
+                        mouse::Button::Right => 2,
+                        _ => 3,
+                    };
+                    return Some(
+                        Action::publish(TerminalMsg::MouseReport(
+                            crate::terminal_input::mouse_report_bytes(
+                                code,
+                                pos.col,
+                                pos.row,
+                                crate::terminal_input::MouseReportOptions {
+                                    release: true,
+                                    motion: false,
+                                    modifiers: self.modifiers,
+                                    utf8: self.input_modes.mouse_utf8,
+                                    sgr: self.input_modes.mouse_sgr,
+                                },
+                            ),
+                        ))
+                        .and_capture(),
+                    );
+                }
+                if !matches!(button, mouse::Button::Left) {
+                    return None;
+                }
                 state.press_origin = None;
                 state.anchor_pos = None;
                 state.dragging = false;
@@ -170,6 +427,10 @@ impl TerminalCanvasProgram<'_> {
             }
             _ => None,
         }
+    }
+
+    fn mouse_reporting(&self) -> bool {
+        self.input_modes.mouse_click || self.input_modes.mouse_drag || self.input_modes.mouse_motion
     }
 }
 
@@ -181,7 +442,7 @@ pub fn draw_snapshot_frame(
     selection: Option<SelectionRange>,
     metrics: CellMetrics,
 ) {
-    frame.fill_rectangle(Point::ORIGIN, size, theme::TERM_BG);
+    frame.fill_rectangle(Point::ORIGIN, size, theme::terminal_bg());
 
     let cw = metrics.cell_width;
     let ch = metrics.cell_height;
@@ -204,7 +465,7 @@ pub fn draw_snapshot_frame(
                 frame.fill_rectangle(
                     Point::new(sel_x, cell_y),
                     Size::new(sel_w, ch),
-                    theme::TERM_SELECTION_BG,
+                    theme::terminal_selection(),
                 );
             }
         }
@@ -214,7 +475,7 @@ pub fn draw_snapshot_frame(
             frame.fill_rectangle(
                 Point::new(cur_x, cell_y),
                 Size::new(cw, ch),
-                theme::TERM_CURSOR,
+                theme::terminal_cursor(),
             );
         }
 
@@ -225,7 +486,7 @@ pub fn draw_snapshot_frame(
                 && snapshot.cursor.col == col_idx;
             let (base_fg, _) = theme::effective_cell_colors(cell);
             let fg_color = if is_cursor {
-                theme::TERM_CURSOR_TEXT
+                theme::terminal_cursor_text()
             } else {
                 base_fg
             };

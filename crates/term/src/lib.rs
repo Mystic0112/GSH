@@ -20,8 +20,8 @@ mod snapshot;
 
 pub use error::TermError;
 pub use session::{
-    default_shell, IntoShell, Session, ShellCommand, TermSession, DEFAULT_SCROLLBACK_LINES,
-    DEFAULT_UNIX_SHELL, DEFAULT_WINDOWS_SHELL,
+    default_shell, IntoShell, Session, ShellCommand, TermSession, TerminalInputModes,
+    DEFAULT_SCROLLBACK_LINES, DEFAULT_UNIX_SHELL, DEFAULT_WINDOWS_SHELL,
 };
 pub use snapshot::{
     indexed_to_rgb, Cell, CellColor, Cursor, GridPos, NamedColor, Rgb, Snapshot, SnapshotCell,

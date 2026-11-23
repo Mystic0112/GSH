@@ -138,14 +138,8 @@ where
     let body = container(body_content)
         .width(Fill)
         .height(Fill)
-        .padding(1)
         .style(|_: &Theme| container::Style {
             background: Some(Background::Color(theme::palette().panel)),
-            border: Border {
-                color: theme::palette().border,
-                width: 1.0,
-                ..Default::default()
-            },
             ..Default::default()
         });
 

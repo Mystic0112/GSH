@@ -6,7 +6,7 @@ use gsh_term::GridPos;
 use iced::mouse::ScrollDelta;
 use iced::Point;
 
-use crate::theme::{TERM_CELL_HEIGHT, TERM_CELL_WIDTH, TERM_PADDING_X, TERM_PADDING_Y};
+use crate::theme::{TERM_CELL_HEIGHT, TERM_CELL_WIDTH};
 
 /// Colunas iniciais padrão ao abrir uma sessão antes do primeiro layout.
 pub const DEFAULT_COLS: u16 = 80;
@@ -39,8 +39,8 @@ impl Default for CellMetrics {
         Self {
             cell_width: TERM_CELL_WIDTH,
             cell_height: TERM_CELL_HEIGHT,
-            padding_x: TERM_PADDING_X,
-            padding_y: TERM_PADDING_Y,
+            padding_x: 0.0,
+            padding_y: 0.0,
         }
     }
 }
@@ -50,7 +50,7 @@ impl Default for CellMetrics {
 pub fn compute_grid_size(width_px: f32, height_px: f32, metrics: CellMetrics) -> (u16, u16) {
     let cw = metrics.cell_width.max(1.0);
     let ch = metrics.cell_height.max(1.0);
-    let inner_w = (width_px - metrics.padding_x * 2.0).max(0.0);
+    let inner_w = (width_px - metrics.padding_x).max(0.0);
     let inner_h = (height_px - metrics.padding_y * 2.0).max(0.0);
 
     let raw_cols = (inner_w / cw).floor();
@@ -211,8 +211,8 @@ mod tests {
             padding_x: 8.0,
             padding_y: 8.0,
         };
-        // (80 * 8 + 16, 24 * 16 + 16) = (656, 400)
-        assert_eq!(compute_grid_size(656.0, 400.0, metrics), (80, 24));
+        // (80 * 8 + 8, 24 * 16 + 16) = (648, 400): only left padding applies.
+        assert_eq!(compute_grid_size(648.0, 400.0, metrics), (80, 24));
         // Tamanhos pequenos nunca caem abaixo de (MIN_COLS, MIN_ROWS)
         assert_eq!(compute_grid_size(2.0, 2.0, metrics), (MIN_COLS, MIN_ROWS));
 

@@ -6644,6 +6644,34 @@ impl Shell {
                     ref key, modifiers, ..
                 }),
             ) if self.app_menu_shortcut_action(key, modifiers).is_some() => Task::none(),
+            Msg::TerminalIn(_, TerminalMsg::OpenTerminalLink(target)) => {
+                match target {
+                    terminal_canvas::TerminalLinkTarget::Url(url) => {
+                        let _ = chat_pane::open_terminal_url(&url);
+                    }
+                    terminal_canvas::TerminalLinkTarget::File { path, line } => {
+                        if path.is_file() {
+                            let target = self.open_in_editor(path);
+                            if let Some(line) = line {
+                                if let Some(editor) = self.editors.get_mut(&target) {
+                                    return editor
+                                        .reveal_line(line)
+                                        .map(move |message| Msg::Editor(target.clone(), message));
+                                }
+                            }
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Msg::TerminalIn(_, TerminalMsg::RevealTerminalPath(path)) => {
+                if path.exists() {
+                    if let Some(parent) = path.parent() {
+                        open_in_file_manager(parent);
+                    }
+                }
+                Task::none()
+            }
             Msg::TerminalIn(id, term_msg) => {
                 let submitted_input = matches!(
                     &term_msg,
