@@ -167,19 +167,20 @@ pub enum Message {
     AddProfile,
     SelectProfile(Option<String>),
     LoginProfile(String),
+    LoginAccount,
     RemoveProfile(String),
     RefreshAccount,
-    AccountLoaded(Result<Account, InfoError>),
+    AccountLoaded(u64, Result<Account, InfoError>),
     LogoutAsk,
     LogoutCancel,
     LogoutConfirm,
-    LoggedOut(Result<(), InfoError>),
+    LoggedOut(u64, bool, Result<(), InfoError>),
     SwitchAccountAsk,
     SwitchAccountCancel,
     SwitchAccountConfirm,
     /// Uso (`get_usage`).
     RefreshUsage,
-    UsageLoaded(Result<Usage, InfoError>),
+    UsageLoaded(u64, Result<Usage, InfoError>),
     /// MCP (`claude mcp list`).
     RefreshMcp,
     McpLoaded(Result<Vec<McpServerInfo>, InfoError>),
@@ -260,6 +261,7 @@ pub struct ClaudeState {
     hosts_draft: String,
     code_font_draft: Option<String>,
     account: Option<Result<Account, InfoError>>,
+    account_generation: u64,
     account_loading: bool,
     logout_error: Option<InfoError>,
     logout_ask: bool,
@@ -305,7 +307,7 @@ pub struct ClaudeState {
     toast: Option<(u64, String)>,
     next_toast: u64,
     pending_terminal: Option<String>,
-    pending_profile_terminal: Option<String>,
+    pending_auth_terminal: Option<Option<PathBuf>>,
     pending_open_file: Option<PathBuf>,
     pending_quit: bool,
 }
@@ -324,6 +326,7 @@ impl Default for ClaudeState {
             hosts_draft: String::new(),
             code_font_draft: None,
             account: None,
+            account_generation: 0,
             account_loading: false,
             logout_error: None,
             logout_ask: false,
@@ -369,7 +372,7 @@ impl Default for ClaudeState {
             toast: None,
             next_toast: 0,
             pending_terminal: None,
-            pending_profile_terminal: None,
+            pending_auth_terminal: None,
             pending_open_file: None,
             pending_quit: false,
         }
@@ -396,10 +399,23 @@ impl ClaudeState {
             workspace,
             keep_awake,
             bag_mode,
+            account_generation: self.account_generation.wrapping_add(1),
             ..Self::default()
         };
         self.poll_keep_awake();
         self.reload_files();
+    }
+
+    pub(super) fn invalidate_account_data(&mut self) {
+        self.account_generation = self.account_generation.wrapping_add(1);
+        self.account = None;
+        self.account_loading = false;
+        self.usage = None;
+        self.usage_loading = false;
+        self.usage_at = None;
+        self.logout_error = None;
+        self.logout_ask = false;
+        self.switch_account_ask = false;
     }
 
     pub(super) fn settings_path(&self) -> PathBuf {
@@ -434,8 +450,13 @@ impl ClaudeState {
         self.pending_terminal.take()
     }
 
-    pub fn take_profile_terminal_command(&mut self) -> Option<String> {
-        self.pending_profile_terminal.take()
+    pub fn take_auth_terminal_request(&mut self) -> Option<Option<PathBuf>> {
+        self.pending_auth_terminal.take()
+    }
+
+    pub fn report_auth_terminal_error(&mut self, error: InfoError) {
+        self.profile_error = Some(labels::claude_info_error(&error));
+        self.logout_error = Some(error);
     }
 
     pub fn take_open_file(&mut self) -> Option<PathBuf> {

@@ -11,6 +11,7 @@ use iced::widget::{canvas, container, text};
 use iced::{clipboard, keyboard, Element, Fill, Subscription, Task};
 
 use crate::labels;
+use crate::settings::claude::profiles;
 use crate::terminal_canvas::TerminalCanvasProgram;
 pub use crate::terminal_grid::{
     compute_grid_size, exceeds_drag_threshold, pixel_to_grid, scroll_delta_to_step, should_resize,
@@ -58,7 +59,7 @@ pub struct TerminalPane {
     cache: canvas::Cache,
     metrics: CellMetrics,
     cwd: Option<PathBuf>,
-    has_spawn_error: bool,
+    spawn_error: Option<String>,
     config: gsh_config::Config,
     pending_agent_enters: VecDeque<Instant>,
 }
@@ -116,13 +117,13 @@ impl TerminalPane {
 
     /// Reinicia a sessão de terminal no diretório `cwd` preservando `(cols, rows)`,
     /// `pane_id` e `spawn_env` atuais.
-    /// Em modo estático de teste (`session.is_none()` e `!has_spawn_error`), mantém o snapshot
+    /// Em modo estático de teste (sem sessão ou erro), mantém o snapshot
     /// e apenas atualiza `cwd`.
     pub fn respawn_in_dir(&mut self, cwd: Option<&Path>) {
         if self.session.as_ref().is_some_and(TermSession::is_remote) {
             return;
         }
-        if self.session.is_none() && !self.has_spawn_error {
+        if self.session.is_none() && self.spawn_error.is_none() {
             self.cwd = cwd.map(Path::to_path_buf);
             return;
         }
@@ -153,11 +154,24 @@ impl TerminalPane {
         if let Some(dir) = cwd {
             cmd = cmd.cwd(dir);
         }
-        for (k, v) in &spawn_env {
-            cmd = cmd.env(k, v);
-        }
+        let session = profiles::selected(&config).and_then(|profile| {
+            for (key, value) in &spawn_env {
+                if profile.is_none()
+                    || !gsh_chat::settings::PROFILE_AUTH_ENV.contains(&key.as_str())
+                {
+                    cmd = cmd.env(key, value);
+                }
+            }
+            if let Some(profile) = profile {
+                for key in gsh_chat::settings::PROFILE_AUTH_ENV {
+                    cmd = cmd.env_remove(key);
+                }
+                cmd = cmd.env(profiles::CONFIG_DIR, profile);
+            }
+            TermSession::spawn(cmd, cols, rows).map_err(|_| labels::TERMINAL_SPAWN_ERROR.to_owned())
+        });
         let cwd_owned = cwd.map(Path::to_path_buf);
-        match TermSession::spawn(cmd, cols, rows) {
+        match session {
             Ok(session) => {
                 let mut pane = Self::with_session(session);
                 pane.pane_id = pane_id;
@@ -168,7 +182,7 @@ impl TerminalPane {
                 pane.config = config;
                 pane
             }
-            Err(_) => Self {
+            Err(error) => Self {
                 pane_id,
                 spawn_env,
                 session: None,
@@ -177,7 +191,7 @@ impl TerminalPane {
                 cache: canvas::Cache::new(),
                 metrics: CellMetrics::default(),
                 cwd: cwd_owned,
-                has_spawn_error: true,
+                spawn_error: Some(error),
                 config,
                 pending_agent_enters: VecDeque::new(),
             },
@@ -196,7 +210,7 @@ impl TerminalPane {
             cache: canvas::Cache::new(),
             metrics: CellMetrics::default(),
             cwd: None,
-            has_spawn_error: false,
+            spawn_error: None,
             config: gsh_config::Config::default(),
             pending_agent_enters: VecDeque::new(),
         }
@@ -229,7 +243,7 @@ impl TerminalPane {
             cache: canvas::Cache::new(),
             metrics: CellMetrics::default(),
             cwd,
-            has_spawn_error: false,
+            spawn_error: None,
             config: gsh_config::Config::default(),
             pending_agent_enters: VecDeque::new(),
         }
@@ -324,7 +338,6 @@ impl TerminalPane {
             .strip_prefix("claude")
             .filter(|args| args.is_empty() || args.starts_with(char::is_whitespace))
         {
-            use crate::settings::claude::profiles;
             match profiles::selected(&self.config).and_then(|path| {
                 path.map(|path| profiles::command(Some(&path), args.trim_start()))
                     .transpose()
@@ -552,16 +565,12 @@ impl TerminalPane {
 
     /// Renderiza o canvas do terminal ou a mensagem de erro caso o PTY não tenha iniciado.
     pub fn view(&self) -> Element<'_, TerminalMsg> {
-        if self.has_spawn_error {
-            return container(
-                text(labels::TERMINAL_SPAWN_ERROR)
-                    .size(13)
-                    .color(theme::SHELL_MUTED),
-            )
-            .padding(16)
-            .width(Fill)
-            .height(Fill)
-            .into();
+        if let Some(error) = &self.spawn_error {
+            return container(text(error).size(13).color(theme::SHELL_MUTED))
+                .padding(16)
+                .width(Fill)
+                .height(Fill)
+                .into();
         }
 
         let program = TerminalCanvasProgram {
@@ -736,5 +745,56 @@ mod tests {
             std::thread::sleep(Duration::from_millis(16));
             let _ = pane.update(TerminalMsg::Tick);
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn new_local_shell_uses_the_registered_profile_and_rejects_an_invalid_one() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = tempfile::tempdir().unwrap();
+        let mode = |bits| std::fs::Permissions::from_mode(bits);
+        std::fs::set_permissions(scratch.path(), mode(0o700)).unwrap();
+        let profile = profiles::verify(&scratch.path().join("Conta A"), true).unwrap();
+        let probe_shell = scratch.path().join("probe-shell");
+        std::fs::write(
+            &probe_shell,
+            "#!/bin/sh\nprintf 'PROFILE=%s\\n' \"$CLAUDE_CONFIG_DIR\"\nprintf 'AUTH=%s|HOOK=%s\\n' \"${CLAUDE_CODE_OAUTH_TOKEN+x}\" \"$GSH_TAB_ID\"\nread -r ignored\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&probe_shell, mode(0o700)).unwrap();
+
+        let mut config = gsh_config::Config::default();
+        config.terminal.shell = Some(probe_shell.to_string_lossy().into_owned());
+        config
+            .claude
+            .profiles
+            .insert("A".to_owned(), profile.to_string_lossy().into_owned());
+        config.claude.active_profile = Some("A".to_owned());
+        let env = vec![
+            ("GSH_TAB_ID".into(), "t42".into()),
+            ("CLAUDE_CODE_OAUTH_TOKEN".into(), "test-override".into()),
+            (profiles::CONFIG_DIR.into(), "/tmp/other-profile".into()),
+        ];
+        let mut pane = TerminalPane::new_with_config("t42", None, env.clone(), config.clone());
+        let expected = format!("PROFILE={}", profile.display());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let output = pane.snapshot().text();
+            if output.contains(&expected) && output.contains("AUTH=|HOOK=t42") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "shell profile probe: {output}");
+            std::thread::sleep(Duration::from_millis(16));
+            let _ = pane.update(TerminalMsg::Tick);
+        }
+
+        config.claude.active_profile = Some("Desvinculado".into());
+        let denied = TerminalPane::new_with_config("t43", None, env, config);
+        assert!(denied.child_pid().is_none());
+        assert!(denied
+            .spawn_error
+            .unwrap()
+            .contains("Perfil do Claude desconhecido"));
     }
 }

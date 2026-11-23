@@ -610,7 +610,7 @@ fn account_rows(account: &Account) -> Vec<El<'static>> {
             labels::SETTINGS_ACCOUNT_LOGIN,
             None,
             Emphasis::Primary,
-            Some(Message::RunInTerminal(String::from("claude auth login"))),
+            Some(Message::LoginAccount),
         )
     };
     let mut rows = vec![setting_row(

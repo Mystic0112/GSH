@@ -26,6 +26,7 @@ pub mod app_menu_model;
 pub mod app_update;
 pub mod bag_mode;
 pub mod browser_pane;
+mod channel_routing;
 pub mod chat_composer;
 pub mod chat_pane;
 pub mod chat_view;
@@ -130,7 +131,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use gsh_core::status::AgentHarness;
-use gsh_core::workspace::{Workspace, WorkspaceList};
+use gsh_core::workspace::{ChannelMember, Workspace, WorkspaceList, WorkspaceRef};
 use gsh_localsend::ReceiveDecision;
 use gsh_team::{Activity, FarmLoop, Knock, KnockKind, Mail, Node, Packet, TeamAgent, TeamConfig};
 use iced::widget::pane_grid::{self, Axis, Pane};
@@ -156,6 +157,7 @@ use crate::files_panel::FilesMsg;
 use crate::gallery_create::GalleryError;
 use crate::gallery_panel::GalleryMsg;
 use crate::island::{AgentIsland, IslandMsg, PermissionDecision};
+use crate::layout_store::SessionContext;
 use crate::pane_chrome::{ChromeCallbacks, PaneDragEvent, PaneDropZone};
 use crate::pane_model::{BrowserId, ChatId, PaneModel, PaneTab, QueryId, TermId};
 use crate::pane_strip::TabDragEvent;
@@ -470,10 +472,8 @@ enum Msg {
     OpenFarm,
     OpenBrowser,
     Browser(browser_pane::BrowserMsg),
-    SelectContextChannel(Option<String>),
-    ToggleChannelEditor,
-    ChannelNameChanged(String),
-    AssignChannel,
+    ChannelAction(rail::ChannelAction),
+    ChannelFolderPicked(Option<PathBuf>),
     OpenAgentGraph,
     AgentGraph(agent_graph::Message),
     AgentGraphDialog(agent_graph_dialog::Message),
@@ -654,6 +654,16 @@ fn harness_icon(kind: &str) -> (Option<&'static [u8]>, bool) {
     (Some(icon), monochrome)
 }
 
+fn session_member_label(base: &str, session_id: &str) -> String {
+    let suffix: String = session_id.chars().take(8).collect();
+    let available = 48usize.saturating_sub(suffix.chars().count() + 3);
+    let mut prefix: String = base.chars().take(available).collect();
+    if prefix.trim().is_empty() {
+        prefix = "Agente".to_owned();
+    }
+    format!("{prefix} · {suffix}")
+}
+
 struct Shell {
     status_runtime: StatusRuntime,
     team: Node,
@@ -732,7 +742,9 @@ struct Shell {
     lsp: lsp_runtime::Pool,
     pending_window_close: Option<iced::window::Id>,
     workspaces: WorkspaceList,
-    channel_editor: Option<String>,
+    channel_editor: Option<rail::ChannelEditor>,
+    chat_contexts: BTreeMap<ChatId, SessionContext>,
+    terminal_contexts: BTreeMap<TermId, SessionContext>,
     file_tree: FileTree,
     file_create: Option<file_ops::CreateForm>,
     file_create_generation: u64,
@@ -859,32 +871,14 @@ impl Default for Shell {
         let mut island = AgentIsland::default();
         island.set_server_error(status_runtime.server_error().cloned());
 
-        let mut workspaces = rail::default_workspace_list();
         let layout_path = layout_store::LayoutDoc::default_path();
         let restored = layout_path
             .as_deref()
             .and_then(layout_store::LayoutDoc::read_for_startup);
-        if let Some(doc) = &restored {
-            workspaces = WorkspaceList::new(
-                doc.workspaces
-                    .iter()
-                    .enumerate()
-                    .map(|(index, path)| {
-                        let mut workspace =
-                            Workspace::from_path(format!("ws-{}", index + 1), path.clone());
-                        if let Some(name) = doc.workspace_names.get(path) {
-                            workspace.name.clone_from(name);
-                        }
-                        if let Some(realm) = doc.workspace_realms.get(path) {
-                            workspace.set_realm(realm);
-                        }
-                        workspace
-                    })
-                    .collect(),
-            );
-            let _ = workspaces.select(doc.active_workspace);
-            workspaces.set_active_channel(doc.active_channel.clone());
-        }
+        let workspaces = restored.as_ref().map_or_else(
+            rail::default_workspace_list,
+            layout_store::LayoutDoc::restore_workspaces,
+        );
         let active_path = workspaces.active().and_then(|ws| ws.path.clone());
         let panes = restored
             .as_ref()
@@ -1022,6 +1016,14 @@ impl Default for Shell {
             pending_window_close: None,
             workspaces,
             channel_editor: None,
+            chat_contexts: restored
+                .as_ref()
+                .map(|doc| doc.chat_contexts.clone())
+                .unwrap_or_default(),
+            terminal_contexts: restored
+                .as_ref()
+                .map(|doc| doc.terminal_contexts.clone())
+                .unwrap_or_default(),
             file_tree,
             file_create: None,
             file_create_generation: 0,
@@ -1082,6 +1084,17 @@ impl Default for Shell {
 
 async fn pick_workspace_folder() -> Option<PathBuf> {
     rfd::AsyncFileDialog::new()
+        .pick_folder()
+        .await
+        .map(|handle| handle.path().to_path_buf())
+}
+
+async fn pick_channel_folder(initial: Option<PathBuf>) -> Option<PathBuf> {
+    let mut picker = rfd::AsyncFileDialog::new();
+    if let Some(path) = initial.filter(|path| path.is_dir()) {
+        picker = picker.set_directory(path);
+    }
+    picker
         .pick_folder()
         .await
         .map(|handle| handle.path().to_path_buf())
@@ -1150,42 +1163,8 @@ impl Shell {
         let Some(path) = self.layout_path.as_deref() else {
             return;
         };
-        let paths: Vec<_> = self
-            .workspaces
-            .items()
-            .iter()
-            .filter_map(|workspace| workspace.path.clone())
-            .collect();
-        let active_workspace = self
-            .workspaces
-            .active()
-            .and_then(|workspace| workspace.path.as_ref())
-            .and_then(|active| paths.iter().position(|path| path == active))
-            .unwrap_or(0);
-        let mut doc = self.panes.snapshot_with_workspaces(paths, active_workspace);
-        doc.workspace_names = self
-            .workspaces
-            .items()
-            .iter()
-            .filter_map(|workspace| {
-                workspace
-                    .path
-                    .clone()
-                    .map(|path| (path, workspace.name.clone()))
-            })
-            .collect();
-        doc.workspace_realms = self
-            .workspaces
-            .items()
-            .iter()
-            .filter_map(|workspace| {
-                workspace
-                    .path
-                    .clone()
-                    .map(|path| (path, workspace.realm().to_owned()))
-            })
-            .collect();
-        doc.active_channel = self.workspaces.active_channel().map(str::to_owned);
+        let mut doc = self.panes.snapshot();
+        doc.save_workspaces(&self.workspaces);
         doc.imported_layouts.clone_from(&self.imported_layouts);
         doc.terminal_cwds = self
             .terminals
@@ -1210,6 +1189,8 @@ impl Shell {
                     .map(|path| (*id, path.to_path_buf()))
             })
             .collect();
+        doc.chat_contexts.clone_from(&self.chat_contexts);
+        doc.terminal_contexts.clone_from(&self.terminal_contexts);
         doc.query_files = self
             .queries
             .iter()
@@ -1248,6 +1229,8 @@ impl Shell {
                     .map(|path| (*id, path.to_path_buf()))
             })
             .collect();
+        doc.chat_contexts.clone_from(&self.chat_contexts);
+        doc.terminal_contexts.clone_from(&self.terminal_contexts);
         doc.query_files = self
             .queries
             .iter()
@@ -1468,7 +1451,7 @@ impl Shell {
             self.status_runtime.register_pane(pane_id.clone());
             let env = self.status_runtime.hook_env_for_pane(&pane_id);
             let mut term = if self.static_test_mode {
-                TerminalPane::from_snapshot_in_dir(empty_test_snapshot(), Some(cwd))
+                TerminalPane::from_snapshot_in_dir(empty_test_snapshot(), Some(cwd.clone()))
                     .with_pane_id(pane_id)
             } else {
                 TerminalPane::new_with_config(
@@ -1481,6 +1464,8 @@ impl Shell {
             if let Some(cmd) = pane_spec.command.as_deref().filter(|c| !c.is_empty()) {
                 let _ = term.send_text(&format!("{cmd}\r"));
             }
+            let context = self.session_context_for_dir(Some(&cwd));
+            self.terminal_contexts.insert(id, context);
             self.terminals.insert(id, term);
             taken.insert(pane_spec.name.to_lowercase());
             prev_pane = Some(target_pane);
@@ -1833,6 +1818,23 @@ impl Shell {
         self.settings.localsend.received_dir = None;
     }
 
+    fn poll_config(&mut self) -> Task<Msg> {
+        if self.config_events.try_iter().last().is_none() {
+            return Task::none();
+        }
+        let Some(task) = self.settings.reload_watched() else {
+            return Task::none();
+        };
+        self.configure_team();
+        self.configure_localsend();
+        for editor in self.editors.values_mut() {
+            editor.set_config(self.settings.current.editor.clone());
+        }
+        #[cfg(target_os = "linux")]
+        self.configure_lsp();
+        task.map(Msg::Settings)
+    }
+
     fn poll_localsend(&mut self) {
         if let Some(preparation) = &self.localsend_agent_preparation {
             match preparation.try_recv() {
@@ -1852,23 +1854,6 @@ impl Shell {
             if let Some(pending) = self.pending_localsend_agent.take() {
                 pending.busy.store(false, Ordering::Release);
                 let _ = pending.reply.send(serde_json::json!({"ok":false,"error":"LocalSend approval timed out and was denied"}));
-            }
-        }
-        while let Ok(event) = self.config_events.try_recv() {
-            match event {
-                gsh_config::ConfigEvent::Changed(_) => {
-                    self.settings.reload();
-                    self.configure_team();
-                    self.configure_localsend();
-                    for editor in self.editors.values_mut() {
-                        editor.set_config(self.settings.current.editor.clone());
-                    }
-                    #[cfg(target_os = "linux")]
-                    self.configure_lsp();
-                }
-                gsh_config::ConfigEvent::Invalid(error) => {
-                    self.settings.error = Some(settings::Error::Config(error));
-                }
             }
         }
         while let Ok(event) = self.localsend_requests.try_recv() {
@@ -3386,7 +3371,351 @@ impl Shell {
     }
 
     fn active_workspace_dir(&self) -> Option<&Path> {
-        self.workspaces.active().and_then(|ws| ws.path.as_deref())
+        self.workspaces
+            .active()
+            .and_then(|ws| ws.path.as_deref())
+            .or_else(|| {
+                self.workspaces
+                    .active_context_channel()
+                    .and_then(|channel| channel.draft.folder.as_deref())
+            })
+    }
+
+    fn handle_channel_action(&mut self, action: rail::ChannelAction) -> Task<Msg> {
+        use rail::ChannelAction;
+        match action {
+            ChannelAction::Select(id) => {
+                self.channel_editor = None;
+                if self.workspaces.select_context_channel(id.as_ref()).is_ok() {
+                    self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
+                    Task::batch([self.reload_db(), self.sync_telemetry_workspace()])
+                } else {
+                    Task::none()
+                }
+            }
+            ChannelAction::New => {
+                self.channel_editor = Some(rail::ChannelEditor::new(None));
+                Task::none()
+            }
+            ChannelAction::Edit(id) => {
+                self.channel_editor = self
+                    .workspaces
+                    .channel(&id)
+                    .cloned()
+                    .map(|channel| rail::ChannelEditor::new(Some(&channel)));
+                Task::none()
+            }
+            ChannelAction::Close => {
+                self.channel_editor = None;
+                Task::none()
+            }
+            ChannelAction::Name(name) => {
+                if let Some(editor) = self.channel_editor.as_mut() {
+                    editor.draft.name = name;
+                    editor.error = None;
+                }
+                Task::none()
+            }
+            ChannelAction::Instructions(action) => {
+                if let Some(editor) = self.channel_editor.as_mut() {
+                    editor.instructions.perform(action);
+                }
+                Task::none()
+            }
+            ChannelAction::PickFolder => {
+                let initial = self
+                    .channel_editor
+                    .as_ref()
+                    .and_then(|editor| editor.draft.folder.clone());
+                Task::perform(pick_channel_folder(initial), Msg::ChannelFolderPicked)
+            }
+            ChannelAction::ClearFolder => {
+                if let Some(editor) = self.channel_editor.as_mut() {
+                    editor.draft.folder = None;
+                }
+                Task::none()
+            }
+            ChannelAction::ToggleMember(member) => {
+                if let Some(editor) = self.channel_editor.as_mut() {
+                    if let Some(index) = editor
+                        .draft
+                        .members
+                        .iter()
+                        .position(|saved| saved.same_session(&member))
+                    {
+                        editor.draft.members.remove(index);
+                    } else {
+                        editor.draft.members.push(member);
+                    }
+                    editor.error = None;
+                }
+                Task::none()
+            }
+            ChannelAction::ReplyRule(rule) => {
+                if let Some(editor) = self.channel_editor.as_mut() {
+                    editor.draft.reply_rule = rule;
+                }
+                Task::none()
+            }
+            ChannelAction::Save => {
+                let Some(editor) = self.channel_editor.as_ref() else {
+                    return Task::none();
+                };
+                let id = editor.id.clone();
+                let draft = editor.to_draft();
+                let result = if let Some(id) = id {
+                    self.workspaces.update_channel(&id, draft).map(|()| id)
+                } else {
+                    self.workspaces.create_channel(draft)
+                };
+                match result {
+                    Ok(id) => {
+                        if self
+                            .channel_editor
+                            .as_ref()
+                            .is_some_and(|editor| editor.id.is_none())
+                        {
+                            let _ = self.workspaces.select_context_channel(Some(&id));
+                        }
+                        self.channel_editor = None;
+                        self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
+                    }
+                    Err(error) => {
+                        if let Some(editor) = self.channel_editor.as_mut() {
+                            editor.error = Some(error.to_string());
+                        }
+                    }
+                }
+                Task::none()
+            }
+            ChannelAction::SetArchived(id, archived) => {
+                if self.workspaces.set_channel_archived(&id, archived).is_ok() {
+                    self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
+                }
+                Task::none()
+            }
+            ChannelAction::AssignWorkspace(id) => {
+                let index = self.workspaces.selected_index();
+                if self.workspaces.assign_workspace_channel(index, &id).is_ok() {
+                    self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
+                }
+                Task::batch([self.reload_db(), self.sync_telemetry_workspace()])
+            }
+        }
+    }
+
+    fn session_context_for_dir(&self, dir: Option<&Path>) -> SessionContext {
+        let matched_workspace = dir.and_then(|dir| {
+            self.workspaces
+                .items()
+                .iter()
+                .filter_map(|workspace| {
+                    let path = workspace.path.as_deref()?;
+                    dir.starts_with(path).then_some((path, workspace))
+                })
+                .max_by_key(|(path, _)| path.components().count())
+                .map(|(_, workspace)| workspace)
+        });
+        let workspace = matched_workspace
+            .map(Workspace::reference)
+            .or_else(|| {
+                dir.map(|path| WorkspaceRef::Project(path.to_path_buf()))
+                    .or_else(|| {
+                        self.workspaces
+                            .active()
+                            .map(|workspace| workspace.reference())
+                    })
+            })
+            .or_else(|| {
+                self.workspaces
+                    .active_context_channel()
+                    .and_then(|channel| channel.draft.folder.clone())
+                    .map(WorkspaceRef::Project)
+            });
+        SessionContext {
+            channel: matched_workspace
+                .and_then(|workspace| workspace.channel_id())
+                .cloned()
+                .or_else(|| {
+                    self.workspaces
+                        .active_context_channel()
+                        .map(|channel| channel.id.clone())
+                }),
+            workspace,
+        }
+    }
+
+    fn ensure_terminal_context(&mut self, id: TermId, dir: Option<&Path>) {
+        if !self.terminal_contexts.contains_key(&id) {
+            let context = self.session_context_for_dir(dir);
+            self.terminal_contexts.insert(id, context);
+        }
+    }
+
+    fn channel_member_options(&self) -> Vec<rail::ChannelMemberOption> {
+        let mut members = Vec::new();
+        for (id, chat) in &self.chats {
+            let Some(session_id) = chat.session_id() else {
+                continue;
+            };
+            let fallback = self.session_context_for_dir(chat.cwd());
+            let Some(workspace) = self
+                .chat_contexts
+                .get(id)
+                .or(Some(&fallback))
+                .and_then(|context| context.workspace.clone())
+            else {
+                continue;
+            };
+            let base = if chat.conversation_title() == labels::CHAT_NEW_CONVERSATION {
+                chat.folder_label()
+            } else {
+                chat.conversation_title()
+            };
+            let label = session_member_label(base, session_id);
+            members.push(rail::ChannelMemberOption {
+                member: ChannelMember::Session {
+                    workspace,
+                    session_id: session_id.to_owned(),
+                    label,
+                },
+                label: format!("Claude · {}", chat.folder_label()),
+            });
+        }
+        for (id, terminal) in &self.terminals {
+            let pane_id = pane_id_for_term(*id);
+            let Some(session_id) = self
+                .status_runtime
+                .pane_record(&pane_id)
+                .and_then(|record| record.session_id())
+            else {
+                continue;
+            };
+            let fallback = self.session_context_for_dir(terminal.cwd());
+            let Some(workspace) = self
+                .terminal_contexts
+                .get(id)
+                .or(Some(&fallback))
+                .and_then(|context| context.workspace.clone())
+            else {
+                continue;
+            };
+            let base = self
+                .terminal_labels
+                .get(id)
+                .cloned()
+                .or_else(|| terminal.title())
+                .unwrap_or_else(|| "Agente".to_owned());
+            let label = session_member_label(&base, session_id);
+            members.push(rail::ChannelMemberOption {
+                member: ChannelMember::Session {
+                    workspace,
+                    session_id: session_id.to_owned(),
+                    label,
+                },
+                label: base.to_owned(),
+            });
+        }
+        members.sort_by_key(|member| member.label.to_lowercase());
+        members
+    }
+
+    fn channel_delivery_for_chat(
+        &self,
+        id: ChatId,
+        message: &ChatMsg,
+    ) -> Option<(String, Vec<ChannelMember>, Option<ChannelMember>)> {
+        if !matches!(message, ChatMsg::Send) {
+            return None;
+        }
+        let chat = self.chats.get(&id)?;
+        if !chat.attachments().is_empty() {
+            return None;
+        }
+        let text = chat.input().trim().to_owned();
+        if text.is_empty() {
+            return None;
+        }
+        let fallback_context = self.session_context_for_dir(chat.cwd());
+        let context = self.chat_contexts.get(&id).unwrap_or(&fallback_context);
+        let channel_id = context.channel.as_ref()?;
+        let channel = self.workspaces.channel(channel_id)?;
+        let members =
+            channel_routing::recipients(channel.draft.reply_rule, &channel.draft.members, &text)
+                .into_iter()
+                .cloned()
+                .collect();
+        let sender = context.workspace.as_ref().and_then(|workspace| {
+            chat.session_id().map(|session_id| ChannelMember::Session {
+                workspace: workspace.clone(),
+                session_id: session_id.to_owned(),
+                label: String::new(),
+            })
+        });
+        Some((text, members, sender))
+    }
+
+    fn deliver_channel_message(
+        &mut self,
+        text: &str,
+        recipients: &[ChannelMember],
+        sender: Option<&ChannelMember>,
+    ) -> Task<Msg> {
+        let mut tasks = Vec::new();
+        let mut terminal_message_sent = false;
+        for member in recipients {
+            if sender.is_some_and(|sender| sender.same_session(member)) {
+                continue;
+            }
+            let ChannelMember::Session {
+                workspace,
+                session_id,
+                ..
+            } = member;
+            let chat_id = self.chats.iter().find_map(|(id, chat)| {
+                let fallback = self.session_context_for_dir(chat.cwd());
+                let context = self.chat_contexts.get(id).unwrap_or(&fallback);
+                (context.workspace.as_ref() == Some(workspace)
+                    && chat.session_id() == Some(session_id.as_str()))
+                .then_some(*id)
+            });
+            if let Some(id) = chat_id {
+                if let Some(chat) = self.chats.get_mut(&id) {
+                    if !chat.is_busy() {
+                        let _ = chat.update(ChatMsg::InputChanged(text.to_owned()));
+                        tasks.push(
+                            chat.update(ChatMsg::Send)
+                                .map(move |msg| Msg::Chat(id, msg)),
+                        );
+                    }
+                }
+                continue;
+            }
+            let target_id = self.terminals.iter().find_map(|(id, _)| {
+                let terminal = self.terminals.get(id)?;
+                let fallback = self.session_context_for_dir(terminal.cwd());
+                let context = self.terminal_contexts.get(id).unwrap_or(&fallback);
+                if context.workspace.as_ref() != Some(workspace) {
+                    return None;
+                }
+                let record = self.status_runtime.pane_record(&pane_id_for_term(*id));
+                if record.and_then(|record| record.session_id()) != Some(session_id.as_str())
+                    || record.is_some_and(|record| {
+                        record.status() == gsh_core::status::TurnStatus::Working
+                    })
+                {
+                    return None;
+                }
+                Some(*id)
+            });
+            if let Some(terminal) = target_id.and_then(|id| self.terminals.get_mut(&id)) {
+                terminal_message_sent |= terminal.send_agent_message(text);
+            }
+        }
+        if terminal_message_sent {
+            tasks.push(self.poll_harness_processes());
+        }
+        Task::batch(tasks)
     }
 
     fn update_tab_drag(&mut self, cursor: iced::Point) {
@@ -4130,6 +4459,7 @@ impl Shell {
     }
 
     fn spawn_terminal_for_dir(&mut self, id: TermId, cwd: Option<&Path>) -> TerminalPane {
+        self.ensure_terminal_context(id, cwd);
         let pane_id = pane_id_for_term(id);
         self.status_runtime.register_pane(pane_id.clone());
         let hook_env = self.status_runtime.hook_env_for_pane(&pane_id);
@@ -4412,6 +4742,7 @@ impl Shell {
     fn dispose_tab(&mut self, tab: PaneTab) {
         match tab {
             PaneTab::Terminal(id) => {
+                self.terminal_contexts.remove(&id);
                 self.terminal_labels.remove(&id);
                 if let Some(mut term) = self.terminals.remove(&id) {
                     term.close_session();
@@ -4428,6 +4759,7 @@ impl Shell {
                 self.sync_island_from_status();
             }
             PaneTab::Chat(id) => {
+                self.chat_contexts.remove(&id);
                 if let Some(mut chat) = self.chats.remove(&id) {
                     chat.close();
                 }
@@ -4485,6 +4817,8 @@ impl Shell {
         let id = self.panes.alloc_term_id();
         self.panes.focused_model_mut().open_terminal(id);
         let new_term = self.spawn_terminal_for_dir(id, cwd.as_deref());
+        let context = self.session_context_for_dir(cwd.as_deref());
+        self.terminal_contexts.insert(id, context);
         self.terminals.insert(id, new_term);
     }
 
@@ -4552,6 +4886,9 @@ impl Shell {
         self.panes
             .focused_model_mut()
             .set_terminal_label(id, label.clone());
+        let cwd = self.active_workspace_dir().map(Path::to_path_buf);
+        let context = self.session_context_for_dir(cwd.as_deref());
+        self.terminal_contexts.insert(id, context);
         self.terminals.insert(
             id,
             TerminalPane::with_session_config(session, config).with_pane_id(pane_id),
@@ -4771,6 +5108,15 @@ impl Shell {
     }
 
     fn run_terminal_command(&mut self, command: &str, cwd: Option<PathBuf>) {
+        self.focus_and_close_settings();
+        let id = self.panes.alloc_term_id();
+        self.panes.focused_model_mut().open_terminal(id);
+        let mut new_term = self.spawn_terminal_for_dir(id, cwd.as_deref());
+        new_term.send_unscoped_command(command);
+        self.terminals.insert(id, new_term);
+    }
+
+    fn focus_and_close_settings(&mut self) {
         if let Some(pane) = self.panes.pane_of(&PaneTab::Settings) {
             self.panes.focus(pane);
             if let Some(idx) = self
@@ -4783,11 +5129,39 @@ impl Shell {
                 let _ = self.panes.focused_model_mut().close(idx);
             }
         }
-        let id = self.panes.alloc_term_id();
-        self.panes.focused_model_mut().open_terminal(id);
-        let mut new_term = self.spawn_terminal_for_dir(id, cwd.as_deref());
-        new_term.send_unscoped_command(command);
-        self.terminals.insert(id, new_term);
+    }
+
+    fn open_claude_auth_terminal(&mut self, profile: Option<&Path>) {
+        use settings::claude::cli::{auth_terminal, InfoError};
+
+        if self.static_test_mode {
+            return;
+        }
+        let config = self.settings.current.clone();
+        let session = auth_terminal(&self.settings.claude.home, profile).and_then(|command| {
+            gsh_term::TermSession::spawn(
+                command.scrollback_lines(config.terminal.scrollback.clamp(1000, 100_000)),
+                terminal_pane::DEFAULT_COLS,
+                terminal_pane::DEFAULT_ROWS,
+            )
+            .map_err(|error| InfoError::Failed(Some(error.to_string())))
+        });
+        match session {
+            Ok(session) => {
+                self.focus_and_close_settings();
+                let id = self.panes.alloc_term_id();
+                self.panes.focused_model_mut().open_terminal(id);
+                let cwd = self.active_workspace_dir().map(Path::to_path_buf);
+                let context = self.session_context_for_dir(cwd.as_deref());
+                self.terminal_contexts.insert(id, context);
+                self.terminals.insert(
+                    id,
+                    TerminalPane::with_session_config(session, config)
+                        .with_pane_id(pane_id_for_term(id)),
+                );
+            }
+            Err(error) => self.settings.claude.report_auth_terminal_error(error),
+        }
     }
 
     /// Abas Harness visíveis (a ativa de algum pane).
@@ -5350,6 +5724,7 @@ impl Shell {
                 }
                 self.sync_island_from_status();
                 self.poll_team();
+                tasks.push(self.poll_config());
                 self.poll_localsend();
                 if self.git.should_refresh() {
                     tasks.push(
@@ -5552,6 +5927,7 @@ impl Shell {
                 if let Some((key, value)) = preference {
                     self.settings.persist_chat_preference(key, value);
                 }
+                let channel_delivery = self.channel_delivery_for_chat(id, &chat_msg);
                 if let Some(chat) = self.chats.get_mut(&id) {
                     let task = chat.update(chat_msg).map(move |m| Msg::Chat(id, m));
                     let handoff = chat.take_handoff_requested().then(|| {
@@ -5574,7 +5950,14 @@ impl Shell {
                             }
                         }
                     }
-                    task
+                    if let Some((text, recipients, sender)) = channel_delivery {
+                        Task::batch([
+                            task,
+                            self.deliver_channel_message(&text, &recipients, sender.as_ref()),
+                        ])
+                    } else {
+                        task
+                    }
                 } else {
                     Task::none()
                 }
@@ -6091,9 +6474,8 @@ impl Shell {
                 if let Some(command) = self.settings.claude.take_terminal_command() {
                     self.run_in_workspace_terminal(&command);
                 }
-                if let Some(command) = self.settings.claude.take_profile_terminal_command() {
-                    let cwd = self.active_workspace_dir().map(Path::to_path_buf);
-                    self.run_terminal_command(&command, cwd);
+                if let Some(profile) = self.settings.claude.take_auth_terminal_request() {
+                    self.open_claude_auth_terminal(profile.as_deref());
                 }
                 #[cfg(target_os = "linux")]
                 let routine_task = self
@@ -6174,37 +6556,10 @@ impl Shell {
                 }
                 Task::none()
             }
-            Msg::SelectContextChannel(channel) => {
-                self.channel_editor = None;
-                self.workspaces.set_active_channel(channel);
-                self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
-                Task::none()
-            }
-            Msg::ToggleChannelEditor => {
-                self.channel_editor = if self.channel_editor.is_some() {
-                    None
-                } else {
-                    self.workspaces
-                        .active()
-                        .map(|workspace| workspace.realm().to_owned())
-                };
-                Task::none()
-            }
-            Msg::ChannelNameChanged(name) => {
-                self.channel_editor = Some(name);
-                Task::none()
-            }
-            Msg::AssignChannel => {
-                if let Some(name) = self.channel_editor.take() {
-                    if gsh_core::workspace::valid_channel_name(&name) {
-                        let index = self.workspaces.selected_index();
-                        if self.workspaces.set_workspace_realm(index, name.clone())
-                            && self.workspaces.active_channel().is_some()
-                        {
-                            self.workspaces.set_active_channel(Some(name));
-                        }
-                        self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
-                    }
+            Msg::ChannelAction(action) => self.handle_channel_action(action),
+            Msg::ChannelFolderPicked(folder) => {
+                if let Some(editor) = self.channel_editor.as_mut() {
+                    editor.draft.folder = folder;
                 }
                 Task::none()
             }
@@ -6994,6 +7349,8 @@ impl Shell {
                 let cwd = self.active_workspace_dir().map(Path::to_path_buf);
                 if let Some(id) = self.panes.split_with_terminal(pane, axis) {
                     let term = self.spawn_terminal_for_dir(id, cwd.as_deref());
+                    let context = self.session_context_for_dir(cwd.as_deref());
+                    self.terminal_contexts.insert(id, context);
                     self.terminals.insert(id, term);
                 }
                 Task::none()
@@ -7172,15 +7529,24 @@ impl Shell {
                     .and_then(|ws| ws.git_branch.clone());
                 let id = self.panes.alloc_chat_id();
                 self.panes.focused_model_mut().open_chat(id);
+                let context = self.session_context_for_dir(cwd.as_deref());
+                let instructions = context
+                    .channel
+                    .as_ref()
+                    .and_then(|channel| self.workspaces.channel(channel))
+                    .map(|channel| channel.draft.instructions.clone())
+                    .unwrap_or_default();
                 let chat = ChatPane::new(cwd, branch)
                     .with_defaults(
                         self.settings.current.chat.permission_mode.clone(),
                         self.settings.current.chat.effort.clone(),
                     )
                     .with_static_test_mode(self.static_test_mode)
+                    .with_channel_instructions(instructions)
                     .with_claude_profile(settings::claude::profiles::selected(
                         &self.settings.current,
                     ));
+                self.chat_contexts.insert(id, context);
                 self.chats.insert(id, chat);
                 let pane = self.panes.focused();
                 self.panes
@@ -8088,11 +8454,11 @@ impl Shell {
                     },
                     update_version: self.update_state.available_version(),
                     on_add_workspace: Msg::PickWorkspaceFolder,
-                    on_select_channel: Msg::SelectContextChannel,
-                    channel_editor: self.channel_editor.as_deref(),
-                    on_toggle_channel_editor: Msg::ToggleChannelEditor,
-                    on_channel_name_change: Msg::ChannelNameChanged,
-                    on_assign_channel: Msg::AssignChannel,
+                    channels: rail::ChannelActions {
+                        editor: self.channel_editor.as_ref(),
+                        members: self.channel_member_options(),
+                        on_action: Msg::ChannelAction,
+                    },
                     on_toggle_keep_awake: Msg::Settings(settings::Message::Claude(
                         settings::claude::Message::KeepAwakeToggle(!keep_awake_active),
                     )),
@@ -8660,6 +9026,8 @@ mod tests {
             pending_window_close: None,
             workspaces,
             channel_editor: None,
+            chat_contexts: BTreeMap::new(),
+            terminal_contexts: BTreeMap::new(),
             file_tree: FileTree::new(),
             file_create: None,
             file_create_generation: 0,
@@ -8962,20 +9330,117 @@ mod tests {
         shell.layout_path = Some(path.clone());
         let workspace_path = dir.path().join("project");
         let index = shell.workspaces.open_folder(workspace_path.clone());
-        shell.channel_editor = Some("Trabalho".into());
-        let _ = shell.update(Msg::AssignChannel);
+        let channel = shell
+            .workspaces
+            .context_channels()
+            .iter()
+            .find(|channel| channel.name() == "Trabalho")
+            .unwrap()
+            .id
+            .clone();
+        shell
+            .workspaces
+            .assign_workspace_channel(index, &channel)
+            .unwrap();
+        shell
+            .workspaces
+            .select_context_channel(Some(&channel))
+            .unwrap();
+        let context = SessionContext {
+            channel: Some(channel.clone()),
+            workspace: Some(WorkspaceRef::Project(workspace_path.clone())),
+        };
+        shell.chat_contexts.insert(42, context.clone());
+        shell.terminal_contexts.insert(7, context);
         assert_eq!(shell.workspaces.items()[index].realm(), "Trabalho");
-        let _ = shell.update(Msg::SelectContextChannel(Some("Trabalho".into())));
         shell.save_layout();
 
         let doc = layout_store::LayoutDoc::read(&path).unwrap();
-        assert_eq!(doc.active_channel.as_deref(), Some("Trabalho"));
+        assert_eq!(
+            doc.chat_contexts
+                .get(&42)
+                .and_then(|context| context.channel.as_ref()),
+            Some(&channel)
+        );
+        assert_eq!(
+            doc.terminal_contexts
+                .get(&7)
+                .and_then(|context| context.workspace.as_ref()),
+            Some(&WorkspaceRef::Project(workspace_path.clone()))
+        );
+        assert_eq!(
+            doc.restore_workspaces()
+                .active_context_channel()
+                .map(|channel| channel.name()),
+            Some("Trabalho")
+        );
         assert_eq!(
             doc.workspace_realms
                 .get(&workspace_path)
                 .map(String::as_str),
             Some("Trabalho")
         );
+        let restored = doc.restore_workspaces();
+        assert_eq!(
+            restored
+                .active_context_channel()
+                .map(|channel| channel.name()),
+            Some("Trabalho")
+        );
+        assert_eq!(restored.selected_index(), index);
+        assert_eq!(
+            restored
+                .active()
+                .and_then(|workspace| workspace.path.as_ref()),
+            Some(&workspace_path)
+        );
+    }
+
+    #[test]
+    fn shell_restores_channel_and_active_system_workspace_without_a_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        let mut shell = test_shell();
+        shell.layout_path = Some(path.clone());
+        let index = shell
+            .workspaces
+            .items()
+            .iter()
+            .position(|workspace| workspace.path.is_none())
+            .unwrap();
+        let id = shell.workspaces.select(index).unwrap().id.clone();
+        let channel = shell
+            .workspaces
+            .context_channels()
+            .iter()
+            .find(|channel| channel.name() == "Pessoal")
+            .unwrap()
+            .id
+            .clone();
+        shell
+            .workspaces
+            .assign_workspace_channel(index, &channel)
+            .unwrap();
+        shell
+            .workspaces
+            .select_context_channel(Some(&channel))
+            .unwrap();
+        shell.save_layout();
+
+        let restored = layout_store::LayoutDoc::read(&path)
+            .unwrap()
+            .restore_workspaces();
+        let active = restored.active().unwrap();
+        assert_eq!(active.id, id);
+        assert!(active.path.is_none());
+        assert_eq!(active.realm(), "Pessoal");
+        assert_eq!(
+            restored
+                .active_context_channel()
+                .map(|channel| channel.name()),
+            Some("Pessoal")
+        );
+        assert_eq!(restored.visible_indices(), vec![index]);
     }
 
     #[test]

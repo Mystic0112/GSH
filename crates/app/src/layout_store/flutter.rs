@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use gsh_config::flutter_state::{
     FlutterDirection, FlutterLayout, FlutterPane, FlutterState, FlutterTab,
 };
+use gsh_core::workspace::{valid_channel_name, ChannelDraft, ContextChannel, CHANNEL_DEFAULT};
 
 use super::{Axis, LayoutDoc, LayoutNode, PaneTab, VERSION};
 
@@ -11,12 +12,24 @@ pub(super) fn convert(state: FlutterState) -> Option<LayoutDoc> {
     let active = state.workspaces.get(state.active_workspace)?.path.clone();
     let mut paths = Vec::new();
     let mut names = BTreeMap::new();
+    let mut realms = BTreeMap::new();
     let mut saved = BTreeMap::new();
     let mut doc = empty_doc();
+    let channel_name = |id: &str| {
+        let name = state.realms.get(id).filter(|name| valid_channel_name(name));
+        if id == "default" && name.is_none_or(|name| name.trim().eq_ignore_ascii_case("default")) {
+            Some(CHANNEL_DEFAULT.to_owned())
+        } else {
+            name.map(|name| ContextChannel::parse(name).into())
+        }
+    };
     for workspace in state.workspaces {
         paths.push(workspace.path.clone());
         if let Some(name) = workspace.name.filter(|name| !name.trim().is_empty()) {
             names.insert(workspace.path.clone(), name);
+        }
+        if let Some(realm) = channel_name(workspace.realm_id.as_deref().unwrap_or("default")) {
+            realms.insert(workspace.path.clone(), realm);
         }
         if let Some(layout) = workspace.layout {
             let layout = convert_layout(&workspace.path, layout);
@@ -29,6 +42,19 @@ pub(super) fn convert(state: FlutterState) -> Option<LayoutDoc> {
     doc.workspaces = paths;
     doc.active_workspace = state.active_workspace;
     doc.workspace_names = names;
+    doc.workspace_realms = realms;
+    doc.active_channel = state.active_realm.as_deref().and_then(channel_name);
+    let mut list = doc.restore_workspaces();
+    for id in state.realms.keys() {
+        if let Some(name) = channel_name(id) {
+            // The converter also restores channels that contain no workspaces.
+            let _ = list.create_channel(ChannelDraft {
+                name,
+                ..ChannelDraft::default()
+            });
+        }
+    }
+    doc.channel_state = Some(list.channel_state());
     doc.imported_layouts = saved;
     Some(doc)
 }
@@ -48,11 +74,15 @@ fn empty_doc() -> LayoutDoc {
         remote_terminal_ids: Vec::new(),
         chat_sessions: Vec::new(),
         chat_profiles: BTreeMap::new(),
+        chat_contexts: BTreeMap::new(),
+        terminal_contexts: BTreeMap::new(),
         query_files: Vec::new(),
         query_connections: Vec::new(),
         workspace_names: BTreeMap::new(),
         workspace_realms: BTreeMap::new(),
+        system_workspaces: Vec::new(),
         active_channel: None,
+        channel_state: None,
         imported_layouts: BTreeMap::new(),
     }
 }
@@ -214,8 +244,14 @@ mod tests {
             }
         });
         let projects = serde_json::json!({"version": 1, "data": {
-            "first": {"id": "first", "path": first, "order": 1, "name": "Code"},
-            "second": {"id": "second", "path": second, "order": 2}
+            "first": {"id": "first", "path": first, "order": 2, "name": "Code", "realm": "team"},
+            "second": {"id": "second", "path": second, "order": 1, "realm": "default"}
+        }});
+        let realms = serde_json::json!({"version": 1, "data": {
+            "__active__": "team",
+            "team": {"id": "team", "name": "Equipe"},
+            "empty": {"id": "empty", "name": "Sem workspaces"},
+            "default": {"id": "default", "name": "Default"}
         }});
         let layouts = serde_json::json!({"version": 1, "data": {
             "first": layout.to_string(),
@@ -223,8 +259,10 @@ mod tests {
         }});
         let projects_path = dir.path().join("projects.json");
         let layouts_path = dir.path().join("layouts.json");
+        let realms_path = dir.path().join("realms.json");
         std::fs::write(&projects_path, projects.to_string()).unwrap();
         std::fs::write(&layouts_path, layouts.to_string()).unwrap();
+        std::fs::write(&realms_path, realms.to_string()).unwrap();
         let state = gsh_config::flutter_state::load_dir(dir.path())
             .unwrap()
             .unwrap();
@@ -233,7 +271,8 @@ mod tests {
             doc.workspace_names.get(&first).map(String::as_str),
             Some("Code")
         );
-        assert_eq!(doc.workspaces, [first.clone(), second.clone()]);
+        assert_eq!(doc.workspaces, [second.clone(), first.clone()]);
+        assert_eq!(doc.active_workspace, 1);
         assert_eq!(doc.focused, [1]);
         assert_eq!(doc.terminal_cwds, [(1, first.join("src"))]);
         assert_eq!(doc.chat_sessions, [(2, "chat-session".to_owned())]);
@@ -248,6 +287,26 @@ mod tests {
         doc.write_atomic(&target).unwrap();
         let persisted = LayoutDoc::read(&target).unwrap();
         assert!(persisted.imported_layouts.contains_key(&second));
+        let workspaces = persisted.restore_workspaces();
+        assert_eq!(workspaces.active_channel(), Some("Equipe"));
+        assert_eq!(workspaces.visible_indices(), vec![1]);
+        assert!(workspaces
+            .channels()
+            .iter()
+            .any(|name| name == "Sem workspaces"));
+        assert_eq!(
+            workspaces
+                .active()
+                .and_then(|workspace| workspace.path.as_ref()),
+            Some(&first)
+        );
+        assert_eq!(
+            workspaces
+                .items()
+                .first()
+                .map(gsh_core::workspace::Workspace::realm),
+            Some(CHANNEL_DEFAULT)
+        );
         assert_eq!(
             std::fs::read_to_string(projects_path).unwrap(),
             projects.to_string()
@@ -255,6 +314,10 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(layouts_path).unwrap(),
             layouts.to_string()
+        );
+        assert_eq!(
+            std::fs::read_to_string(realms_path).unwrap(),
+            realms.to_string()
         );
     }
 }

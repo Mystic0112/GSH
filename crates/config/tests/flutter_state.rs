@@ -78,6 +78,59 @@ fn reads_order_selection_and_both_workspace_layouts() {
 }
 
 #[test]
+fn does_not_restore_global_selection_from_a_different_channel() {
+    let dir = CopyDir::create("flutter-channel-selection");
+    fs::write(
+        dir.0.join("realms.json"),
+        json!({"version": 1, "data": {
+            "__active__": "personal",
+            "personal": {"id": "personal", "name": "Pessoal"}
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let projects = |personal: bool| {
+        let mut data = json!({
+            "__last_selected__": "work",
+            "work": {"id": "work", "path": "/tmp/work", "order": 0, "realm": "work"},
+            "default": {"id": "default", "path": "/tmp/default", "order": 2}
+        });
+        if personal {
+            data["personal"] =
+                json!({"id": "personal", "path": "/tmp/personal", "order": 1, "realm": "personal"});
+        }
+        json!({"version": 1, "data": data}).to_string()
+    };
+    fs::write(dir.0.join("projects.json"), projects(true)).unwrap();
+    let state = flutter_state::load_dir(&dir.0).unwrap().unwrap();
+    assert_eq!(state.active_realm.as_deref(), Some("personal"));
+    assert_eq!(
+        state.workspaces[state.active_workspace].path,
+        PathBuf::from("/tmp/personal")
+    );
+
+    fs::write(dir.0.join("projects.json"), projects(false)).unwrap();
+    let state = flutter_state::load_dir(&dir.0).unwrap().unwrap();
+    assert_eq!(state.active_realm, None);
+    assert_eq!(
+        state.workspaces[state.active_workspace].path,
+        PathBuf::from("/tmp/default")
+    );
+
+    fs::write(
+        dir.0.join("realms.json"),
+        json!({"version": 1, "data": {"__active__": "missing"}}).to_string(),
+    )
+    .unwrap();
+    let state = flutter_state::load_dir(&dir.0).unwrap().unwrap();
+    assert_eq!(state.active_realm.as_deref(), Some("default"));
+    assert_eq!(
+        state.workspaces[state.active_workspace].path,
+        PathBuf::from("/tmp/default")
+    );
+}
+
+#[test]
 fn reads_gallery_ckp_from_copy_and_rejects_invalid_values() {
     let dir = CopyDir::create("flutter-ckp");
     let path = dir.0.join("dev.ckp");
@@ -144,7 +197,8 @@ fn flutter_state_golden_preserves_workspaces_realms_dedup_and_all_tab_sessions()
     let realms = json!({
         "version": 1,
         "data": {
-            "__active__": "prod"
+            "__active__": "prod",
+            "prod": {"id": "prod", "name": "Produção"}
         }
     });
     // `p_late` e `p_early` empatam em `order = 1`; `createdAt` desempata (`p_early` vem antes).
@@ -179,6 +233,7 @@ fn flutter_state_golden_preserves_workspaces_realms_dedup_and_all_tab_sessions()
             "p_gamma": {
                 "id": "p_gamma",
                 "path": "/srv/gamma",
+                "realm": "prod",
                 "order": 3,
                 "createdAt": 400
             },

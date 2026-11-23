@@ -1,7 +1,7 @@
 //! Painéis das abas secundárias do grupo Claude: Uso, Recursos, Memória, Design Systems,
 //! Cowork, Sistema, Extensões e Desenvolvedor.
 
-use super::cli::{self, McpServerInfo, McpStatus, Usage, UsageWindow, UsageWindowKind};
+use super::cli::{self, ExtraUsage, McpServerInfo, McpStatus, Usage, UsageWindow, UsageWindowKind};
 use super::files::MemoryScope;
 use super::themes;
 use super::widgets::{
@@ -13,7 +13,7 @@ use crate::panel_widgets;
 use crate::settings::view::switch;
 use crate::settings::Settings;
 use crate::{labels, theme};
-use iced::widget::{button, column, container, row, text, text_input, Space};
+use iced::widget::{button, column, container, row, text, text_input, Column, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
 
 type El<'a> = Element<'a, Message>;
@@ -52,7 +52,11 @@ pub fn usage(s: &Settings) -> El<'_> {
         labels::SETTINGS_ACCOUNT_SWITCH,
         None,
         Emphasis::Outline,
-        Some(Message::SwitchAccountAsk),
+        Some(if cfg!(target_os = "linux") {
+            Message::Select(Tab::Account)
+        } else {
+            Message::SwitchAccountAsk
+        }),
     ));
     let plan_badge: Option<El<'_>> = Some(header_trailing.into());
     let session_rows: Vec<El<'_>> = match &c.usage {
@@ -95,6 +99,12 @@ pub fn usage(s: &Settings) -> El<'_> {
             page = page.push(section(labels::SETTINGS_USAGE_WEEKLY_TITLE, None, weekly));
         }
     }
+    if let Some(Ok(Usage {
+        extra: Some(extra), ..
+    })) = &c.usage
+    {
+        page = page.push(extra_usage(extra));
+    }
     if let Some(at) = c.usage_at {
         let mins = ((now - at) / 60).max(0);
         let when = if mins < 1 {
@@ -136,13 +146,80 @@ fn usage_window_row(w: &UsageWindow, now_secs: i64) -> El<'static> {
         };
         left = left.push(text(sub).font(theme::FONT_BODY).size(13.0).color(p.text3));
     }
-    let pct = w.percent;
-    let fill_color = match pct {
-        None => p.text4,
-        Some(v) if v >= 100.0 => p.error,
-        Some(v) if v >= 80.0 => p.warn,
-        Some(_) => p.accent,
+    usage_meter_row(left, w.percent, false)
+}
+
+fn extra_usage(extra: &ExtraUsage) -> El<'static> {
+    let row = if !extra.enabled {
+        note(
+            String::from("Créditos extras desativados nesta conta."),
+            false,
+        )
+    } else {
+        let p = theme::palette();
+        let detail = |value: String| {
+            text(value)
+                .font(theme::FONT_BODY)
+                .size(theme::SETTINGS_DESC_SIZE)
+                .color(p.text2)
+        };
+        let title = text("Uso dos créditos")
+            .font(theme::FONT_BODY)
+            .size(theme::SETTINGS_NAV_TEXT_SIZE)
+            .color(p.text);
+        let mut left = column![title];
+        if let Some(amounts) = &extra.amounts {
+            let summary = match (amounts.used_minor, amounts.limit_minor) {
+                (Some(used), Some(limit)) => Some(format!(
+                    "{} usados de {}",
+                    amounts.format_minor(used),
+                    amounts.format_minor(limit),
+                )),
+                (Some(used), None) => Some(format!("{} usados", amounts.format_minor(used))),
+                (None, Some(limit)) => Some(format!("Limite de {}", amounts.format_minor(limit))),
+                (None, None) => None,
+            };
+            if let Some(summary) = summary {
+                left = left.push(detail(summary));
+            }
+        }
+        if let Some(reset) = extra.resets_at {
+            left = left.push(detail(labels::usage_resets_at(&cli::weekday_time(reset))));
+        }
+        if extra.percent.is_some() || extra.spend_limit_reached {
+            usage_meter_row(left, extra.percent, extra.spend_limit_reached)
+        } else {
+            left.push(detail(String::from("Percentual de uso indisponível.")))
+                .padding([theme::SETTINGS_ROW_VERTICAL, 0])
+                .into()
+        }
     };
+    section("Créditos extras", None, vec![row])
+}
+
+fn usage_meter_row(
+    mut left: Column<'static, Message>,
+    pct: Option<f64>,
+    spend_limit_reached: bool,
+) -> El<'static> {
+    let p = theme::palette();
+    let (fill_color, alert) = if spend_limit_reached || pct.is_some_and(|pct| pct >= 100.0) {
+        (p.error, Some("Limite atingido"))
+    } else if pct.is_some_and(|pct| pct >= 80.0) {
+        (p.warn, Some("Perto do limite"))
+    } else if pct.is_some() {
+        (p.accent, None)
+    } else {
+        (p.text4, None)
+    };
+    if let Some(alert) = alert {
+        left = left.push(
+            text(alert)
+                .font(theme::FONT_BODY_SEMIBOLD)
+                .size(theme::SETTINGS_DESC_SIZE)
+                .color(p.text),
+        );
+    }
     let pct_clamped = pct.unwrap_or(0.0).clamp(0.0, 100.0) as f32;
     let bar = iced::widget::progress_bar(0.0..=100.0, pct_clamped)
         .length(Length::FillPortion(5))
@@ -1002,4 +1079,60 @@ fn mcp_master_detail<'a>(servers: &[&'a McpServerInfo], selected_name: Option<&s
         ..Default::default()
     })
     .into()
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::{cli, extra_usage, usage_meter_row};
+    use crate::labels;
+    use gsh_harness::Json;
+    use iced::widget::{column, text};
+    use iced_test::simulator::Simulator;
+
+    #[test]
+    fn usage_meter_shows_a_text_alert_at_and_above_the_threshold() {
+        for (percent, reached, expected) in [
+            (None, false, None),
+            (Some(79.0), false, None),
+            (Some(80.0), false, Some("Perto do limite")),
+            (Some(100.0), false, Some("Limite atingido")),
+            (None, true, Some("Limite atingido")),
+        ] {
+            let meter = usage_meter_row(column![text("Uso")], percent, reached);
+            let mut simulator = Simulator::with_size(
+                iced::Settings::default(),
+                iced::Size::new(480.0, 120.0),
+                meter,
+            );
+            for alert in ["Perto do limite", "Limite atingido"] {
+                assert_eq!(simulator.find(alert).is_ok(), expected == Some(alert));
+            }
+        }
+    }
+
+    #[test]
+    fn extra_usage_shows_reported_amounts_and_reset_together_with_the_alert() {
+        let reply = Json::parse(
+            r#"{
+                "rate_limits": {"extra_usage": {
+                    "is_enabled": true, "utilization": 82,
+                    "currency": "USD", "used_credits": 820, "monthly_limit": 1000
+                }},
+                "limits": [{"kind": "spend", "is_active": true,
+                            "resets_at": "2030-03-02T16:00:00Z"}]
+            }"#,
+        )
+        .unwrap();
+        let extra = cli::parse_usage_reply(&reply).extra.unwrap();
+        let reset = labels::usage_resets_at(&cli::weekday_time(extra.resets_at.unwrap()));
+        let mut simulator = Simulator::new(extra_usage(&extra));
+        for visible in [
+            "8,20 USD usados de 10,00 USD",
+            "82% usado",
+            "Perto do limite",
+            &reset,
+        ] {
+            assert!(simulator.find(visible).is_ok(), "faltou {visible}");
+        }
+    }
 }

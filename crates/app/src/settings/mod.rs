@@ -272,55 +272,85 @@ impl Settings {
     pub fn reload(&mut self) {
         self.saved = false;
         self.claude.reset();
-        match &self.path {
-            Ok(path) => match gsh_config::load(path) {
-                Ok(config) => {
-                    self.locale = config.locale.clone().unwrap_or_default();
-                    self.shell = config
-                        .terminal
-                        .shell
-                        .clone()
-                        .unwrap_or_else(|| gsh_term::default_shell().to_owned());
-                    self.scrollback = config.terminal.scrollback.to_string();
-                    self.terminal_size = config.effective_terminal_size().to_string();
-                    self.tab_size = config.editor.tab_size.to_string();
-                    self.highlight = config.editor.syntax_highlight;
-                    self.wrap = config.editor.word_wrap;
-                    self.notifications = config.notifications_enabled;
-                    self.permission_sound = config
-                        .sound
-                        .events
-                        .get(&gsh_config::schema::SoundEvent::ActionRequired)
-                        .copied()
-                        .unwrap_or(true);
-                    self.transcript_width = config.chat.transcript_width;
-                    self.theme_mode = config.theme_mode;
-                    let variant = ThemeVariant::from_mode(config.theme_mode);
-                    let spec =
-                        claude::themes::selected_theme_json(&self.claude.home, &config.theme_id);
-                    if !theme::set_theme_palette(&config.theme_id, spec.as_deref(), variant) {
-                        theme::set_active(variant);
-                    }
-                    self.current = config.clone();
-                    self.lsp_commands = iced::widget::text_editor::Content::with_text(
-                        &format_lsp_map(&config.lsp_commands),
-                    );
-                    self.lsp_formatters = iced::widget::text_editor::Content::with_text(
-                        &format_lsp_map(&config.lsp_formatters),
-                    );
-                    self.localsend.always_on = config.localsend.always_on;
-                    self.localsend.alias.clone_from(&config.localsend.alias);
-                    self.localsend.receive_dir = PathBuf::from(&config.localsend.receive_dir);
-                    self.localsend.max_file_mb = config.localsend.max_file_mb.to_string();
-                    self.localsend.max_files = config.localsend.max_files.to_string();
-                    self.interface_size = config.interface_size.to_string();
-                    self.scale = (config.interface_size.clamp(10.0, 20.0) / 14.0) as f32;
-                    self.error = None;
-                }
-                Err(error) => self.error = Some(Error::Config(error)),
-            },
-            Err(_) => self.error = Some(Error::Config(gsh_config::ConfigError::NoHome)),
+        match self.read_config() {
+            Ok(config) => self.apply_config(config),
+            Err(error) => self.error = Some(Error::Config(error)),
         }
+    }
+
+    /// Reconsulta o disco porque um aviso do observador pode chegar depois de outras gravações.
+    pub fn reload_watched(&mut self) -> Option<iced::Task<Message>> {
+        let config = match self.read_config() {
+            Ok(config) => config,
+            Err(error) => {
+                self.error = Some(Error::Config(error));
+                return None;
+            }
+        };
+        if config == self.current {
+            if matches!(self.error, Some(Error::Config(_))) {
+                self.error = None;
+            }
+            return None;
+        }
+        let profile_changed = claude::update::profile_binding(&self.current.claude)
+            != claude::update::profile_binding(&config.claude);
+        self.saved = false;
+        self.apply_config(config);
+        Some(if profile_changed {
+            claude::update::refresh_after_profile_change(self).map(Message::Claude)
+        } else {
+            iced::Task::none()
+        })
+    }
+
+    fn read_config(&self) -> Result<gsh_config::Config, gsh_config::ConfigError> {
+        let path = self
+            .path
+            .as_ref()
+            .map_err(|_| gsh_config::ConfigError::NoHome)?;
+        gsh_config::load(path)
+    }
+
+    fn apply_config(&mut self, config: gsh_config::Config) {
+        self.locale = config.locale.clone().unwrap_or_default();
+        self.shell = config
+            .terminal
+            .shell
+            .clone()
+            .unwrap_or_else(|| gsh_term::default_shell().to_owned());
+        self.scrollback = config.terminal.scrollback.to_string();
+        self.terminal_size = config.effective_terminal_size().to_string();
+        self.tab_size = config.editor.tab_size.to_string();
+        self.highlight = config.editor.syntax_highlight;
+        self.wrap = config.editor.word_wrap;
+        self.notifications = config.notifications_enabled;
+        self.permission_sound = config
+            .sound
+            .events
+            .get(&gsh_config::schema::SoundEvent::ActionRequired)
+            .copied()
+            .unwrap_or(true);
+        self.transcript_width = config.chat.transcript_width;
+        self.theme_mode = config.theme_mode;
+        let variant = ThemeVariant::from_mode(config.theme_mode);
+        let spec = claude::themes::selected_theme_json(&self.claude.home, &config.theme_id);
+        if !theme::set_theme_palette(&config.theme_id, spec.as_deref(), variant) {
+            theme::set_active(variant);
+        }
+        self.lsp_commands =
+            iced::widget::text_editor::Content::with_text(&format_lsp_map(&config.lsp_commands));
+        self.lsp_formatters =
+            iced::widget::text_editor::Content::with_text(&format_lsp_map(&config.lsp_formatters));
+        self.localsend.always_on = config.localsend.always_on;
+        self.localsend.alias.clone_from(&config.localsend.alias);
+        self.localsend.receive_dir = PathBuf::from(&config.localsend.receive_dir);
+        self.localsend.max_file_mb = config.localsend.max_file_mb.to_string();
+        self.localsend.max_files = config.localsend.max_files.to_string();
+        self.interface_size = config.interface_size.to_string();
+        self.scale = (config.interface_size.clamp(10.0, 20.0) / 14.0) as f32;
+        self.current = config;
+        self.error = None;
     }
 
     /// Grava o tema escolhido e o aplica ao vivo; se não gravar, mantém o anterior.

@@ -1,13 +1,15 @@
 //! Rail de projetos/workspaces à esquerda (`projects_rail.dart` do Flutter).
 
-use gsh_core::workspace::{valid_channel_name, Workspace, WorkspaceList};
-use iced::widget::{
-    button, column, container, pick_list, row, scrollable, text, text_input, tooltip, Space,
-};
+use gsh_core::workspace::{Workspace, WorkspaceList};
+use iced::widget::{button, column, container, row, scrollable, text, tooltip, Space};
 use iced::{Alignment, Background, Border, Color, Element, Fill, Length, Padding, Theme};
 
 use crate::labels;
 use crate::theme;
+
+#[path = "channel_editor.rs"]
+mod channel_editor;
+pub use channel_editor::{ChannelAction, ChannelActions, ChannelEditor, ChannelMemberOption};
 
 /// Estado visual do botão de manter acordado no rodapé do rail.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -57,31 +59,11 @@ pub struct RailActions<'a, M> {
     pub keep_awake: KeepAwakeStatus,
     pub update_version: Option<&'a str>,
     pub on_add_workspace: M,
-    pub on_select_channel: fn(Option<String>) -> M,
-    pub channel_editor: Option<&'a str>,
-    pub on_toggle_channel_editor: M,
-    pub on_channel_name_change: fn(String) -> M,
-    pub on_assign_channel: M,
+    pub channels: ChannelActions<'a, M>,
     pub on_toggle_keep_awake: M,
     pub on_download_update: M,
     pub on_dismiss_update: M,
     pub on_settings: M,
-}
-
-#[derive(Clone)]
-struct ChannelChoice(Option<String>);
-
-impl PartialEq for ChannelChoice {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.as_ref().map(|name| name.to_lowercase())
-            == other.0.as_ref().map(|name| name.to_lowercase())
-    }
-}
-
-impl std::fmt::Display for ChannelChoice {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.0.as_deref().unwrap_or("Todos os canais"))
-    }
 }
 
 /// Renderiza o rail lateral de workspaces com o botão "+" de abrir projeto.
@@ -94,11 +76,7 @@ pub fn view<'a, M: Clone + 'a>(
         keep_awake,
         update_version,
         on_add_workspace,
-        on_select_channel,
-        channel_editor,
-        on_toggle_channel_editor,
-        on_channel_name_change,
-        on_assign_channel,
+        channels,
         on_toggle_keep_awake,
         on_download_update,
         on_dismiss_update,
@@ -130,8 +108,8 @@ pub fn view<'a, M: Clone + 'a>(
     let selected_idx = workspaces.selected_index();
     let visible = workspaces.visible_indices();
     let mut list = column![].spacing(2.0).padding([0, 8]);
-    if visible.is_empty() && workspaces.active_channel().is_some() {
-        list = list.push(text("Nenhum workspace neste canal").size(theme::SIZE_LABEL));
+    if visible.is_empty() && workspaces.active_context_channel().is_some() {
+        list = list.push(text(labels::CHANNELS_EMPTY).size(theme::SIZE_LABEL));
     }
     for idx in visible {
         if let Some(workspace) = workspaces.items().get(idx) {
@@ -161,56 +139,17 @@ pub fn view<'a, M: Clone + 'a>(
         crate::pane_chrome::tip_bubble(labels::RAIL_SETTINGS_TOOLTIP),
         tooltip::Position::Top,
     );
-    let choices: Vec<_> = std::iter::once(ChannelChoice(None))
-        .chain(
-            workspaces
-                .channels()
-                .into_iter()
-                .map(|name| ChannelChoice(Some(name))),
-        )
-        .collect();
-    let current = ChannelChoice(workspaces.active_channel().map(str::to_owned));
-    let channel_picker = pick_list(choices, Some(current), move |choice| {
-        on_select_channel(choice.0)
-    })
+    let footer = container(
+        row![Space::new().width(Fill), keep_awake_btn, settings_btn]
+            .spacing(4)
+            .align_y(Alignment::Center),
+    )
     .width(Fill)
-    .padding([4, 6])
-    .font(theme::FONT_BODY)
-    .text_size(theme::SIZE_LABEL);
-    let mut footer_items = row![channel_picker].spacing(4).align_y(Alignment::Center);
-    if workspaces.active().is_some() {
-        footer_items = footer_items.push(tooltip(
-            footer_icon_button(labels::ICON_EDIT, on_toggle_channel_editor),
-            crate::pane_chrome::tip_bubble("Alterar canal do workspace ativo"),
-            tooltip::Position::Top,
-        ));
-    }
-    let footer = container(footer_items.push(keep_awake_btn).push(settings_btn))
-        .width(Fill)
-        .height(Length::Fixed(theme::FOOTER_HEIGHT))
-        .padding([0, 12]);
+    .height(Length::Fixed(theme::FOOTER_HEIGHT))
+    .padding([0, 12]);
 
-    let mut main_col = column![header, scrollable(list).width(Fill).height(Fill)];
-    if let (Some(name), Some(workspace)) = (channel_editor, workspaces.active()) {
-        let submit = valid_channel_name(name).then_some(on_assign_channel);
-        let field = text_input("Nome do canal", name)
-            .size(theme::SIZE_LABEL)
-            .on_input(on_channel_name_change)
-            .on_submit_maybe(submit.clone());
-        let save = button(text("Salvar").size(theme::SIZE_LABEL))
-            .on_press_maybe(submit)
-            .style(theme::ghost_button);
-        main_col = main_col.push(
-            container(
-                column![
-                    text(format!("Canal de {}", workspace.name)).size(theme::SIZE_LABEL),
-                    row![field, save].spacing(4).align_y(Alignment::Center),
-                ]
-                .spacing(4),
-            )
-            .padding([4, 12]),
-        );
-    }
+    let content = column![channel_editor::card(workspaces, channels), list].spacing(8);
+    let mut main_col = column![header, scrollable(content).width(Fill).height(Fill)];
     if let Some(version) = update_version {
         main_col = main_col.push(update_card(version, on_download_update, on_dismiss_update));
     }

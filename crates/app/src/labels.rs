@@ -33,6 +33,49 @@ pub const UPDATE_CARD_CLICK_TO_DOWNLOAD: &str = "click to download";
 pub const UPDATE_CARD_DISMISS_TOOLTIP: &str = "Dispensar";
 pub const EDITOR_APPLY_CKP_LAYOUT: &str = "Aplicar layout";
 
+pub const CHANNELS_HEADER: &str = "Canais";
+pub const CHANNELS_ALL: &str = "Todos os canais";
+pub const CHANNELS_EMPTY: &str = "Nenhum workspace neste canal";
+pub const CHANNEL_NEW: &str = "Novo canal";
+pub const CHANNEL_EDIT: &str = "Editar canal";
+pub const CHANNEL_EDIT_ARCHIVED: &str = "Editar canal arquivado";
+pub const CHANNEL_EDIT_PICKER: &str = "Editar canal…";
+pub const CHANNEL_MOVE_WORKSPACE: &str = "Mover workspace…";
+pub const CHANNEL_NAME: &str = "Nome";
+pub const CHANNEL_NAME_PLACEHOLDER: &str = "Nome do canal";
+pub const CHANNEL_INSTRUCTIONS: &str = "Instruções";
+pub const CHANNEL_INSTRUCTIONS_PLACEHOLDER: &str = "Contexto para as conversas do canal";
+pub const CHANNEL_SAVE: &str = "Salvar";
+pub const CHANNEL_CANCEL: &str = "Cancelar";
+pub const CHANNEL_ARCHIVE: &str = "Arquivar";
+pub const CHANNEL_UNARCHIVE: &str = "Desarquivar";
+pub const CHANNEL_FOLDER: &str = "Pasta";
+pub const CHANNEL_NO_FOLDER: &str = "Sem pasta própria";
+pub const CHANNEL_PICK_FOLDER: &str = "Escolher pasta…";
+pub const CHANNEL_REMOVE_FOLDER: &str = "Remover";
+pub const CHANNEL_MEMBERS: &str = "Membros";
+pub const CHANNEL_NO_SESSIONS: &str = "Nenhuma sessão disponível";
+pub const CHANNEL_REPLY_RULE: &str = "Regra de resposta";
+pub const CHANNEL_REPLY_MANUAL: &str = "Manual";
+pub const CHANNEL_REPLY_MENTION: &str = "Só ao mencionar";
+pub const CHANNEL_REPLY_ALL: &str = "Todos";
+
+pub fn channel_workspace_tooltip(name: &str) -> String {
+    format!("Alterar o canal de {name}")
+}
+
+pub fn channel_archived_label(name: &str) -> String {
+    format!("{name} (arquivado)")
+}
+
+pub fn channel_member_label(mention: &str, session: &str) -> String {
+    format!("@{mention} · {session}")
+}
+
+pub fn channel_unavailable_member_label(mention: &str) -> String {
+    format!("@{mention} · Sessão indisponível")
+}
+
 pub const DEFAULT_TAB_TITLE: &str = "Terminal";
 pub const CHAT_TAB_TITLE: &str = "Chat";
 pub const PANES_PLACEHOLDER: &str = "Terminal (spike de PTY ainda não ligado)";

@@ -13,12 +13,15 @@ use crate::migrate::read_migration_file;
 pub struct FlutterState {
     pub workspaces: Vec<FlutterWorkspace>,
     pub active_workspace: usize,
+    pub realms: BTreeMap<String, String>,
+    pub active_realm: Option<String>,
 }
 
 #[derive(Debug)]
 pub struct FlutterWorkspace {
     pub path: PathBuf,
     pub name: Option<String>,
+    pub realm_id: Option<String>,
     pub layout: Option<FlutterLayout>,
 }
 
@@ -88,6 +91,8 @@ struct Project {
     id: String,
     path: PathBuf,
     name: Option<String>,
+    #[serde(rename = "realm")]
+    realm_id: Option<String>,
     #[serde(rename = "createdAt", default)]
     created_at: i64,
     #[serde(default)]
@@ -110,18 +115,21 @@ pub fn load_dir(dir: &Path) -> Result<Option<FlutterState>, ConfigError> {
     let Some(projects) = read_store(&project_path)? else {
         return Ok(None);
     };
-    let active_realm = read_store(&dir.join("realms.json"))?
-        .and_then(|realms| {
-            realms
-                .get("__active__")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
+    let realms = read_store(&dir.join("realms.json"))?.unwrap_or_default();
+    let active_realm = realms.get("__active__").and_then(Value::as_str);
+    let selection_realm = active_realm
+        .filter(|id| {
+            *id == "default"
+                || realms
+                    .values()
+                    .any(|entry| entry.get("id").and_then(Value::as_str) == Some(*id))
         })
-        .unwrap_or_else(|| "default".to_owned());
+        .unwrap_or("default");
+    let legacy_selection = projects.get("__last_selected__").and_then(Value::as_str);
     let selected = projects
-        .get(&format!("__last_selected__::{active_realm}"))
-        .or_else(|| projects.get("__last_selected__"))
-        .and_then(Value::as_str);
+        .get(&format!("__last_selected__::{selection_realm}"))
+        .and_then(Value::as_str)
+        .or(legacy_selection);
     let mut entries = projects
         .values()
         .filter(|value| value.is_object())
@@ -134,7 +142,9 @@ pub fn load_dir(dir: &Path) -> Result<Option<FlutterState>, ConfigError> {
 
     let layout_path = dir.join("layouts.json");
     let layouts = read_store(&layout_path)?.unwrap_or_default();
-    let mut active_workspace = 0;
+    let mut active_workspace = None;
+    let mut first_in_active_realm = None;
+    let mut first_default = None;
     let mut workspaces = Vec::new();
     let mut seen = HashSet::new();
     for project in entries {
@@ -148,20 +158,42 @@ pub fn load_dir(dir: &Path) -> Result<Option<FlutterState>, ConfigError> {
             .map(|value| decode_layout(&layout_path, value))
             .transpose()?
             .flatten();
-        if selected == Some(project.id.as_str())
-            || selected.is_some_and(|s| Path::new(s) == project.path)
+        let project_realm = project.realm_id.as_deref().unwrap_or("default");
+        if project_realm == selection_realm
+            && (selected == Some(project.id.as_str())
+                || selected.is_some_and(|s| Path::new(s) == project.path))
         {
-            active_workspace = workspaces.len();
+            active_workspace = Some(workspaces.len());
+        }
+        if project_realm == selection_realm {
+            first_in_active_realm.get_or_insert(workspaces.len());
+        }
+        if project_realm == "default" {
+            first_default.get_or_insert(workspaces.len());
         }
         workspaces.push(FlutterWorkspace {
             path: project.path,
             name: project.name,
+            realm_id: project.realm_id,
             layout,
         });
     }
     Ok((!workspaces.is_empty()).then_some(FlutterState {
         workspaces,
-        active_workspace,
+        active_workspace: active_workspace
+            .or(first_in_active_realm)
+            .or(first_default)
+            .unwrap_or(0),
+        realms: realms
+            .values()
+            .filter_map(|entry| {
+                let id = entry.get("id")?.as_str()?;
+                let name = entry.get("name")?.as_str()?;
+                Some((id.to_owned(), name.to_owned()))
+            })
+            .collect(),
+        active_realm: (active_realm.is_some() && first_in_active_realm.is_some())
+            .then(|| selection_realm.to_owned()),
     }))
 }
 

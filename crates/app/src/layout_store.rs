@@ -1,4 +1,5 @@
 //! Persistência do layout da janela principal.
+use gsh_core::workspace::ChannelState;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -10,6 +11,9 @@ use crate::pane_model::{ChatId, PaneModel, PaneTab, QueryId, TermId};
 
 #[cfg(target_os = "linux")]
 mod flutter;
+mod workspaces;
+pub use workspaces::SessionContext;
+use workspaces::SystemWorkspace;
 
 pub const VERSION: u32 = 1;
 
@@ -28,6 +32,10 @@ pub struct LayoutDoc {
     pub chat_sessions: Vec<(ChatId, String)>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub chat_profiles: BTreeMap<ChatId, PathBuf>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub chat_contexts: BTreeMap<ChatId, SessionContext>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub terminal_contexts: BTreeMap<TermId, SessionContext>,
     #[serde(default)]
     pub query_files: Vec<(QueryId, PathBuf)>,
     #[serde(default)]
@@ -36,8 +44,12 @@ pub struct LayoutDoc {
     pub workspace_names: BTreeMap<PathBuf, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub workspace_realms: BTreeMap<PathBuf, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    system_workspaces: Vec<SystemWorkspace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_channel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    channel_state: Option<ChannelState>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub imported_layouts: BTreeMap<PathBuf, LayoutDoc>,
 }
@@ -104,13 +116,6 @@ impl LayoutDoc {
 
 impl crate::pane_tree::PaneTree {
     pub fn snapshot(&self) -> LayoutDoc {
-        self.snapshot_with_workspaces(Vec::new(), 0)
-    }
-    pub fn snapshot_with_workspaces(
-        &self,
-        workspaces: Vec<PathBuf>,
-        active_workspace: usize,
-    ) -> LayoutDoc {
         use iced::widget::pane_grid::Node;
         fn node(tree: &crate::pane_tree::PaneTree, n: &Node) -> LayoutNode {
             match n {
@@ -173,17 +178,21 @@ impl crate::pane_tree::PaneTree {
             version: VERSION,
             tree: node(self, root),
             focused,
-            workspaces,
-            active_workspace,
+            workspaces: Vec::new(),
+            active_workspace: 0,
             terminal_cwds: Vec::new(),
             remote_terminal_ids: Vec::new(),
             chat_sessions: Vec::new(),
             chat_profiles: BTreeMap::new(),
+            chat_contexts: BTreeMap::new(),
+            terminal_contexts: BTreeMap::new(),
             query_files: Vec::new(),
             query_connections: Vec::new(),
             workspace_names: BTreeMap::new(),
             workspace_realms: BTreeMap::new(),
+            system_workspaces: Vec::new(),
             active_channel: None,
+            channel_state: None,
             imported_layouts: BTreeMap::new(),
         }
     }

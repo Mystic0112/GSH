@@ -8,9 +8,16 @@ use std::path::{Path, PathBuf};
 
 use crate::tabs::basename;
 
+mod channel;
+#[cfg(test)]
+mod channel_tests;
 mod layout;
 mod model;
 
+pub use channel::{
+    Channel, ChannelDraft, ChannelError, ChannelId, ChannelMember, ChannelReplyRule, ChannelState,
+    WorkspaceRef,
+};
 pub use layout::{PaneCreated, TabClosed, WorkspaceEditor, WorkspaceState};
 pub use model::{WorkspaceError, Workspaces};
 
@@ -148,6 +155,7 @@ pub struct Workspace {
     pub git_branch: Option<String>,
     pub kind: WorkspaceKind,
     pub realm: String,
+    channel_id: Option<ChannelId>,
 }
 
 impl Workspace {
@@ -164,6 +172,7 @@ impl Workspace {
             git_branch,
             kind: WorkspaceKind::SystemTerminal,
             realm: CHANNEL_DEFAULT.to_string(),
+            channel_id: None,
         }
     }
 
@@ -178,6 +187,7 @@ impl Workspace {
             git_branch: None,
             kind: WorkspaceKind::Project,
             realm: CHANNEL_DEFAULT.to_string(),
+            channel_id: None,
         }
     }
 
@@ -202,11 +212,23 @@ impl Workspace {
     /// Atualiza o canal de contexto (`realm`) do workspace no lugar.
     pub fn set_realm(&mut self, realm: impl Into<String>) {
         self.realm = normalize_realm(&realm.into());
+        self.channel_id = None;
     }
 
     /// Canal de contexto (`realm`) atual do workspace.
     pub fn realm(&self) -> &str {
         &self.realm
+    }
+
+    pub fn channel_id(&self) -> Option<&ChannelId> {
+        self.channel_id.as_ref()
+    }
+
+    pub fn reference(&self) -> WorkspaceRef {
+        self.path.as_ref().map_or_else(
+            || WorkspaceRef::System(self.id.clone()),
+            |path| WorkspaceRef::Project(path.clone()),
+        )
     }
 
     /// Inicial em maiúsculo para o avatar do rail (`Project.initial` no Flutter).
@@ -243,19 +265,24 @@ pub struct WorkspaceList {
     items: Vec<Workspace>,
     selected: usize,
     next_id: u64,
-    active_channel: Option<String>,
+    channels: Vec<Channel>,
+    active_channel: Option<ChannelId>,
 }
 
 impl WorkspaceList {
     /// Cria uma lista de workspaces a partir dos itens iniciais, selecionando o primeiro.
     pub fn new(items: Vec<Workspace>) -> Self {
         let next_id = u64::try_from(items.len()).unwrap_or(0).saturating_add(1);
-        Self {
+        let mut list = Self {
             items,
             selected: 0,
             next_id,
+            channels: channel::preset_channels(),
             active_channel: None,
-        }
+        };
+        list.restore_legacy_assignments();
+        let _ = list.select(0);
+        list
     }
 
     /// Fatia com todos os workspaces registrados (independentemente do canal ativo).
@@ -268,65 +295,63 @@ impl WorkspaceList {
         self.selected
     }
 
-    /// Referência ao workspace ativo (com fallback seguro para o primeiro item).
+    /// Um canal sem workspaces tem seleção efetiva vazia.
     pub fn active(&self) -> Option<&Workspace> {
-        self.items.get(self.selected).or_else(|| self.items.first())
+        self.items
+            .get(self.selected)
+            .filter(|workspace| self.workspace_visible(workspace))
     }
 
     /// Seleciona o workspace pelo índice, caso esteja dentro dos limites.
     pub fn select(&mut self, index: usize) -> Option<&Workspace> {
-        if index < self.items.len() {
-            self.selected = index;
-            self.items.get(index)
-        } else {
-            None
+        let workspace = self.items.get(index)?;
+        if !self.workspace_visible(workspace) {
+            return None;
         }
+        let channel_id = workspace.channel_id.clone();
+        if let Some(channel) = self
+            .channels
+            .iter_mut()
+            .find(|item| Some(&item.id) == channel_id.as_ref())
+        {
+            channel.last_workspace = Some(workspace.reference());
+        }
+        self.selected = index;
+        self.items.get(index)
     }
 
     /// Canal de contexto ativo para filtragem (`None` exibe todos os canais).
     pub fn active_channel(&self) -> Option<&str> {
-        self.active_channel.as_deref()
+        self.active_context_channel().map(Channel::name)
     }
 
-    /// Define o filtro de canais, preservando a seleção e os índices originais.
+    /// Aplica o filtro legado armazenado pelo nome.
     pub fn set_active_channel(&mut self, channel: Option<String>) {
-        self.active_channel = channel
+        let channel = channel
             .filter(|name| valid_channel_name(name))
-            .map(|name| normalize_realm(&name));
+            .map(|name| self.ensure_legacy_channel(&name));
+        let _ = self.select_context_channel(channel.as_ref());
     }
 
     /// Índices dos workspaces visíveis no canal ativo.
     ///
     /// Sem filtro, inclui todos os workspaces.
     pub fn visible_indices(&self) -> Vec<usize> {
-        match self.active_channel.as_deref() {
-            None => (0..self.items.len()).collect(),
-            Some(channel) => self
-                .items
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, ws)| channels_match(&ws.realm, channel).then_some(idx))
-                .collect(),
-        }
+        self.items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| self.workspace_visible(item).then_some(index))
+            .collect()
     }
 
     /// Canais predefinidos e personalizados em uso, incluindo o canal ativo.
     pub fn channels(&self) -> Vec<String> {
-        let mut channels = DEFAULT_CONTEXT_CHANNELS.map(str::to_owned).to_vec();
-        for name in self
-            .items
+        let mut channels: Vec<_> = self
+            .channels
             .iter()
-            .map(Workspace::realm)
-            .chain(self.active_channel())
-        {
-            let canonical = normalize_realm(name);
-            if !channels
-                .iter()
-                .any(|existing| channels_match(existing, &canonical))
-            {
-                channels.push(canonical);
-            }
-        }
+            .filter(|channel| !channel.archived)
+            .map(|channel| channel.name().to_owned())
+            .collect();
         channels.sort_by(|a, b| {
             a.to_lowercase()
                 .cmp(&b.to_lowercase())
@@ -339,16 +364,11 @@ impl WorkspaceList {
     /// Retorna `true` se o índice e o nome forem válidos.
     pub fn set_workspace_realm(&mut self, index: usize, realm: impl Into<String>) -> bool {
         let realm = realm.into();
-        if let Some(ws) = self
-            .items
-            .get_mut(index)
-            .filter(|_| valid_channel_name(&realm))
-        {
-            ws.set_realm(realm);
-            true
-        } else {
-            false
+        if index >= self.items.len() || !valid_channel_name(&realm) {
+            return false;
         }
+        let id = self.ensure_legacy_channel(&realm);
+        self.assign_workspace_channel(index, &id).is_ok()
     }
 
     /// Abre uma pasta como workspace: se já existir um workspace com o mesmo
@@ -361,145 +381,38 @@ impl WorkspaceList {
             .iter()
             .position(|ws| ws.path.as_ref() == Some(&path_buf))
         {
-            self.selected = existing_idx;
-            if let Some(active) = self.active_channel.as_deref() {
-                if let Some(realm) = self
+            if self.active_channel.is_some()
+                && self
                     .items
                     .get(existing_idx)
-                    .map(|workspace| workspace.realm().to_owned())
-                {
-                    if !channels_match(active, &realm) {
-                        self.active_channel = Some(realm);
-                    }
-                }
+                    .is_some_and(|item| !self.workspace_visible(item))
+            {
+                let channel = self
+                    .items
+                    .get(existing_idx)
+                    .and_then(|item| item.channel_id.clone());
+                let _ = self
+                    .select_context_channel(channel.as_ref())
+                    .or_else(|_| self.select_context_channel(None));
             }
+            let _ = self.select(existing_idx);
             return existing_idx;
         }
 
         let id = format!("ws-{}", self.next_id);
         self.next_id = self.next_id.saturating_add(1);
         let mut ws = Workspace::from_path(id, path_buf);
-        if let Some(active) = self.active_channel.as_deref() {
-            ws.set_realm(active);
+        let channel_id = self
+            .active_channel
+            .clone()
+            .unwrap_or_else(ChannelId::default_channel);
+        if let Some(channel) = self.channel(&channel_id) {
+            ws.realm = channel.name().to_owned();
         }
+        ws.channel_id = Some(channel_id);
         self.items.push(ws);
         let new_idx = self.items.len().saturating_sub(1);
-        self.selected = new_idx;
+        let _ = self.select(new_idx);
         new_idx
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn canais_predefinidos_existem_sem_workspaces_e_nome_invalido_nao_move_item() {
-        let mut list = WorkspaceList::new(vec![Workspace::system("sys", "Terminal", None)]);
-        assert!(DEFAULT_CONTEXT_CHANNELS
-            .iter()
-            .all(|name| list.channels().contains(&name.to_string())));
-        assert!(!list.set_workspace_realm(0, " \n "));
-        assert!(!list.set_workspace_realm(0, "Nome\nInválido"));
-        assert_eq!(
-            ContextChannel::parse("Nome\nInválido"),
-            ContextChannel::Default
-        );
-        assert_eq!(list.active().unwrap().realm(), CHANNEL_DEFAULT);
-    }
-
-    #[test]
-    fn workspace_from_path_extrai_nome_e_inicial() {
-        let ws = Workspace::from_path("ws-1", "/home/dev/projetos/meu-app");
-        assert_eq!(ws.name, "meu-app");
-        assert_eq!(ws.initial(), "M");
-        assert_eq!(ws.path, Some(PathBuf::from("/home/dev/projetos/meu-app")));
-        assert_eq!(ws.kind, WorkspaceKind::Project);
-        assert_eq!(ws.realm, CHANNEL_DEFAULT);
-    }
-
-    #[test]
-    fn workspace_list_abre_seleciona_e_evita_duplicatas_de_caminho() {
-        let initial = vec![Workspace::system("gsh", "GSH", Some("main".into()))];
-        let mut list = WorkspaceList::new(initial);
-        assert_eq!(list.selected_index(), 0);
-        assert_eq!(list.active().map(|w| w.name.as_str()), Some("GSH"));
-
-        let idx = list.open_folder("/tmp/projeto-alfa");
-        assert_eq!(idx, 1);
-        assert_eq!(list.selected_index(), 1);
-        assert_eq!(list.active().map(|w| w.name.as_str()), Some("projeto-alfa"));
-
-        let _ = list.select(0);
-        list.set_active_channel(Some(CHANNEL_WORK.to_owned()));
-        let reused_idx = list.open_folder("/tmp/projeto-alfa");
-        assert_eq!(reused_idx, 1);
-        assert_eq!(list.items().len(), 2);
-        assert_eq!(list.active_channel(), Some(CHANNEL_DEFAULT));
-
-        assert!(list.select(99).is_none());
-        assert_eq!(list.selected_index(), 1);
-    }
-
-    #[test]
-    fn canais_por_contexto_filtram_sem_clonar_nem_perder_selecao_ou_workspaces() {
-        let ws_padrao = Workspace::system("sys", "Terminal", None);
-        let ws_trabalho_1 = Workspace::from_path("ws-1", "/work/erp").with_realm(CHANNEL_WORK);
-        let ws_pessoal = Workspace::from_path("ws-2", "/home/eu/blog").with_realm(CHANNEL_PERSONAL);
-        let ws_projetos =
-            Workspace::from_path("ws-3", "/home/eu/oss/gsh").with_realm(CHANNEL_PROJECTS);
-        let ws_trabalho_2 = Workspace::from_path("ws-4", "/work/billing").with_realm("trabalho");
-
-        let mut list = WorkspaceList::new(vec![
-            ws_padrao,
-            ws_trabalho_1,
-            ws_pessoal,
-            ws_projetos,
-            ws_trabalho_2,
-        ]);
-
-        let _ = list.select(2);
-        assert_eq!(list.selected_index(), 2);
-        assert_eq!(list.active_channel(), None);
-        assert_eq!(list.visible_indices(), vec![0, 1, 2, 3, 4]);
-        assert_eq!(
-            list.channels(),
-            vec![
-                CHANNEL_DEFAULT.to_string(),
-                CHANNEL_PERSONAL.to_string(),
-                CHANNEL_PROJECTS.to_string(),
-                CHANNEL_WORK.to_string(),
-            ]
-        );
-
-        list.set_active_channel(Some("trabalho".to_string()));
-        assert_eq!(list.active_channel(), Some(CHANNEL_WORK));
-        assert_eq!(list.visible_indices(), vec![1, 4]);
-        assert_eq!(list.items().len(), 5);
-        assert_eq!(list.selected_index(), 2);
-
-        list.set_active_channel(Some(CHANNEL_PERSONAL.to_string()));
-        assert_eq!(list.visible_indices(), vec![2]);
-
-        list.set_active_channel(Some(CHANNEL_PROJECTS.to_string()));
-        assert_eq!(list.visible_indices(), vec![3]);
-
-        assert!(list.set_workspace_realm(0, CHANNEL_PROJECTS));
-        assert!(!list.set_workspace_realm(99, CHANNEL_PROJECTS));
-        assert_eq!(list.visible_indices(), vec![0, 3]);
-        assert_eq!(list.items().len(), 5);
-
-        list.set_active_channel(Some("Projeto-X".to_string()));
-        assert!(list.visible_indices().is_empty());
-        assert!(list.channels().contains(&"Projeto-X".to_string()));
-        assert!(list.set_workspace_realm(0, "projeto-x"));
-        assert_eq!(list.visible_indices(), vec![0]);
-        let opened = list.open_folder("/tmp/projeto-x");
-        assert_eq!(list.visible_indices(), vec![0, opened]);
-        assert_eq!(list.items()[opened].realm(), "Projeto-X");
-
-        list.set_active_channel(None);
-        assert_eq!(list.active_channel(), None);
-        assert_eq!(list.visible_indices(), vec![0, 1, 2, 3, 4, opened]);
     }
 }

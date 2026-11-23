@@ -44,6 +44,7 @@ pub struct LaunchOptions {
     pub effort: Option<String>,
     /// `crossSessionInbound` ausente no `~/.claude/settings.json`: o chat entrega por padrão.
     pub accept_peers: bool,
+    pub append_system_prompt: Option<String>,
 }
 
 /// Argumentos do `claude` (`ClaudeStreamEngineFactory.start`): `stream-json` nos dois
@@ -71,6 +72,14 @@ pub fn launch_args(opts: &LaunchOptions) -> Vec<String> {
     if opts.accept_peers {
         a.push("--settings".to_string());
         a.push("{\"crossSessionInbound\":\"accept\"}".to_string());
+    }
+    if let Some(prompt) = opts
+        .append_system_prompt
+        .as_ref()
+        .filter(|text| !text.trim().is_empty())
+    {
+        a.push("--append-system-prompt".to_string());
+        a.push(prompt.clone());
     }
     // Só deixa "Ignorar permissões" disponível no seletor de modo; a sessão continua
     // começando em `default` (pedindo permissão).
@@ -739,6 +748,7 @@ mod tests {
             model: Some("opus".into()),
             effort: Some("high".into()),
             accept_peers: true,
+            append_system_prompt: Some("Responda em português".into()),
         });
         let joined = a.join(" ");
         assert_eq!(
@@ -747,6 +757,7 @@ mod tests {
              --permission-prompts host --permission-prompt-tool stdio \
              --include-partial-messages --replay-user-messages \
              --settings {\"crossSessionInbound\":\"accept\"} \
+             --append-system-prompt Responda em português \
              --allow-dangerously-skip-permissions --thinking-display summarized \
              --resume s-1 --model opus --effort high"
         );

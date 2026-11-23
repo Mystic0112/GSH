@@ -11,6 +11,7 @@ use gsh_config::schema::SoundEvent;
 use gsh_harness::Json;
 use iced::widget::text_editor;
 use iced::Task;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -23,7 +24,7 @@ pub(in crate::settings) fn update(s: &mut Settings, message: Message) -> Task<Me
             s.claude.catalog_search.clear();
             s.claude.catalog_add_menu = false;
             s.claude.selected_marketplace = None;
-            let load = enter_tab(&mut s.claude, tab);
+            let load = enter_tab(s, tab);
             Task::batch([task, load])
         }
         Message::Switch(which, on) => {
@@ -103,11 +104,12 @@ pub(in crate::settings) fn update(s: &mut Settings, message: Message) -> Task<Me
                     claude
                         .profiles
                         .insert(name, path.to_string_lossy().into_owned());
-                    save_profiles(s, claude);
+                    let task = save_profiles(s, claude);
                     if s.saved {
                         s.claude.profile_name.clear();
                         s.claude.profile_directory.clear();
                     }
+                    return task;
                 }
                 Err(error) => s.claude.profile_error = Some(error),
             }
@@ -122,19 +124,20 @@ pub(in crate::settings) fn update(s: &mut Settings, message: Message) -> Task<Me
             }
             let mut claude = s.current.claude.clone();
             claude.active_profile = name;
-            save_profiles(s, claude);
-            Task::none()
+            save_profiles(s, claude)
         }
         Message::LoginProfile(name) => {
-            match profiles::directory(&s.current, &name)
-                .and_then(|path| profiles::command(Some(&path), "auth login"))
-            {
-                Ok(command) => {
+            match profiles::directory(&s.current, &name) {
+                Ok(path) => {
                     s.claude.profile_error = None;
-                    s.claude.pending_profile_terminal = Some(command);
+                    s.claude.pending_auth_terminal = Some(Some(path));
                 }
                 Err(error) => s.claude.profile_error = Some(error),
             }
+            Task::none()
+        }
+        Message::LoginAccount => {
+            run_account_login(s);
             Task::none()
         }
         Message::RemoveProfile(name) => {
@@ -143,7 +146,7 @@ pub(in crate::settings) fn update(s: &mut Settings, message: Message) -> Task<Me
                 if claude.active_profile.as_ref() == Some(&name) {
                     claude.active_profile = None;
                 }
-                save_profiles(s, claude);
+                return save_profiles(s, claude);
             }
             Task::none()
         }
@@ -151,10 +154,13 @@ pub(in crate::settings) fn update(s: &mut Settings, message: Message) -> Task<Me
             if s.claude.account_loading {
                 Task::none()
             } else {
-                load_account(&mut s.claude)
+                load_account(s)
             }
         }
-        Message::AccountLoaded(result) => {
+        Message::AccountLoaded(generation, result) => {
+            if generation != s.claude.account_generation {
+                return Task::none();
+            }
             s.claude.account_loading = false;
             s.claude.account = Some(result);
             Task::none()
@@ -168,21 +174,24 @@ pub(in crate::settings) fn update(s: &mut Settings, message: Message) -> Task<Me
             Task::none()
         }
         Message::LogoutConfirm => {
-            s.claude.logout_ask = false;
-            let home = s.claude.home.clone();
-            Task::perform(
-                async move {
-                    tokio::task::spawn_blocking(move || cli::logout(&home))
-                        .await
-                        .unwrap_or(Err(cli::InfoError::Failed(None)))
-                },
-                Message::LoggedOut,
-            )
+            if !s.claude.logout_ask {
+                return Task::none();
+            }
+            begin_logout(s, |generation, result| {
+                Message::LoggedOut(generation, false, result)
+            })
         }
-        Message::LoggedOut(result) => {
+        Message::LoggedOut(generation, login_after, result) => {
+            if generation != s.claude.account_generation {
+                return Task::none();
+            }
+            if login_after && result.is_ok() {
+                run_account_login(s);
+                return Task::none();
+            }
             s.claude.logout_error = result.err();
             s.claude.account_loading = false;
-            load_account(&mut s.claude)
+            load_account(s)
         }
         Message::SwitchAccountAsk => {
             s.claude.switch_account_ask = true;
@@ -193,22 +202,29 @@ pub(in crate::settings) fn update(s: &mut Settings, message: Message) -> Task<Me
             Task::none()
         }
         Message::SwitchAccountConfirm => {
-            s.claude.switch_account_ask = false;
-            s.claude.account = None;
-            s.claude.usage = None;
-            s.claude.usage_at = None;
-            s.claude.pending_terminal =
-                Some(String::from("claude auth logout && claude auth login"));
-            Task::none()
+            if !s.claude.switch_account_ask {
+                return Task::none();
+            }
+            begin_logout(s, |generation, result| {
+                Message::LoggedOut(generation, true, result)
+            })
         }
         Message::RefreshUsage => {
             if s.claude.usage_loading {
                 Task::none()
             } else {
-                load_usage(&mut s.claude)
+                let account = if s.claude.account_loading {
+                    Task::none()
+                } else {
+                    load_account(s)
+                };
+                Task::batch([account, load_usage(s)])
             }
         }
-        Message::UsageLoaded(result) => {
+        Message::UsageLoaded(generation, result) => {
+            if generation != s.claude.account_generation {
+                return Task::none();
+            }
             s.claude.usage_loading = false;
             s.claude.usage_at = Some(cli::now_epoch_secs());
             s.claude.usage = Some(result);
@@ -636,7 +652,8 @@ pub(in crate::settings) fn commit_pending(s: &mut Settings) -> Task<Message> {
     commit_hosts(&mut s.claude)
 }
 
-fn enter_tab(c: &mut ClaudeState, tab: Tab) -> Task<Message> {
+fn enter_tab(s: &mut Settings, tab: Tab) -> Task<Message> {
+    let c = &mut s.claude;
     match tab {
         Tab::General
         | Tab::Privacy
@@ -651,14 +668,14 @@ fn enter_tab(c: &mut ClaudeState, tab: Tab) -> Task<Message> {
             c.reload_files();
             Task::none()
         }
-        Tab::Account => enter_account(c),
+        Tab::Account => enter_account(s),
         Tab::Usage => {
             let mut tasks = Vec::new();
             if c.account.is_none() && !c.account_loading {
-                tasks.push(load_account(c));
+                tasks.push(load_account(s));
             }
-            if c.usage.is_none() && !c.usage_loading {
-                tasks.push(load_usage(c));
+            if s.claude.usage.is_none() && !s.claude.usage_loading {
+                tasks.push(load_usage(s));
             }
             Task::batch(tasks)
         }
@@ -687,7 +704,8 @@ fn enter_tab(c: &mut ClaudeState, tab: Tab) -> Task<Message> {
     }
 }
 
-fn enter_account(c: &mut ClaudeState) -> Task<Message> {
+fn enter_account(s: &mut Settings) -> Task<Message> {
+    let c = &mut s.claude;
     if c.instructions.is_none() {
         let saved = files::read_instructions(&c.home);
         c.instructions = Some(Instructions {
@@ -696,36 +714,56 @@ fn enter_account(c: &mut ClaudeState) -> Task<Message> {
         });
     }
     if c.account.is_none() && !c.account_loading {
-        load_account(c)
+        load_account(s)
     } else {
         Task::none()
     }
 }
 
-fn load_account(c: &mut ClaudeState) -> Task<Message> {
-    c.account_loading = true;
-    let home = c.home.clone();
+fn load_account(s: &mut Settings) -> Task<Message> {
+    s.claude.account_loading = true;
+    account_task(s, cli::account, Message::AccountLoaded)
+}
+
+fn load_usage(s: &mut Settings) -> Task<Message> {
+    s.claude.usage_loading = true;
+    account_task(s, cli::usage, Message::UsageLoaded)
+}
+
+fn account_task<T: Send + 'static>(
+    s: &Settings,
+    request: fn(&Path, Option<&Path>) -> Result<T, cli::InfoError>,
+    loaded: fn(u64, Result<T, cli::InfoError>) -> Message,
+) -> Task<Message> {
+    let generation = s.claude.account_generation;
+    let home = s.claude.home.clone();
+    let profile = profiles::selected(&s.current);
     Task::perform(
         async move {
-            tokio::task::spawn_blocking(move || cli::account(&home))
+            let profile = profile.map_err(|error| cli::InfoError::Failed(Some(error)))?;
+            tokio::task::spawn_blocking(move || request(&home, profile.as_deref()))
                 .await
                 .unwrap_or(Err(cli::InfoError::Failed(None)))
         },
-        Message::AccountLoaded,
+        move |result| loaded(generation, result),
     )
 }
 
-fn load_usage(c: &mut ClaudeState) -> Task<Message> {
-    c.usage_loading = true;
-    let home = c.home.clone();
-    Task::perform(
-        async move {
-            tokio::task::spawn_blocking(move || cli::usage(&home))
-                .await
-                .unwrap_or(Err(cli::InfoError::Failed(None)))
-        },
-        Message::UsageLoaded,
-    )
+fn begin_logout(
+    s: &mut Settings,
+    loaded: fn(u64, Result<(), cli::InfoError>) -> Message,
+) -> Task<Message> {
+    s.claude.invalidate_account_data();
+    s.claude.account_loading = true;
+    account_task(s, cli::logout, loaded)
+}
+
+fn run_account_login(s: &mut Settings) {
+    s.claude.invalidate_account_data();
+    match profiles::selected(&s.current) {
+        Ok(profile) => s.claude.pending_auth_terminal = Some(profile),
+        Err(error) => s.claude.logout_error = Some(cli::InfoError::Failed(Some(error))),
+    }
 }
 
 fn load_mcp(c: &mut ClaudeState) -> Task<Message> {
@@ -821,9 +859,35 @@ fn apply_pref(s: &mut Settings, pref: &Pref) {
     s.error = result.err();
 }
 
-fn save_profiles(s: &mut Settings, claude: gsh_config::schema::ClaudeProfiles) {
+fn save_profiles(s: &mut Settings, claude: gsh_config::schema::ClaudeProfiles) -> Task<Message> {
+    let previous =
+        profile_binding(&s.current.claude).map(|(name, path)| (name.to_owned(), path.cloned()));
     s.claude.profile_error = None;
     apply_pref(s, &Pref::ClaudeProfiles(claude));
+    let previous = previous
+        .as_ref()
+        .map(|(name, path)| (name.as_str(), path.as_ref()));
+    if previous != profile_binding(&s.current.claude) {
+        return refresh_after_profile_change(s);
+    }
+    Task::none()
+}
+
+pub(in crate::settings) fn refresh_after_profile_change(s: &mut Settings) -> Task<Message> {
+    s.claude.invalidate_account_data();
+    let tab = s.claude.tab;
+    if matches!(tab, Tab::Account | Tab::Usage) {
+        enter_tab(s, tab)
+    } else {
+        Task::none()
+    }
+}
+
+pub(in crate::settings) fn profile_binding(
+    config: &gsh_config::schema::ClaudeProfiles,
+) -> Option<(&str, Option<&String>)> {
+    let name = config.active_profile.as_deref()?;
+    Some((name, config.profiles.get(name)))
 }
 
 fn commit_code_font(s: &mut Settings) {
@@ -1107,15 +1171,20 @@ mod tests {
             auth_method: Some("claude.ai".into()),
             api_provider: None,
         };
-        let _ = s.update(RootMsg::Claude(Message::AccountLoaded(Ok(acc.clone()))));
+        let _ = s.update(RootMsg::Claude(Message::AccountLoaded(
+            s.claude.account_generation,
+            Ok(acc.clone()),
+        )));
         assert_eq!(s.claude.account, Some(Ok(acc)));
         let _ = s.update(RootMsg::Claude(Message::LogoutAsk));
         assert!(s.claude.logout_ask);
         let _ = s.update(RootMsg::Claude(Message::LogoutCancel));
         assert!(!s.claude.logout_ask);
-        let _ = s.update(RootMsg::Claude(Message::LoggedOut(Err(
-            InfoError::CliMissing,
-        ))));
+        let _ = s.update(RootMsg::Claude(Message::LoggedOut(
+            s.claude.account_generation,
+            false,
+            Err(InfoError::CliMissing),
+        )));
         assert_eq!(s.claude.logout_error, Some(InfoError::CliMissing));
 
         let _ = s.update(RootMsg::Claude(Message::SwitchAccountAsk));
@@ -1126,10 +1195,20 @@ mod tests {
         let _ = s.update(RootMsg::Claude(Message::SwitchAccountConfirm));
         assert!(!s.claude.switch_account_ask);
         assert!(s.claude.account.is_none());
-        assert_eq!(
-            s.claude.take_terminal_command().as_deref(),
-            Some("claude auth logout && claude auth login")
-        );
+        assert_eq!(s.claude.take_auth_terminal_request(), None);
+        let generation = s.claude.account_generation;
+        let _ = s.update(RootMsg::Claude(Message::LoggedOut(
+            generation.wrapping_sub(1),
+            true,
+            Ok(()),
+        )));
+        assert_eq!(s.claude.take_auth_terminal_request(), None);
+        let _ = s.update(RootMsg::Claude(Message::LoggedOut(
+            generation,
+            true,
+            Ok(()),
+        )));
+        assert_eq!(s.claude.take_auth_terminal_request(), Some(None));
 
         let _ = s.update(RootMsg::Claude(Message::RunInTerminal(
             "claude auth login".into(),
@@ -1158,26 +1237,86 @@ mod tests {
         let _ = s.update(RootMsg::Claude(Message::AddProfile));
         assert!(s.saved);
         assert_eq!(s.current.claude.active_profile, None);
+        let old_generation = s.claude.account_generation;
+        let _ = s.update(RootMsg::Claude(Message::Select(Tab::Usage)));
         let _ = s.update(RootMsg::Claude(Message::SelectProfile(Some(
             "Trabalho".into(),
         ))));
         let config = gsh_config::load(s.path.as_ref().unwrap()).unwrap();
         assert_eq!(profiles::selected(&config), Ok(Some(profile.clone())));
+        assert_ne!(s.claude.account_generation, old_generation);
+        let _ = s.update(RootMsg::Claude(Message::AccountLoaded(
+            old_generation,
+            Ok(Account::default()),
+        )));
+        let _ = s.update(RootMsg::Claude(Message::UsageLoaded(
+            old_generation,
+            Ok(cli::Usage::default()),
+        )));
+        assert!(s.claude.account_loading && s.claude.account.is_none());
+        assert!(s.claude.usage_loading && s.claude.usage.is_none());
 
         let _ = s.update(RootMsg::Claude(Message::LoginProfile("Trabalho".into())));
         assert_eq!(
-            s.claude.take_profile_terminal_command(),
-            Some(profiles::command(Some(&profile), "auth login").unwrap())
+            s.claude.take_auth_terminal_request(),
+            Some(Some(profile.clone()))
         );
-        let _ = s.update(RootMsg::Claude(Message::SwitchAccountConfirm));
+        let _ = s.update(RootMsg::Claude(Message::LoginAccount));
         assert_eq!(
-            s.claude.take_terminal_command().as_deref(),
-            Some("claude auth logout && claude auth login")
+            s.claude.take_auth_terminal_request(),
+            Some(Some(profile.clone()))
         );
+        let _ = s.update(RootMsg::Claude(Message::SwitchAccountAsk));
+        let _ = s.update(RootMsg::Claude(Message::SwitchAccountConfirm));
+        assert_eq!(s.claude.take_auth_terminal_request(), None);
+        let _ = s.update(RootMsg::Claude(Message::LoggedOut(
+            s.claude.account_generation,
+            true,
+            Ok(()),
+        )));
+        assert_eq!(
+            s.claude.take_auth_terminal_request(),
+            Some(Some(profile.clone()))
+        );
+        assert!(s.claude.take_terminal_command().is_none());
         let _ = s.update(RootMsg::Claude(Message::RemoveProfile("Trabalho".into())));
         assert!(s.current.claude.profiles.is_empty());
         assert_eq!(s.current.claude.active_profile, None);
         assert!(profile.is_dir());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn watched_profile_change_keeps_usage_open_and_rejects_the_previous_response() {
+        let (dir, mut s) = temp_fixture("watch-profiles");
+        let path = s.path.as_ref().unwrap().clone();
+        s.reload();
+        let _ = s.update(RootMsg::Claude(Message::Select(Tab::Usage)));
+        let generation = s.claude.account_generation;
+        assert!(s.reload_watched().is_none());
+        assert_eq!(s.claude.account_generation, generation);
+        assert!(s.claude.usage_loading);
+
+        let profile = dir.join("Pessoal");
+        profiles::verify(&profile, true).unwrap();
+        let mut selection = s.current.claude.clone();
+        selection.active_profile = Some("Pessoal".into());
+        selection
+            .profiles
+            .insert("Pessoal".into(), profile.to_string_lossy().into_owned());
+        prefs::save(&path, &Pref::ClaudeProfiles(selection)).unwrap();
+        let _ = s.reload_watched().unwrap();
+        assert_eq!(s.claude.tab, Tab::Usage);
+        assert_eq!(profiles::selected(&s.current), Ok(Some(profile)));
+        assert_ne!(s.claude.account_generation, generation);
+        let _ = s.update(RootMsg::Claude(Message::UsageLoaded(
+            generation,
+            Ok(cli::Usage::default()),
+        )));
+        assert!(s.claude.usage_loading && s.claude.usage.is_none());
+        assert!(s.reload_watched().is_none());
+        assert!(s.claude.usage_loading);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

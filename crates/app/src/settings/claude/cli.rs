@@ -1,7 +1,7 @@
 //! A CLI `claude` instalada (`ClaudeCliInfoSource` e `claude_info_parsers.dart` do Flutter):
 //! conta, logout, limites de uso (`get_usage`), servidores MCP e plugins/marketplaces.
 
-use super::files;
+use super::{files, profiles};
 use crate::labels;
 use gsh_harness::Json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,6 +50,40 @@ pub struct Usage {
     pub available: bool,
     pub subscription_type: Option<String>,
     pub windows: Vec<UsageWindow>,
+    pub extra: Option<ExtraUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtraUsage {
+    pub enabled: bool,
+    pub percent: Option<f64>,
+    pub spend_limit_reached: bool,
+    pub resets_at: Option<i64>,
+    pub amounts: Option<ExtraUsageAmounts>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtraUsageAmounts {
+    pub currency: String,
+    pub used_minor: Option<u64>,
+    pub limit_minor: Option<u64>,
+    decimal_places: u8,
+}
+
+impl ExtraUsageAmounts {
+    pub fn format_minor(&self, minor: u64) -> String {
+        let digits = usize::from(self.decimal_places);
+        if digits == 0 {
+            return format!("{minor} {}", self.currency);
+        }
+        let scale = 10_u64.pow(u32::from(self.decimal_places));
+        format!(
+            "{},{:0digits$} {}",
+            minor / scale,
+            minor % scale,
+            self.currency
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,7 +246,17 @@ pub fn parse_usage_reply(body: &Json) -> Usage {
             resets_at,
         });
     };
-    if let Some(list) = body.get("limits").and_then(Json::as_arr) {
+    let rate_limits = body.get("rate_limits");
+    let limits = body
+        .get("limits")
+        .and_then(Json::as_arr)
+        .filter(|list| !list.is_empty())
+        .or_else(|| {
+            rate_limits
+                .and_then(|rate| rate.get("limits"))
+                .and_then(Json::as_arr)
+        });
+    if let Some(list) = limits {
         for item in list {
             if item.as_obj().is_none() {
                 continue;
@@ -235,22 +279,23 @@ pub fn parse_usage_reply(body: &Json) -> Usage {
                 add_window(Some(item), kind, label, &mut windows);
             }
         }
-    } else if let Some(limits) = body.get("rate_limits").filter(|n| n.as_obj().is_some()) {
-        add_window(
-            limits.get("five_hour"),
-            UsageWindowKind::Session,
-            None,
-            &mut windows,
-        );
-        add_window(
-            limits.get("seven_day"),
-            UsageWindowKind::Weekly,
-            None,
-            &mut windows,
-        );
-        if let Some(scoped) = limits.get("model_scoped").and_then(Json::as_arr) {
-            for item in scoped {
-                if item.as_obj().is_some() {
+    }
+    if windows.is_empty() {
+        if let Some(limits) = rate_limits {
+            add_window(
+                limits.get("five_hour"),
+                UsageWindowKind::Session,
+                None,
+                &mut windows,
+            );
+            add_window(
+                limits.get("seven_day"),
+                UsageWindowKind::Weekly,
+                None,
+                &mut windows,
+            );
+            if let Some(scoped) = limits.get("model_scoped").and_then(Json::as_arr) {
+                for item in scoped {
                     let name = item
                         .get("display_name")
                         .and_then(Json::as_str)
@@ -262,6 +307,9 @@ pub fn parse_usage_reply(body: &Json) -> Usage {
     }
     let available =
         body.get("rate_limits_available") == Some(&Json::Bool(true)) || !windows.is_empty();
+    let extra = rate_limits
+        .and_then(|rate| rate.get("extra_usage"))
+        .and_then(|extra| parse_extra_usage(extra, limits.unwrap_or_default()));
     Usage {
         available,
         subscription_type: body
@@ -269,7 +317,59 @@ pub fn parse_usage_reply(body: &Json) -> Usage {
             .and_then(Json::as_str)
             .map(str::to_owned),
         windows,
+        extra,
     }
+}
+
+fn parse_extra_usage(extra: &Json, limits: &[Json]) -> Option<ExtraUsage> {
+    let Json::Bool(enabled) = extra.get("is_enabled")? else {
+        return None;
+    };
+    let percent = match extra.get("utilization") {
+        Some(Json::Num(n)) => n.as_f64().filter(|percent| *percent >= 0.0),
+        _ => None,
+    };
+    let resets_at = limits
+        .iter()
+        .find(|row| {
+            row.get("kind").and_then(Json::as_str) == Some("spend")
+                && row.get("is_active") == Some(&Json::Bool(true))
+        })
+        .and_then(|row| row.get("resets_at"))
+        .and_then(Json::as_str)
+        .and_then(parse_iso8601);
+    Some(ExtraUsage {
+        enabled: *enabled,
+        percent,
+        spend_limit_reached: extra.get("spend_limit_reached") == Some(&Json::Bool(true)),
+        resets_at,
+        amounts: parse_extra_amounts(extra),
+    })
+}
+
+fn parse_extra_amounts(extra: &Json) -> Option<ExtraUsageAmounts> {
+    let currency = extra.get("currency")?.as_str()?;
+    if currency.len() != 3 || !currency.bytes().all(|ch| ch.is_ascii_alphabetic()) {
+        return None;
+    }
+    let amount_at = |key| match extra.get(key) {
+        Some(Json::Num(number)) => number.as_u64(),
+        _ => None,
+    };
+    // The Claude CLI's documented payload expresses both amounts in cents.
+    let decimal_places = match extra.non_null("decimal_places") {
+        None => 2,
+        Some(Json::Num(n)) => n.as_u64().filter(|digits| *digits <= 6)? as u8,
+        _ => return None,
+    };
+    let used_minor = amount_at("used_credits");
+    let limit_minor = amount_at("monthly_limit");
+    (used_minor.is_some() || limit_minor.is_some()).then(|| ExtraUsageAmounts {
+        currency: currency.to_ascii_uppercase(),
+        used_minor,
+        limit_minor,
+        decimal_places,
+    })
 }
 
 /// `claude mcp list` (uma linha por servidor: `<nome>: <url ou comando> - <glifo> <status>`).
@@ -375,8 +475,8 @@ pub fn parse_marketplace_list(stdout: &str) -> Result<BTreeMap<String, String>, 
     Ok(out)
 }
 
-pub fn account(home: &Path) -> Result<Account, InfoError> {
-    match run(home, &["auth", "status", "--json"], TIMEOUT) {
+pub fn account(home: &Path, profile: Option<&Path>) -> Result<Account, InfoError> {
+    match run_with_profile(home, profile, &["auth", "status", "--json"], TIMEOUT) {
         Ok(stdout) => parse_auth_status(&stdout),
         // `claude auth status --json` sai com código 1 quando `loggedIn: false`, mas
         // imprime o JSON válido em stdout.
@@ -387,8 +487,36 @@ pub fn account(home: &Path) -> Result<Account, InfoError> {
     }
 }
 
-pub fn logout(home: &Path) -> Result<(), InfoError> {
-    run(home, &["auth", "logout"], TIMEOUT).map(|_| ())
+pub fn logout(home: &Path, profile: Option<&Path>) -> Result<(), InfoError> {
+    run_with_profile(home, profile, &["auth", "logout"], TIMEOUT).map(|_| ())
+}
+
+pub(crate) fn auth_terminal(
+    home: &Path,
+    profile: Option<&Path>,
+) -> Result<gsh_term::ShellCommand, InfoError> {
+    auth_terminal_with_exe(&resolve_claude(), home, profile)
+}
+
+fn auth_terminal_with_exe(
+    exe: &Path,
+    home: &Path,
+    profile: Option<&Path>,
+) -> Result<gsh_term::ShellCommand, InfoError> {
+    let program = exe.to_str().ok_or(InfoError::CliMissing)?;
+    let mut command = gsh_term::ShellCommand::new(program)
+        .args(["auth", "login"])
+        .env("PATH", path_with(exe));
+    if !home.as_os_str().is_empty() {
+        command = command.cwd(home);
+    }
+    if let Some(profile) = verified_account_profile(profile)? {
+        for key in gsh_chat::settings::PROFILE_AUTH_ENV {
+            command = command.env_remove(key);
+        }
+        command = command.env(profiles::CONFIG_DIR, profile);
+    }
+    Ok(command)
 }
 
 pub fn mcp_servers(home: &Path) -> Result<Vec<McpServerInfo>, InfoError> {
@@ -419,7 +547,7 @@ pub fn directory(home: &Path) -> Result<Vec<MarketplacePlugin>, InfoError> {
 }
 
 /// Sobe `claude -p` em `stream-json`, envia `get_usage` e encerra assim que a resposta chega.
-pub fn usage(home: &Path) -> Result<Usage, InfoError> {
+pub fn usage(home: &Path, profile: Option<&Path>) -> Result<Usage, InfoError> {
     let exe = resolve_claude();
     let mut cmd = Command::new(&exe);
     cmd.args([
@@ -440,6 +568,7 @@ pub fn usage(home: &Path) -> Result<Usage, InfoError> {
     if !home.as_os_str().is_empty() {
         cmd.current_dir(home);
     }
+    apply_account_profile(&mut cmd, profile)?;
     let mut child = cmd.spawn().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => InfoError::CliMissing,
         _ => InfoError::Failed(Some(e.to_string())),
@@ -506,6 +635,15 @@ pub fn usage(home: &Path) -> Result<Usage, InfoError> {
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 fn run(home: &Path, args: &[&str], timeout: Duration) -> Result<String, InfoError> {
+    run_with_profile(home, None, args, timeout)
+}
+
+fn run_with_profile(
+    home: &Path,
+    profile: Option<&Path>,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String, InfoError> {
     let exe = resolve_claude();
     let mut command = Command::new(&exe);
     command
@@ -517,6 +655,7 @@ fn run(home: &Path, args: &[&str], timeout: Duration) -> Result<String, InfoErro
     if !home.as_os_str().is_empty() {
         command.current_dir(home);
     }
+    apply_account_profile(&mut command, profile)?;
     let mut child = command.spawn().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => InfoError::CliMissing,
         _ => InfoError::Failed(Some(e.to_string())),
@@ -545,6 +684,22 @@ fn run(home: &Path, args: &[&str], timeout: Duration) -> Result<String, InfoErro
     Err(InfoError::Failed(Some(
         if err.is_empty() { out.trim() } else { err }.to_owned(),
     )))
+}
+
+fn apply_account_profile(cmd: &mut Command, profile: Option<&Path>) -> Result<(), InfoError> {
+    if let Some(profile) = verified_account_profile(profile)? {
+        for key in gsh_chat::settings::PROFILE_AUTH_ENV {
+            cmd.env_remove(key);
+        }
+        cmd.env(profiles::CONFIG_DIR, profile);
+    }
+    Ok(())
+}
+
+fn verified_account_profile(profile: Option<&Path>) -> Result<Option<PathBuf>, InfoError> {
+    profile
+        .map(|path| profiles::verify(path, false).map_err(|err| InfoError::Failed(Some(err))))
+        .transpose()
 }
 
 fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<String> {
@@ -782,6 +937,120 @@ mod tests {
         );
         assert!(parse_auth_status("[]").is_err());
         assert!(parse_auth_status("lixo").is_err());
+    }
+
+    #[test]
+    fn reads_extra_credits_from_the_cli_account_usage_payload() {
+        let body = Json::parse(
+            r#"{"rate_limits":{"limits":[{"kind":"session","percent":3},{"kind":"spend","is_active":true,"resets_at":"2026-10-01T00:00:00.000Z"}],"extra_usage":{"is_enabled":true,"utilization":54,"spend_limit_reached":false,"used_credits":27140,"monthly_limit":50000,"currency":"usd"}}}"#,
+        )
+        .unwrap();
+        let usage = parse_usage_reply(&body);
+        assert_eq!(usage.windows.len(), 1);
+        let extra = usage.extra.unwrap();
+        assert!(extra.enabled);
+        assert_eq!(extra.percent, Some(54.0));
+        assert!(!extra.spend_limit_reached);
+        assert_eq!(extra.resets_at, parse_iso8601("2026-10-01T00:00:00.000Z"));
+        let amounts = extra.amounts.unwrap();
+        assert_eq!(
+            amounts.format_minor(amounts.used_minor.unwrap()),
+            "271,40 USD"
+        );
+        assert_eq!(
+            amounts.format_minor(amounts.limit_minor.unwrap()),
+            "500,00 USD"
+        );
+        let body = Json::parse(
+            r#"{"rate_limits":{"extra_usage":{"is_enabled":false,"utilization":null,"spend_limit_reached":true}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_usage_reply(&body).extra,
+            Some(ExtraUsage {
+                enabled: false,
+                percent: None,
+                spend_limit_reached: true,
+                resets_at: None,
+                amounts: None,
+            })
+        );
+        let missing = Json::parse(r#"{"rate_limits":{"extra_usage":{}}}"#).unwrap();
+        assert_eq!(parse_usage_reply(&missing).extra, None);
+
+        let jpy = Json::parse(
+            r#"{"currency":"JPY","decimal_places":0,"used_credits":190,"monthly_limit":null}"#,
+        )
+        .unwrap();
+        let amounts = parse_extra_amounts(&jpy).unwrap();
+        assert_eq!(amounts.format_minor(amounts.used_minor.unwrap()), "190 JPY");
+        assert_eq!(amounts.limit_minor, None);
+        let invalid =
+            Json::parse(r#"{"currency":"USD","decimal_places":100,"used_credits":10}"#).unwrap();
+        assert_eq!(parse_extra_amounts(&invalid), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn profile_scopes_cli_command_and_removes_inherited_auth_overrides() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let profile = scratch.path().join("Conta oficial");
+        profiles::verify(&profile, true).unwrap();
+        let mut command = Command::new("claude");
+        for key in gsh_chat::settings::PROFILE_AUTH_ENV {
+            command.env(key, "test-override");
+        }
+        command.env("UNRELATED_TEST_SETTING", "keep");
+        apply_account_profile(&mut command, Some(&profile)).unwrap();
+        let env: BTreeMap<_, _> = command.get_envs().collect();
+        for key in gsh_chat::settings::PROFILE_AUTH_ENV {
+            assert_eq!(env.get(std::ffi::OsStr::new(key)), Some(&None));
+        }
+        assert_eq!(
+            env.get(std::ffi::OsStr::new(profiles::CONFIG_DIR)),
+            Some(&Some(profile.as_os_str()))
+        );
+        assert!(env.contains_key(std::ffi::OsStr::new("UNRELATED_TEST_SETTING")));
+
+        let mut default_account = Command::new("claude");
+        apply_account_profile(&mut default_account, None).unwrap();
+        assert_eq!(default_account.get_envs().count(), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn interactive_auth_uses_the_same_cli_scope_without_workspace_startup() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let profile = profiles::verify(&scratch.path().join("Conta oficial"), true).unwrap();
+        let exe = scratch.path().join("claude ' fixture");
+        std::fs::write(
+            &exe,
+            "#!/bin/sh\nprintf '%s|%s|%s|%s\n' \"$*\" \"$PWD\" \"$CLAUDE_CONFIG_DIR\" \"${ANTHROPIC_API_KEY+x}\" >> auth.log\n",
+        ).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let command = auth_terminal_with_exe(&exe, scratch.path(), Some(&profile)).unwrap();
+        let _session = gsh_term::TermSession::spawn(command, 80, 24).unwrap();
+        let expected = format!(
+            "auth login|{home}|{profile}|\n",
+            home = scratch.path().display(),
+            profile = profile.display(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let log = scratch.path().join("auth.log");
+        while std::fs::read_to_string(&log).as_deref().ok() != Some(expected.as_str()) {
+            assert!(
+                Instant::now() < deadline,
+                "{:?}",
+                std::fs::read_to_string(&log)
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]

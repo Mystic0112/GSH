@@ -1287,21 +1287,24 @@ mod nav_tests {
         let _ = s.update(Message::Claude(claude::Message::Select(claude::Tab::Usage)));
 
         // Estado não-logado / sem limites de plano (`rate_limits_available: false`):
-        let _ = s.update(Message::Claude(claude::Message::UsageLoaded(Ok(
-            claude::cli::Usage {
+        let _ = s.update(Message::Claude(claude::Message::UsageLoaded(
+            0,
+            Ok(claude::cli::Usage {
                 available: false,
                 subscription_type: None,
                 windows: Vec::new(),
-            },
-        ))));
+                extra: None,
+            }),
+        )));
         {
             let mut ui = simulator(Size::new(900.0, 600.0), super::view(&s));
             assert!(ui.find(labels::SETTINGS_USAGE_UNAVAILABLE).is_ok());
         }
 
         // Estado logado por assinatura (`rate_limits_available: true`):
-        let _ = s.update(Message::Claude(claude::Message::UsageLoaded(Ok(
-            claude::cli::Usage {
+        let _ = s.update(Message::Claude(claude::Message::UsageLoaded(
+            0,
+            Ok(claude::cli::Usage {
                 available: true,
                 subscription_type: Some(String::from("team")),
                 windows: vec![
@@ -1324,8 +1327,9 @@ mod nav_tests {
                         resets_at: Some(2_000_100_000),
                     },
                 ],
-            },
-        ))));
+                extra: None,
+            }),
+        )));
         {
             let mut ui = simulator(Size::new(900.0, 600.0), super::view(&s));
             assert!(ui.find(labels::SETTINGS_USAGE_PLAN_TEAM).is_ok());

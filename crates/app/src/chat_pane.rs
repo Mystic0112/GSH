@@ -261,6 +261,7 @@ pub struct ChatPane {
     binary: PathBuf,
     claude_profile: Result<Option<PathBuf>, String>,
     claude_profile_binding: Option<PathBuf>,
+    channel_instructions: String,
     items: Vec<ChatItem>,
     input: String,
     input_content: iced::widget::text_editor::Content,
@@ -313,6 +314,7 @@ impl ChatPane {
             binary: PathBuf::from(DEFAULT_CLAUDE_BINARY),
             claude_profile: Ok(None),
             claude_profile_binding: None,
+            channel_instructions: String::new(),
             items: Vec::new(),
             input: String::new(),
             input_content: iced::widget::text_editor::Content::new(),
@@ -365,6 +367,11 @@ impl ChatPane {
     pub fn with_defaults(mut self, mode: impl Into<String>, effort: impl Into<String>) -> Self {
         self.mode = mode.into();
         self.effort = Some(effort.into());
+        self
+    }
+
+    pub fn with_channel_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.channel_instructions = instructions.into();
         self
     }
 
@@ -1531,6 +1538,8 @@ impl ChatPane {
                     accept_peers: gsh_chat::settings::accept_peers_in(
                         self.claude_profile.as_ref().ok().and_then(Option::as_deref),
                     ),
+                    append_system_prompt: (!self.channel_instructions.trim().is_empty())
+                        .then(|| self.channel_instructions.clone()),
                     ..LaunchOptions::default()
                 },
             };
