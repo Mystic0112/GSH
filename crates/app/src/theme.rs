@@ -140,11 +140,24 @@ impl ThemeVariant {
 
 static ACTIVE_LIGHT: AtomicBool = AtomicBool::new(false);
 static ACTIVE_PALETTE: LazyLock<RwLock<Option<GshPalette>>> = LazyLock::new(|| RwLock::new(None));
+#[derive(Clone, Copy)]
+struct TerminalPalette {
+    foreground: Option<Color>,
+    background: Option<Color>,
+    cursor: Option<Color>,
+    selection: Option<Color>,
+    ansi: [Color; 16],
+}
+static ACTIVE_TERMINAL_PALETTE: LazyLock<RwLock<Option<TerminalPalette>>> =
+    LazyLock::new(|| RwLock::new(None));
 
 /// Troca a variante ativa; vale para o próximo `view`, sem reiniciar.
 pub fn set_active(variant: ThemeVariant) {
     ACTIVE_LIGHT.store(variant == ThemeVariant::Light, Ordering::Relaxed);
     *ACTIVE_PALETTE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    *ACTIVE_TERMINAL_PALETTE
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
@@ -166,7 +179,11 @@ pub fn set_imported_palette(spec: &str, variant: ThemeVariant) -> bool {
     let Some(ui) = selected.and_then(|v| v.get("ui")) else {
         return false;
     };
-    set_palette_tokens(ui, variant)
+    set_palette_tokens(
+        ui,
+        variant,
+        selected.and_then(|value| value.get("terminal")),
+    )
 }
 
 /// Aplica a paleta embarcada do registry Flutter, ou a paleta do arquivo importado.
@@ -194,10 +211,14 @@ pub fn set_theme_palette(id: &str, imported: Option<&str>, variant: ThemeVariant
     let Some(tokens) = theme.get(key).or_else(|| theme.get(base_key)) else {
         return false;
     };
-    set_palette_tokens(tokens, variant)
+    set_palette_tokens(tokens, variant, None)
 }
 
-fn set_palette_tokens(ui: &serde_json::Value, variant: ThemeVariant) -> bool {
+fn set_palette_tokens(
+    ui: &serde_json::Value,
+    variant: ThemeVariant,
+    terminal: Option<&serde_json::Value>,
+) -> bool {
     let mut palette = variant.palette();
     macro_rules! token {
         ($field:ident, $key:literal) => {
@@ -235,10 +256,53 @@ fn set_palette_tokens(ui: &serde_json::Value, variant: ThemeVariant) -> bool {
     token!(git_conflict, "gitConflict");
     token!(scrim, "scrim");
     token!(shadow, "shadow");
+    let mut terminal_palette = default_terminal_palette(variant);
+    if let Some(terminal) = terminal {
+        let terminal_color = |key: &str| {
+            terminal
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .and_then(parse_color)
+        };
+        terminal_palette.foreground = terminal_color("foreground");
+        terminal_palette.background = terminal_color("background");
+        terminal_palette.cursor = terminal_color("cursor");
+        terminal_palette.selection = terminal_color("selection");
+        for (index, name) in [
+            "black",
+            "red",
+            "green",
+            "yellow",
+            "blue",
+            "magenta",
+            "cyan",
+            "white",
+            "brightBlack",
+            "brightRed",
+            "brightGreen",
+            "brightYellow",
+            "brightBlue",
+            "brightMagenta",
+            "brightCyan",
+            "brightWhite",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if let Some(color) = terminal_color(name) {
+                if let Some(slot) = terminal_palette.ansi.get_mut(index) {
+                    *slot = color;
+                }
+            }
+        }
+    }
     ACTIVE_LIGHT.store(variant == ThemeVariant::Light, Ordering::Relaxed);
     *ACTIVE_PALETTE
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(palette);
+    *ACTIVE_TERMINAL_PALETTE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(terminal_palette);
     true
 }
 
@@ -272,6 +336,60 @@ pub fn active() -> ThemeVariant {
     } else {
         ThemeVariant::Dark
     }
+}
+
+fn default_terminal_palette(variant: ThemeVariant) -> TerminalPalette {
+    let ansi = match variant {
+        ThemeVariant::Dark => [
+            rgb_to_color(NamedColor::Black.to_rgb()),
+            rgb_to_color(NamedColor::Red.to_rgb()),
+            rgb_to_color(NamedColor::Green.to_rgb()),
+            rgb_to_color(NamedColor::Yellow.to_rgb()),
+            rgb_to_color(NamedColor::Blue.to_rgb()),
+            rgb_to_color(NamedColor::Magenta.to_rgb()),
+            rgb_to_color(NamedColor::Cyan.to_rgb()),
+            rgb_to_color(NamedColor::White.to_rgb()),
+            rgb_to_color(NamedColor::BrightBlack.to_rgb()),
+            rgb_to_color(NamedColor::BrightRed.to_rgb()),
+            rgb_to_color(NamedColor::BrightGreen.to_rgb()),
+            rgb_to_color(NamedColor::BrightYellow.to_rgb()),
+            rgb_to_color(NamedColor::BrightBlue.to_rgb()),
+            rgb_to_color(NamedColor::BrightMagenta.to_rgb()),
+            rgb_to_color(NamedColor::BrightCyan.to_rgb()),
+            rgb_to_color(NamedColor::BrightWhite.to_rgb()),
+        ],
+        ThemeVariant::Light => [
+            Color::from_rgb8(0x1a, 0x1a, 0x1f),
+            Color::from_rgb8(0xcf, 0x22, 0x2e),
+            Color::from_rgb8(0x1a, 0x7f, 0x37),
+            Color::from_rgb8(0x9a, 0x67, 0x00),
+            Color::from_rgb8(0x09, 0x69, 0xda),
+            Color::from_rgb8(0x82, 0x50, 0xdf),
+            Color::from_rgb8(0x1b, 0x7c, 0x83),
+            Color::from_rgb8(0x6e, 0x77, 0x81),
+            Color::from_rgb8(0x57, 0x60, 0x6a),
+            Color::from_rgb8(0xa4, 0x0e, 0x26),
+            Color::from_rgb8(0x11, 0x63, 0x29),
+            Color::from_rgb8(0x7d, 0x4e, 0x00),
+            Color::from_rgb8(0x05, 0x50, 0xae),
+            Color::from_rgb8(0x66, 0x39, 0xba),
+            Color::from_rgb8(0x31, 0x92, 0xaa),
+            Color::from_rgb8(0x24, 0x29, 0x2f),
+        ],
+    };
+    TerminalPalette {
+        foreground: None,
+        background: None,
+        cursor: None,
+        selection: None,
+        ansi,
+    }
+}
+
+fn active_terminal_palette() -> Option<TerminalPalette> {
+    *ACTIVE_TERMINAL_PALETTE
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Paleta ativa. Leia cores daqui em `view`, nunca em constante, para que a
@@ -577,6 +695,38 @@ pub const TERM_CELL_WIDTH: f32 = 8.0;
 pub const TERM_CELL_HEIGHT: f32 = 17.0;
 pub const TERM_PADDING_X: f32 = 8.0;
 pub const TERM_PADDING_Y: f32 = 8.0;
+
+/// Tokens de terminal derivados do tema ativo, inclusive paletas importadas.
+pub fn terminal_bg() -> Color {
+    active_terminal_palette()
+        .and_then(|terminal| terminal.background)
+        .unwrap_or_else(|| palette().panel)
+}
+
+pub fn terminal_fg() -> Color {
+    active_terminal_palette()
+        .and_then(|terminal| terminal.foreground)
+        .unwrap_or_else(|| palette().text)
+}
+
+pub fn terminal_cursor() -> Color {
+    active_terminal_palette()
+        .and_then(|terminal| terminal.cursor)
+        .unwrap_or_else(|| palette().accent)
+}
+
+pub fn terminal_cursor_text() -> Color {
+    terminal_bg()
+}
+
+pub fn terminal_selection() -> Color {
+    active_terminal_palette()
+        .and_then(|terminal| terminal.selection)
+        .unwrap_or_else(|| {
+            let accent = palette().accent;
+            Color { a: 0.33, ..accent }
+        })
+}
 
 // Métricas do chrome (`gsh_topbar.dart`, `projects_rail.dart`, `pane_view.dart`, `file_tree_panel.dart`)
 pub const TOPBAR_HEIGHT: f32 = 46.0;
@@ -989,20 +1139,57 @@ pub const fn rgb_to_color(rgb: Rgb) -> Color {
     Color::from_rgb8(rgb.r, rgb.g, rgb.b)
 }
 
-/// Resolve uma [`NamedColor`] ANSI para [`iced::Color`] na paleta dark do GSH.
-pub const fn named_to_color(named: NamedColor) -> Color {
-    rgb_to_color(named.to_rgb())
+/// Resolve uma [`NamedColor`] ANSI na paleta ativa do terminal.
+pub fn named_to_color(named: NamedColor) -> Color {
+    let index = match named {
+        NamedColor::Black | NamedColor::DimBlack => Some(0),
+        NamedColor::Red | NamedColor::DimRed => Some(1),
+        NamedColor::Green | NamedColor::DimGreen => Some(2),
+        NamedColor::Yellow | NamedColor::DimYellow => Some(3),
+        NamedColor::Blue | NamedColor::DimBlue => Some(4),
+        NamedColor::Magenta | NamedColor::DimMagenta => Some(5),
+        NamedColor::Cyan | NamedColor::DimCyan => Some(6),
+        NamedColor::White | NamedColor::DimWhite => Some(7),
+        NamedColor::BrightBlack => Some(8),
+        NamedColor::BrightRed => Some(9),
+        NamedColor::BrightGreen => Some(10),
+        NamedColor::BrightYellow => Some(11),
+        NamedColor::BrightBlue => Some(12),
+        NamedColor::BrightMagenta => Some(13),
+        NamedColor::BrightCyan => Some(14),
+        NamedColor::BrightWhite => Some(15),
+        NamedColor::Cursor => return terminal_cursor(),
+        NamedColor::BrightForeground | NamedColor::DimForeground => return terminal_fg(),
+    };
+    let Some(index) = index else {
+        return terminal_fg();
+    };
+    active_terminal_palette()
+        .unwrap_or_else(|| default_terminal_palette(active()))
+        .ansi
+        .get(index)
+        .copied()
+        .unwrap_or_else(|| rgb_to_color(named.to_rgb()))
 }
 
 /// Resolve um índice da paleta de 256 cores (`0..=255`) para [`iced::Color`].
-pub const fn indexed_to_color(idx: u8) -> Color {
-    rgb_to_color(indexed_to_rgb(idx))
+pub fn indexed_to_color(idx: u8) -> Color {
+    if idx < 16 {
+        active_terminal_palette()
+            .unwrap_or_else(|| default_terminal_palette(active()))
+            .ansi
+            .get(usize::from(idx))
+            .copied()
+            .unwrap_or_else(|| rgb_to_color(indexed_to_rgb(idx)))
+    } else {
+        rgb_to_color(indexed_to_rgb(idx))
+    }
 }
 
 /// Resolve um [`CellColor`] como cor de texto (foreground).
-pub const fn cell_fg_color(color: CellColor) -> Color {
+pub fn cell_fg_color(color: CellColor) -> Color {
     match color {
-        CellColor::Default => TERM_FG,
+        CellColor::Default => terminal_fg(),
         CellColor::Named(named) => named_to_color(named),
         CellColor::Indexed(idx) => indexed_to_color(idx),
         CellColor::Rgb(rgb) => rgb_to_color(rgb),
@@ -1011,7 +1198,7 @@ pub const fn cell_fg_color(color: CellColor) -> Color {
 
 /// Resolve um [`CellColor`] como cor de fundo (background).
 /// Retorna `None` quando a célula usa o fundo padrão do terminal.
-pub const fn cell_bg_color(color: CellColor) -> Option<Color> {
+pub fn cell_bg_color(color: CellColor) -> Option<Color> {
     match color {
         CellColor::Default => None,
         CellColor::Named(named) => Some(named_to_color(named)),
@@ -1021,11 +1208,11 @@ pub const fn cell_bg_color(color: CellColor) -> Option<Color> {
 }
 
 /// Retorna o par `(fg, bg)` efetivo de uma [`Cell`], aplicando `inverse` (SGR 7).
-pub const fn effective_cell_colors(cell: &Cell) -> (Color, Option<Color>) {
+pub fn effective_cell_colors(cell: &Cell) -> (Color, Option<Color>) {
     if cell.inverse {
         let fg = match cell_bg_color(cell.bg) {
             Some(color) => color,
-            None => TERM_BG,
+            None => terminal_bg(),
         };
         let bg = Some(cell_fg_color(cell.fg));
         (fg, bg)
@@ -1230,7 +1417,9 @@ mod tests {
 
     #[test]
     fn resolves_default_named_indexed_and_rgb_cell_colors() {
-        assert_eq!(cell_fg_color(CellColor::Default), TERM_FG);
+        let _guard = test_guard();
+        set_active(ThemeVariant::Dark);
+        assert_eq!(cell_fg_color(CellColor::Default), terminal_fg());
         assert_eq!(cell_bg_color(CellColor::Default), None);
 
         let red = cell_fg_color(CellColor::Named(NamedColor::Red));
@@ -1261,6 +1450,8 @@ mod tests {
 
     #[test]
     fn inverse_cell_swaps_foreground_and_background() {
+        let _guard = test_guard();
+        set_active(ThemeVariant::Dark);
         let normal = Cell {
             ch: 'A',
             fg: CellColor::Named(NamedColor::Green),
@@ -1278,10 +1469,31 @@ mod tests {
             ..normal
         };
         let (inv_fg, inv_bg) = effective_cell_colors(&inverted);
-        assert_eq!(inv_fg, TERM_BG);
+        assert_eq!(inv_fg, terminal_bg());
         assert_eq!(inv_bg, Some(named_to_color(NamedColor::Green)));
         assert_eq!(cell_font(true), TERM_FONT_BOLD);
         assert_eq!(cell_font(false), TERM_FONT);
+    }
+
+    #[test]
+    fn terminal_palette_tracks_light_and_imported_theme_colors() {
+        let _guard = test_guard();
+        set_active(ThemeVariant::Light);
+        assert_eq!(
+            named_to_color(NamedColor::Red),
+            Color::from_rgb8(0xcf, 0x22, 0x2e)
+        );
+        assert_eq!(indexed_to_color(4), Color::from_rgb8(0x09, 0x69, 0xda));
+        let imported = r##"{"variants":{"dark":{"ui":{"panel":"#111111","text":"#eeeeee","accent":"#123456"},"terminal":{"background":"#111111","foreground":"#eeeeee","cursor":"#abcdef","selection":"#22334455","red":"#102030"}}}}"##;
+        assert!(set_imported_palette(imported, ThemeVariant::Dark));
+        assert_eq!(terminal_bg(), Color::from_rgb8(0x11, 0x11, 0x11));
+        assert_eq!(terminal_fg(), Color::from_rgb8(0xee, 0xee, 0xee));
+        assert_eq!(terminal_cursor(), Color::from_rgb8(0xab, 0xcd, 0xef));
+        assert_eq!(
+            named_to_color(NamedColor::Red),
+            Color::from_rgb8(0x10, 0x20, 0x30)
+        );
+        set_active(ThemeVariant::Dark);
     }
 }
 

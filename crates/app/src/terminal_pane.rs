@@ -7,8 +7,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use gsh_term::{Cell, Cursor, GridPos, ShellCommand, TermSession, TermSnapshot};
-use iced::widget::{canvas, container, text};
-use iced::{clipboard, keyboard, Element, Fill, Subscription, Task};
+use iced::widget::{button, canvas, column, container, mouse_area, row, stack, text, Space};
+use iced::{
+    clipboard, keyboard, Background, Border, Element, Fill, Length, Subscription, Task, Theme,
+};
 
 use crate::labels;
 use crate::settings::claude::profiles;
@@ -18,7 +20,8 @@ pub use crate::terminal_grid::{
     CellMetrics, ScrollStep, SelectionRange, DEFAULT_COLS, DEFAULT_ROWS, MIN_COLS, MIN_ROWS,
 };
 pub use crate::terminal_input::{
-    classify_key_press, ctrl_char_byte, key_bytes, key_bytes_with_modifiers, named_key_bytes,
+    classify_key_press, classify_key_press_with_modes, ctrl_char_byte, key_bytes,
+    key_bytes_with_modifiers, key_bytes_with_terminal_modes, named_key_bytes, paste_bytes,
     KeyAction,
 };
 use crate::theme;
@@ -47,6 +50,23 @@ pub enum TerminalMsg {
     ClearSelection,
     /// Conteúdo lido da área de transferência após `Ctrl+Shift+V`.
     ClipboardLoaded(Option<String>),
+    /// Indica que a leitura de clipboard encontrou imagem.
+    ClipboardImageRead(bool),
+    /// Bytes de reporte de mouse destinados à TUI ativa.
+    MouseReport(Vec<u8>),
+    /// Abre o menu compartilhado de link no ponto do botão direito.
+    ShowLinkMenu {
+        target: crate::terminal_canvas::TerminalLinkTarget,
+        position: iced::Point,
+    },
+    /// Fecha o menu de link.
+    DismissLinkMenu,
+    /// Abre um link/caminho detectado no buffer.
+    OpenTerminalLink(crate::terminal_canvas::TerminalLinkTarget),
+    /// Revela a pasta do caminho detectado.
+    RevealTerminalPath(std::path::PathBuf),
+    /// Copia o link/caminho para a área de transferência.
+    CopyTerminalLink(String),
 }
 
 /// Estado e controlador de um pane de terminal.
@@ -62,6 +82,8 @@ pub struct TerminalPane {
     spawn_error: Option<String>,
     config: gsh_config::Config,
     pending_agent_enters: VecDeque<Instant>,
+    modifiers: keyboard::Modifiers,
+    link_menu: Option<(crate::terminal_canvas::TerminalLinkTarget, iced::Point)>,
 }
 
 impl Default for TerminalPane {
@@ -194,6 +216,8 @@ impl TerminalPane {
                 spawn_error: Some(error),
                 config,
                 pending_agent_enters: VecDeque::new(),
+                modifiers: keyboard::Modifiers::NONE,
+                link_menu: None,
             },
         }
     }
@@ -213,6 +237,8 @@ impl TerminalPane {
             spawn_error: None,
             config: gsh_config::Config::default(),
             pending_agent_enters: VecDeque::new(),
+            modifiers: keyboard::Modifiers::NONE,
+            link_menu: None,
         }
     }
 
@@ -246,6 +272,8 @@ impl TerminalPane {
             spawn_error: None,
             config: gsh_config::Config::default(),
             pending_agent_enters: VecDeque::new(),
+            modifiers: keyboard::Modifiers::NONE,
+            link_menu: None,
         }
     }
 
@@ -444,8 +472,18 @@ impl TerminalPane {
                 modified_key,
                 modifiers,
                 ..
-            }) => self.handle_key_press(&key, &modified_key, modifiers),
-            TerminalMsg::Keyboard(_) => Task::none(),
+            }) => {
+                self.modifiers = modifiers;
+                self.handle_key_press(&key, &modified_key, modifiers)
+            }
+            TerminalMsg::Keyboard(keyboard::Event::KeyReleased { modifiers, .. }) => {
+                self.modifiers = modifiers;
+                Task::none()
+            }
+            TerminalMsg::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
+                self.modifiers = modifiers;
+                Task::none()
+            }
             TerminalMsg::Resize(cols, rows) => {
                 if should_resize(self.size(), (cols, rows)) {
                     if let Some(session) = &self.session {
@@ -514,13 +552,48 @@ impl TerminalPane {
                 if !contents.is_empty() {
                     if let Some(session) = &self.session {
                         session.scroll_to_bottom();
-                        let _ = session.send(contents.as_bytes());
+                        let bytes = paste_bytes(&contents, session.input_modes().bracketed_paste);
+                        let _ = session.send(&bytes);
                         self.sync_snapshot();
                     }
                 }
                 Task::none()
             }
             TerminalMsg::ClipboardLoaded(None) => Task::none(),
+            TerminalMsg::ClipboardImageRead(true) => {
+                if let Some(session) = &self.session {
+                    session.scroll_to_bottom();
+                    let _ = session.send(b"\x16");
+                    self.sync_snapshot();
+                }
+                Task::none()
+            }
+            TerminalMsg::ClipboardImageRead(false) => {
+                clipboard::read().map(TerminalMsg::ClipboardLoaded)
+            }
+            TerminalMsg::MouseReport(bytes) => {
+                if let Some(session) = &self.session {
+                    let _ = session.send(&bytes);
+                    self.sync_snapshot();
+                }
+                Task::none()
+            }
+            TerminalMsg::ShowLinkMenu { target, position } => {
+                self.link_menu = Some((target, position));
+                Task::none()
+            }
+            TerminalMsg::DismissLinkMenu => {
+                self.link_menu = None;
+                Task::none()
+            }
+            TerminalMsg::CopyTerminalLink(value) => {
+                self.link_menu = None;
+                clipboard::write(value)
+            }
+            TerminalMsg::OpenTerminalLink(_) | TerminalMsg::RevealTerminalPath(_) => {
+                self.link_menu = None;
+                Task::none()
+            }
         }
     }
 
@@ -530,7 +603,22 @@ impl TerminalPane {
         modified_key: &keyboard::Key,
         modifiers: keyboard::Modifiers,
     ) -> Task<TerminalMsg> {
-        let Some(action) = classify_key_press(key, modified_key, modifiers) else {
+        if self.link_menu.is_some()
+            && matches!(
+                key.as_ref(),
+                keyboard::Key::Named(keyboard::key::Named::Escape)
+            )
+        {
+            self.link_menu = None;
+            return Task::none();
+        }
+        let application_cursor = self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.input_modes().application_cursor);
+        let Some(action) =
+            classify_key_press_with_modes(key, modified_key, modifiers, application_cursor)
+        else {
             return Task::none();
         };
 
@@ -541,7 +629,27 @@ impl TerminalPane {
                 }
                 Task::none()
             }
-            KeyAction::Paste => clipboard::read().map(TerminalMsg::ClipboardLoaded),
+            KeyAction::CopyOrInterrupt => {
+                if let Some(selected) = self.selected_text().filter(|s| !s.is_empty()) {
+                    return clipboard::write(selected);
+                }
+                if let Some(session) = &self.session {
+                    let _ = session.send(b"\x03");
+                    self.sync_snapshot();
+                }
+                Task::none()
+            }
+            KeyAction::Paste => Task::perform(
+                async {
+                    tokio::task::spawn_blocking(crate::chat_pane::read_clipboard_png)
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        .flatten()
+                        .is_some()
+                },
+                TerminalMsg::ClipboardImageRead,
+            ),
             KeyAction::Send(bytes) => {
                 if let Some(session) = &self.session {
                     if self.snapshot.display_offset > 0 {
@@ -578,10 +686,102 @@ impl TerminalPane {
             selection: self.selection,
             cache: &self.cache,
             metrics: self.metrics,
+            input_modes: self
+                .session
+                .as_ref()
+                .map_or_else(Default::default, TermSession::input_modes),
+            modifiers: self.modifiers,
+            cwd: self.cwd.as_deref(),
         };
 
-        canvas::Canvas::new(program).width(Fill).height(Fill).into()
+        let terminal = container(canvas::Canvas::new(program).width(Fill).height(Fill))
+            .padding(iced::Padding {
+                top: 8.0,
+                right: 0.0,
+                bottom: 8.0,
+                left: 10.0,
+            })
+            .width(Fill)
+            .height(Fill);
+        if let Some((target, position)) = &self.link_menu {
+            let actions = match target {
+                crate::terminal_canvas::TerminalLinkTarget::File { path, .. } => column![
+                    terminal_link_menu_button(
+                        "Abrir",
+                        TerminalMsg::OpenTerminalLink(target.clone())
+                    ),
+                    terminal_link_menu_button(
+                        "Abrir pasta",
+                        TerminalMsg::RevealTerminalPath(path.clone())
+                    ),
+                    terminal_link_menu_button(
+                        "Copiar caminho",
+                        TerminalMsg::CopyTerminalLink(path.display().to_string())
+                    ),
+                ],
+                crate::terminal_canvas::TerminalLinkTarget::Url(url) => column![
+                    terminal_link_menu_button(
+                        "Abrir link",
+                        TerminalMsg::OpenTerminalLink(target.clone())
+                    ),
+                    terminal_link_menu_button(
+                        "Copiar link",
+                        TerminalMsg::CopyTerminalLink(url.clone())
+                    ),
+                ],
+            }
+            .spacing(2);
+            let menu = container(actions)
+                .padding(6)
+                .width(Length::Fixed(180.0))
+                .style(|_: &Theme| container::Style {
+                    background: Some(Background::Color(theme::palette().panel2)),
+                    border: Border {
+                        color: theme::palette().border,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..Default::default()
+                });
+            let overlay = mouse_area(
+                container(column![
+                    Space::new().height(Length::Fixed(position.y + 8.0)),
+                    row![Space::new().width(Length::Fixed(position.x + 10.0)), menu],
+                ])
+                .width(Fill)
+                .height(Fill),
+            )
+            .on_press(TerminalMsg::DismissLinkMenu);
+            stack![terminal, overlay].width(Fill).height(Fill).into()
+        } else {
+            terminal.into()
+        }
     }
+}
+
+fn terminal_link_menu_button<'a>(
+    label: &'static str,
+    message: TerminalMsg,
+) -> iced::widget::Button<'a, TerminalMsg> {
+    button(text(label).size(12))
+        .width(Fill)
+        .padding(iced::Padding {
+            top: 5.0,
+            right: 8.0,
+            bottom: 5.0,
+            left: 8.0,
+        })
+        .on_press(message)
+        .style(|_: &Theme, status| button::Style {
+            background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                .then(|| Background::Color(theme::palette().panel3)),
+            text_color: theme::palette().text,
+            border: Border {
+                radius: 4.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
 }
 
 fn empty_snapshot(cols: u16, rows: u16) -> TermSnapshot {
@@ -610,6 +810,89 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    #[ignore = "gera snapshots visuais do terminal light e dark para revisão manual"]
+    fn terminal_theme_padding_snapshots() {
+        use iced_test::simulator::Simulator;
+
+        std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
+        let settings = iced::Settings {
+            fonts: theme::EMBEDDED_FONTS
+                .iter()
+                .map(|font| (*font).into())
+                .collect(),
+            default_font: theme::FONT_BODY,
+            ..Default::default()
+        };
+        let snapshot = empty_snapshot(20, 3);
+        let mut pane = TerminalPane::from_snapshot(snapshot);
+        if let Some(cell) = pane
+            .snapshot
+            .lines
+            .get_mut(0)
+            .and_then(|line| line.get_mut(0))
+        {
+            cell.ch = 'G';
+        }
+        if let Some(cell) = pane
+            .snapshot
+            .lines
+            .get_mut(0)
+            .and_then(|line| line.get_mut(1))
+        {
+            cell.ch = 'S';
+        }
+        if let Some(cell) = pane
+            .snapshot
+            .lines
+            .get_mut(0)
+            .and_then(|line| line.get_mut(2))
+        {
+            cell.ch = 'H';
+        }
+        pane.cache.clear();
+        for (variant, name, iced_theme) in [
+            (theme::ThemeVariant::Light, "light", iced::Theme::Light),
+            (theme::ThemeVariant::Dark, "dark", iced::Theme::Dark),
+        ] {
+            theme::set_active(variant);
+            pane.cache.clear();
+            let mut simulator =
+                Simulator::with_size(settings.clone(), iced::Size::new(420.0, 120.0), pane.view());
+            let target = std::path::PathBuf::from(format!(
+                "/home/heliodev/projetos/GSH-wt/shots/gsh-term-{name}.png"
+            ));
+            let generated = target.with_file_name(format!("gsh-term-{name}-tiny-skia.png"));
+            let _ = std::fs::remove_file(&target);
+            let _ = std::fs::remove_file(&generated);
+            simulator
+                .snapshot(&iced_theme)
+                .expect("render terminal theme snapshot")
+                .matches_image(&target)
+                .expect("write terminal theme snapshot");
+            std::fs::rename(generated, target).expect("rename terminal theme snapshot");
+        }
+        pane.link_menu = Some((
+            crate::terminal_canvas::TerminalLinkTarget::Url("https://example.test".to_owned()),
+            iced::Point::new(35.0, 24.0),
+        ));
+        pane.cache.clear();
+        let mut simulator =
+            Simulator::with_size(settings, iced::Size::new(420.0, 120.0), pane.view());
+        let target =
+            std::path::Path::new("/home/heliodev/projetos/GSH-wt/shots/gsh-term-link-menu.png");
+        let generated = target.with_file_name("gsh-term-link-menu-tiny-skia.png");
+        let _ = std::fs::remove_file(target);
+        let _ = std::fs::remove_file(&generated);
+        simulator
+            .snapshot(&iced::Theme::Dark)
+            .expect("render terminal link menu snapshot")
+            .matches_image(target)
+            .expect("write terminal link menu snapshot");
+        std::fs::rename(generated, target).expect("rename terminal link menu snapshot");
+        theme::set_active(theme::ThemeVariant::Dark);
+    }
+
     fn key_press_msg(key: keyboard::Key, modifiers: keyboard::Modifiers) -> TerminalMsg {
         TerminalMsg::Keyboard(keyboard::Event::KeyPressed {
             modified_key: key.clone(),
@@ -620,6 +903,84 @@ mod tests {
             text: None,
             repeat: false,
         })
+    }
+
+    #[test]
+    fn terminal_link_detection_accepts_http_and_rejects_unsupported_schemes() {
+        let mut snapshot = empty_snapshot(80, 1);
+        let line = "go https://example.test/path, file://localhost/tmp/a";
+        if let Some(cells) = snapshot.lines.get_mut(0) {
+            for (index, ch) in line.chars().enumerate() {
+                if let Some(cell) = cells.get_mut(index) {
+                    cell.ch = ch;
+                }
+            }
+        }
+        assert_eq!(
+            crate::terminal_canvas::terminal_link_at(
+                &snapshot,
+                gsh_term::GridPos::new(0, 12),
+                None,
+            ),
+            Some(crate::terminal_canvas::TerminalLinkTarget::Url(
+                "https://example.test/path".to_owned()
+            ))
+        );
+        assert_eq!(
+            crate::terminal_canvas::terminal_link_at(
+                &snapshot,
+                gsh_term::GridPos::new(0, 41),
+                None,
+            ),
+            None
+        );
+        let mut path_snapshot = empty_snapshot(80, 1);
+        let file_token = "crates/app/src/main.rs:42";
+        if let Some(cells) = path_snapshot.lines.get_mut(0) {
+            for (index, ch) in file_token.chars().enumerate() {
+                if let Some(cell) = cells.get_mut(index) {
+                    cell.ch = ch;
+                }
+            }
+        }
+        assert_eq!(
+            crate::terminal_canvas::terminal_link_at(
+                &path_snapshot,
+                gsh_term::GridPos::new(0, 8),
+                Some(std::path::Path::new("/home/heliodev/projetos/GSH-wt/term1")),
+            ),
+            Some(crate::terminal_canvas::TerminalLinkTarget::File {
+                path: std::path::PathBuf::from(
+                    "/home/heliodev/projetos/GSH-wt/term1/crates/app/src/main.rs"
+                ),
+                line: Some(42),
+            })
+        );
+    }
+
+    #[test]
+    fn terminal_link_menu_publishes_exact_copy_action() {
+        use iced_test::simulator::Simulator;
+
+        let mut pane = TerminalPane::from_snapshot(empty_snapshot(80, 24));
+        pane.link_menu = Some((
+            crate::terminal_canvas::TerminalLinkTarget::Url("https://example.test".into()),
+            iced::Point::new(5.0, 5.0),
+        ));
+        let settings = iced::Settings {
+            fonts: theme::EMBEDDED_FONTS
+                .iter()
+                .map(|font| (*font).into())
+                .collect(),
+            default_font: theme::FONT_BODY,
+            ..Default::default()
+        };
+        let mut ui = Simulator::with_size(settings, iced::Size::new(400.0, 240.0), pane.view());
+        ui.click("Copiar link").expect("item copiar link");
+        assert!(ui.into_messages().any(|message| matches!(
+            message,
+            TerminalMsg::CopyTerminalLink(url) if url == "https://example.test"
+        )));
     }
 
     #[test]

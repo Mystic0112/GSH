@@ -1803,13 +1803,20 @@ fn open_external_url(url: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+pub(crate) fn open_terminal_url(url: &str) -> Result<(), String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("terminal link must use http or https".to_owned());
+    }
+    open_external_url(url)
+}
+
 fn is_supported_external_url(url: &str) -> bool {
     ["https://", "http://", "mailto:"]
         .iter()
         .any(|scheme| url.starts_with(scheme))
 }
 
-fn read_clipboard_png() -> Result<Option<Vec<u8>>, String> {
+pub(crate) fn read_clipboard_png() -> Result<Option<Vec<u8>>, String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     let image = match clipboard.get_image() {
         Ok(image) => image,

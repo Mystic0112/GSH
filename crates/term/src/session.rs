@@ -12,7 +12,8 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{
-    point_to_viewport, viewport_to_point, Config as TermConfig, Term, MIN_COLUMNS, MIN_SCREEN_LINES,
+    point_to_viewport, viewport_to_point, Config as TermConfig, Term, TermMode, MIN_COLUMNS,
+    MIN_SCREEN_LINES,
 };
 use alacritty_terminal::vte::ansi::Processor;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -30,6 +31,32 @@ pub const DEFAULT_UNIX_SHELL: &str = "/bin/bash";
 
 /// Shell padrão de fallback no Windows.
 pub const DEFAULT_WINDOWS_SHELL: &str = "cmd.exe";
+
+/// Modos de entrada publicados pelo emulador VT para a camada de UI.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TerminalInputModes {
+    pub application_cursor: bool,
+    pub bracketed_paste: bool,
+    pub mouse_click: bool,
+    pub mouse_drag: bool,
+    pub mouse_motion: bool,
+    pub mouse_sgr: bool,
+    pub mouse_utf8: bool,
+}
+
+impl From<&TermMode> for TerminalInputModes {
+    fn from(mode: &TermMode) -> Self {
+        Self {
+            application_cursor: mode.contains(TermMode::APP_CURSOR),
+            bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
+            mouse_click: mode.contains(TermMode::MOUSE_REPORT_CLICK),
+            mouse_drag: mode.contains(TermMode::MOUSE_DRAG),
+            mouse_motion: mode.contains(TermMode::MOUSE_MOTION),
+            mouse_sgr: mode.contains(TermMode::SGR_MOUSE),
+            mouse_utf8: mode.contains(TermMode::UTF8_MOUSE),
+        }
+    }
+}
 
 /// Retorna o shell padrão da plataforma atual (`/bin/bash` no Unix,
 /// `pwsh.exe` ou `cmd.exe` no Windows).
@@ -511,6 +538,12 @@ impl TermSession {
         state.snapshot()
     }
 
+    /// Modos VT que controlam a codificação de teclas, colagem e mouse.
+    pub fn input_modes(&self) -> TerminalInputModes {
+        let (lock, _) = &*self.state;
+        TerminalInputModes::from(lock_unpoisoned(lock).term.mode())
+    }
+
     /// Lê uma página do buffer ativo sem mudar o scroll ou a seleção.
     pub fn output_page(
         &self,
@@ -788,6 +821,23 @@ mod tests {
         assert_eq!(listener.title().as_deref(), Some("~/projeto/agente"));
         listener.send_event(Event::ResetTitle);
         assert_eq!(listener.title(), None);
+    }
+
+    #[test]
+    fn terminal_input_modes_follow_decset_and_decrst() {
+        let mut state = EmulatorState::new(80, 24, 1000);
+        state.advance(b"\x1b[?1h\x1b[?2004h\x1b[?1002h\x1b[?1006h");
+        let modes = TerminalInputModes::from(state.term.mode());
+        assert!(modes.application_cursor);
+        assert!(modes.bracketed_paste);
+        assert!(modes.mouse_drag);
+        assert!(modes.mouse_sgr);
+        state.advance(b"\x1b[?1l\x1b[?2004l\x1b[?1002l\x1b[?1006l");
+        let modes = TerminalInputModes::from(state.term.mode());
+        assert!(!modes.application_cursor);
+        assert!(!modes.bracketed_paste);
+        assert!(!modes.mouse_drag);
+        assert!(!modes.mouse_sgr);
     }
     use crate::snapshot::{NamedColor, Rgb, TermColor};
 
