@@ -23,6 +23,15 @@ pub struct ClosedPane {
     pub fresh_terminal: Option<TermId>,
 }
 
+/// Direção do foco entre panes (`PaneMove` de `pane_node.dart`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneMove {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 pub struct PaneTree {
     grid: pane_grid::State<PaneModel>,
     focused: Pane,
@@ -273,6 +282,79 @@ impl PaneTree {
     pub fn retitle_telemetry_case(&mut self, fingerprint: &str, title: &str) {
         for (_, model) in self.grid.iter_mut() {
             model.retitle_telemetry_case(fingerprint, title);
+        }
+    }
+
+    /// Pane vizinho de `from` na direção `movement` (`neighborLeaf` do Flutter): sobe até o
+    /// ancestral do eixo certo em que `from` está do lado de partida, cruza para o irmão e desce
+    /// colando na borda compartilhada (no eixo cruzado pega sempre o primeiro). ←→ andam em
+    /// divisões lado a lado, ↑↓ nas empilhadas.
+    pub fn neighbor(&self, from: Pane, movement: PaneMove) -> Option<Pane> {
+        fn path(node: &Node, target: Pane) -> Option<Vec<(&Node, bool)>> {
+            match node {
+                Node::Pane(pane) => (*pane == target).then(Vec::new),
+                Node::Split { a, b, .. } => {
+                    let (took_a, mut rest) = match path(a, target) {
+                        Some(rest) => (true, rest),
+                        None => (false, path(b, target)?),
+                    };
+                    rest.insert(0, (node, took_a));
+                    Some(rest)
+                }
+            }
+        }
+        fn nearest(node: &Node, axis: Axis, prefer_a: bool) -> Option<Pane> {
+            match node {
+                Node::Pane(pane) => Some(*pane),
+                Node::Split {
+                    axis: split_axis,
+                    a,
+                    b,
+                    ..
+                } => nearest(
+                    if *split_axis == axis && !prefer_a {
+                        b
+                    } else {
+                        a
+                    },
+                    axis,
+                    prefer_a,
+                ),
+            }
+        }
+        let axis = match movement {
+            PaneMove::Left | PaneMove::Right => Axis::Vertical,
+            PaneMove::Up | PaneMove::Down => Axis::Horizontal,
+        };
+        // direita/baixo = ir do lado `a` para o `b`
+        let toward_b = matches!(movement, PaneMove::Right | PaneMove::Down);
+        for (node, took_a) in path(self.grid.layout(), from)?.into_iter().rev() {
+            let Node::Split {
+                axis: split_axis,
+                a,
+                b,
+                ..
+            } = node
+            else {
+                continue;
+            };
+            if *split_axis != axis {
+                continue;
+            }
+            if toward_b && took_a {
+                return nearest(b, axis, true);
+            }
+            if !toward_b && !took_a {
+                return nearest(a, axis, false);
+            }
+        }
+        None
+    }
+
+    /// Foca o vizinho na direção `movement` (`focusPaneToward`): sem vizinho não muda nada.
+    pub fn focus_toward(&mut self, movement: PaneMove) {
+        if let Some(target) = self.neighbor(self.focused, movement) {
+            self.focus(target);
         }
     }
 
@@ -655,5 +737,57 @@ mod tests {
             tree.model(only).map(PaneModel::tabs),
             Some(&[PaneTab::Terminal(1)][..])
         );
+    }
+
+    #[test]
+    fn foco_direcional_anda_pelos_eixos_certos_como_neighbor_leaf() {
+        // [A | (B / C)]: A à esquerda; B em cima e C embaixo, à direita
+        let mut tree = PaneTree::default();
+        let a = tree.focused();
+        tree.split_with_terminal(a, Axis::Vertical);
+        let b = tree.focused();
+        tree.split_with_terminal(b, Axis::Horizontal);
+        let c = tree.focused();
+        assert_eq!(tree.neighbor(a, PaneMove::Right), Some(b));
+        assert_eq!(tree.neighbor(a, PaneMove::Left), None);
+        assert_eq!(tree.neighbor(a, PaneMove::Down), None);
+        assert_eq!(tree.neighbor(b, PaneMove::Left), Some(a));
+        assert_eq!(tree.neighbor(b, PaneMove::Down), Some(c));
+        assert_eq!(tree.neighbor(b, PaneMove::Right), None);
+        assert_eq!(tree.neighbor(c, PaneMove::Up), Some(b));
+        assert_eq!(tree.neighbor(c, PaneMove::Left), Some(a));
+        assert_eq!(tree.neighbor(c, PaneMove::Down), None);
+    }
+
+    #[test]
+    fn foco_direcional_desce_para_o_primeiro_pane_no_eixo_cruzado() {
+        // [A / (B | C)]: A em cima; B e C lado a lado embaixo
+        let mut tree = PaneTree::default();
+        let a = tree.focused();
+        tree.split_with_terminal(a, Axis::Horizontal);
+        let b = tree.focused();
+        tree.split_with_terminal(b, Axis::Vertical);
+        let c = tree.focused();
+        assert_eq!(tree.neighbor(c, PaneMove::Up), Some(a));
+        // de A para baixo cruza para o irmão e cai no primeiro folha (B)
+        assert_eq!(tree.neighbor(a, PaneMove::Down), Some(b));
+        assert_eq!(tree.neighbor(c, PaneMove::Left), Some(b));
+        assert_eq!(tree.neighbor(b, PaneMove::Right), Some(c));
+    }
+
+    #[test]
+    fn focar_na_direcao_move_o_foco_e_sem_vizinho_nao_faz_nada() {
+        let mut tree = PaneTree::default();
+        let a = tree.focused();
+        tree.focus_toward(PaneMove::Right);
+        assert_eq!(tree.focused(), a, "um pane só não tem vizinho");
+        tree.split_with_terminal(a, Axis::Vertical);
+        let b = tree.focused();
+        tree.focus_toward(PaneMove::Left);
+        assert_eq!(tree.focused(), a);
+        tree.focus_toward(PaneMove::Left);
+        assert_eq!(tree.focused(), a, "na borda não cicla");
+        tree.focus_toward(PaneMove::Right);
+        assert_eq!(tree.focused(), b);
     }
 }

@@ -641,6 +641,8 @@ enum Msg {
     OpenTabList(Pane),
     CloseTabList,
     ToggleAppMenu,
+    OpenAppSubmenu(&'static str),
+    CloseAppSubmenu,
     CloseAppMenu,
     ToggleChannelPopup,
     CloseChannelPopup,
@@ -793,6 +795,25 @@ fn menu_shortcut_matches(
         && expected_key.is_some_and(|expected| {
             actual_key.is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
         })
+}
+
+/// Ctrl+Alt+seta: foca o pane vizinho (`_handlePaneNavKey` do Flutter; o ⌘ é do macOS).
+fn pane_move_shortcut(
+    key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+) -> Option<pane_tree::PaneMove> {
+    use iced::keyboard::key::Named;
+    use pane_tree::PaneMove;
+    if !modifiers.control() || !modifiers.alt() || modifiers.shift() {
+        return None;
+    }
+    match key.as_ref() {
+        iced::keyboard::Key::Named(Named::ArrowLeft) => Some(PaneMove::Left),
+        iced::keyboard::Key::Named(Named::ArrowRight) => Some(PaneMove::Right),
+        iced::keyboard::Key::Named(Named::ArrowUp) => Some(PaneMove::Up),
+        iced::keyboard::Key::Named(Named::ArrowDown) => Some(PaneMove::Down),
+        _ => None,
+    }
 }
 
 fn is_close_tab_shortcut(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> bool {
@@ -956,6 +977,8 @@ struct Shell {
     /// Último clique numa aba de terminal, para o duplo clique que renomeia.
     last_tab_click: Option<(Pane, TermId, Instant)>,
     app_menu_open: bool,
+    /// Submenu aberto do menu do app (`Focar Painel`, `Selecionar Aba`).
+    app_submenu: Option<&'static str>,
     tab_drag_source: Option<(Pane, usize)>,
     tab_drag_target: Option<(Pane, usize, bool)>,
     tab_drag_origin: Option<iced::Point>,
@@ -1242,6 +1265,7 @@ impl Default for Shell {
             pending_close_tabs: None,
             last_tab_click: None,
             app_menu_open: false,
+            app_submenu: None,
             tab_drag_source: None,
             tab_drag_target: None,
             tab_drag_origin: None,
@@ -6526,10 +6550,20 @@ impl Shell {
             }
             Msg::ToggleAppMenu => {
                 self.app_menu_open = !self.app_menu_open;
+                self.app_submenu = None;
                 Task::none()
             }
             Msg::CloseAppMenu => {
                 self.app_menu_open = false;
+                self.app_submenu = None;
+                Task::none()
+            }
+            Msg::OpenAppSubmenu(name) => {
+                self.app_submenu = Some(name);
+                Task::none()
+            }
+            Msg::CloseAppSubmenu => {
+                self.app_submenu = None;
                 Task::none()
             }
             Msg::ToggleChannelPopup => {
@@ -6546,11 +6580,19 @@ impl Shell {
             }
             Msg::AppMenuAction(message) => {
                 self.app_menu_open = false;
+                self.app_submenu = None;
                 self.update_inner(*message)
             }
             Msg::AppMenuShortcut(key, modifiers) if is_close_tab_shortcut(&key, modifiers) => {
                 let active = self.panes.focused_model().active_index();
                 active.map_or_else(Task::none, |index| self.update_inner(Msg::CloseTab(index)))
+            }
+            Msg::AppMenuShortcut(key, modifiers)
+                if pane_move_shortcut(&key, modifiers).is_some() =>
+            {
+                pane_move_shortcut(&key, modifiers)
+                    .and_then(|movement| self.panes.neighbor(self.panes.focused(), movement))
+                    .map_or_else(Task::none, |pane| self.update_inner(Msg::FocusPane(pane)))
             }
             Msg::AppMenuShortcut(key, modifiers) => self
                 .app_menu_shortcut_action(&key, modifiers)
@@ -6795,7 +6837,11 @@ impl Shell {
                 ref key,
                 modifiers,
                 ..
-            })) if self.app_menu_shortcut_action(key, modifiers).is_some() => Task::none(),
+            })) if self.app_menu_shortcut_action(key, modifiers).is_some()
+                || pane_move_shortcut(key, modifiers).is_some() =>
+            {
+                Task::none()
+            }
             Msg::Terminal(term_msg) => {
                 let mut command_tasks = Vec::new();
                 if matches!(term_msg, TerminalMsg::Tick) {
@@ -9665,32 +9711,51 @@ impl Shell {
     }
 
     fn app_menu_groups(&self) -> Vec<topbar::AppMenu<Msg>> {
+        let item = |entry: &app_menu_model::Entry| {
+            let binding = app_menu_model::binding(entry, &self.settings.current.shortcuts)
+                .filter(|value| app_menu_model::valid_binding(value));
+            let on_press = self
+                .app_menu_message(entry.action)
+                .map(|message| Msg::AppMenuAction(Box::new(message)));
+            crate::app_menu::Item::Entry(crate::app_menu::Entry {
+                label: entry.label.to_owned(),
+                description: None,
+                leading: None,
+                selected: false,
+                danger: false,
+                shortcut: binding.map(ToOwned::to_owned),
+                requires_credits: false,
+                submenu: false,
+                on_press,
+            })
+        };
         ["GSH", "Arquivo", "Exibir", "Janela"]
             .into_iter()
-            .map(|title| topbar::AppMenu {
-                items: app_menu_model::ENTRIES
-                    .iter()
-                    .filter(|entry| entry.group == title)
-                    .map(|entry| {
-                        let binding =
-                            app_menu_model::binding(entry, &self.settings.current.shortcuts)
-                                .filter(|value| app_menu_model::valid_binding(value));
-                        let on_press = self
-                            .app_menu_message(entry.action)
-                            .map(|message| Msg::AppMenuAction(Box::new(message)));
-                        let item = crate::app_menu::Entry {
-                            label: entry.label.to_owned(),
-                            description: None,
-                            leading: None,
-                            selected: false,
-                            danger: false,
-                            shortcut: binding.map(ToOwned::to_owned),
-                            requires_credits: false,
-                            on_press,
-                        };
-                        crate::app_menu::Item::Entry(item)
-                    })
-                    .collect(),
+            .map(|title| {
+                let mut items: Vec<crate::app_menu::Item<Msg>> = Vec::new();
+                let mut opened: Vec<&'static str> = Vec::new();
+                for entry in app_menu_model::ENTRIES.iter().filter(|e| e.group == title) {
+                    match entry.submenu {
+                        None => items.push(item(entry)),
+                        // o submenu nasce no lugar do primeiro item dele e leva todos os do mesmo nome
+                        Some(name) if !opened.contains(&name) => {
+                            opened.push(name);
+                            items.push(crate::app_menu::Item::Submenu(crate::app_menu::Submenu {
+                                label: name.to_owned(),
+                                items: app_menu_model::ENTRIES
+                                    .iter()
+                                    .filter(|e| e.group == title && e.submenu == Some(name))
+                                    .map(item)
+                                    .collect(),
+                                open: self.app_submenu == Some(name),
+                                on_open: Msg::OpenAppSubmenu(name),
+                                on_close: Msg::CloseAppSubmenu,
+                            }));
+                        }
+                        Some(_) => {}
+                    }
+                }
+                topbar::AppMenu { items }
             })
             .collect()
     }
@@ -9761,6 +9826,10 @@ impl Shell {
             app_menu_model::Action::ActualSize => Some(Msg::Settings(
                 settings::Message::InterfaceSizeChanged("14".to_owned()),
             )),
+            app_menu_model::Action::FocusPane(movement) => self
+                .panes
+                .neighbor(self.panes.focused(), movement)
+                .map(Msg::FocusPane),
             app_menu_model::Action::SelectTab(index) => Some(Msg::SelectTab(usize::from(index))),
             app_menu_model::Action::SelectLastTab => Some(Msg::SelectTab(
                 self.panes.focused_model().tabs().len().saturating_sub(1),
@@ -10464,6 +10533,8 @@ fn main() -> iced::Result {
 }
 
 #[cfg(test)]
+mod app_menu_panes_shell_tests;
+#[cfg(test)]
 mod db_interaction_tests;
 #[cfg(test)]
 mod dirty_close_shell_tests;
@@ -10667,6 +10738,7 @@ mod tests {
             pending_close_tabs: None,
             last_tab_click: None,
             app_menu_open: false,
+            app_submenu: None,
             tab_drag_source: None,
             tab_drag_target: None,
             tab_drag_origin: None,

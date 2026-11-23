@@ -26,6 +26,8 @@ pub struct Entry<M> {
     pub danger: bool,
     pub shortcut: Option<String>,
     pub requires_credits: bool,
+    /// Item que abre um submenu: ganha a seta à direita.
+    pub submenu: bool,
     /// `None` = item cinza, não clicável.
     pub on_press: Option<M>,
 }
@@ -34,6 +36,18 @@ pub enum Item<M> {
     Entry(Entry<M>),
     Divider,
     Custom(Element<'static, M>),
+    /// Item com seta que abre `items` ao lado (hover ou clique), como o `MenuBarMenu` aninhado.
+    Submenu(Submenu<M>),
+}
+
+pub struct Submenu<M> {
+    pub label: String,
+    pub items: Vec<Item<M>>,
+    pub open: bool,
+    /// Passar o mouse ou clicar no item.
+    pub on_open: M,
+    /// Clique fora, Esc ou o mouse saindo do corredor até o submenu.
+    pub on_close: M,
 }
 
 impl<M> Entry<M> {
@@ -46,6 +60,7 @@ impl<M> Entry<M> {
             danger: false,
             shortcut: None,
             requires_credits: false,
+            submenu: false,
             on_press: Some(on_press),
         }
     }
@@ -92,6 +107,7 @@ impl<M> Entry<M> {
             danger: false,
             shortcut: None,
             requires_credits: false,
+            submenu: false,
             on_press,
         }
     }
@@ -117,6 +133,7 @@ pub fn menu<'a, M: Clone + 'a>(items: Vec<Item<M>>, min_width: f32) -> Element<'
                     .map_or(0, |description| description.chars().count())
                     .max(entry.label.chars().count()),
             ),
+            Item::Submenu(submenu) => Some(submenu.label.chars().count()),
             Item::Divider | Item::Custom(_) => None,
         })
         .max()
@@ -131,6 +148,7 @@ pub fn menu<'a, M: Clone + 'a>(items: Vec<Item<M>>, min_width: f32) -> Element<'
                 .into(),
             Item::Custom(content) => content,
             Item::Entry(entry) => entry_view(entry),
+            Item::Submenu(submenu) => submenu_view(submenu, min_width),
         });
     }
     container(list)
@@ -152,6 +170,33 @@ pub fn menu<'a, M: Clone + 'a>(items: Vec<Item<M>>, min_width: f32) -> Element<'
         })
         .into()
 }
+
+/// Item com seta; aberto, o submenu nasce ao lado (`Anchored::side`) e fecha ao sair do corredor.
+fn submenu_view<'a, M: Clone + 'a>(submenu: Submenu<M>, min_width: f32) -> Element<'a, M> {
+    let Submenu {
+        label,
+        items,
+        open,
+        on_open,
+        on_close,
+    } = submenu;
+    let trigger = iced::widget::mouse_area(entry_view(Entry {
+        submenu: true,
+        ..Entry::new(label, on_open.clone())
+    }))
+    .on_enter(on_open);
+    crate::anchored::Anchored::new(
+        trigger,
+        open.then(|| menu(items, min_width.min(SUBMENU_MIN_WIDTH))),
+        on_close.clone(),
+    )
+    .side()
+    .on_escape(on_close)
+    .into()
+}
+
+/// Largura mínima do submenu (o item mais longo manda).
+const SUBMENU_MIN_WIDTH: f32 = 140.0;
 
 fn entry_view<'a, M: Clone + 'a>(entry: Entry<M>) -> Element<'a, M> {
     let palette = theme::palette();
@@ -234,7 +279,14 @@ fn entry_view<'a, M: Clone + 'a>(entry: Entry<M>) -> Element<'a, M> {
                         }),
                 );
     }
-    if entry.selected || entry.shortcut.is_some() {
+    if entry.submenu {
+        content = content.push(Space::new().width(Fill)).push(
+            text(labels::ICON_CHEVRON_RIGHT)
+                .font(theme::FONT_ICON)
+                .size(theme::AGENT_MENU_CHECK_SIZE)
+                .color(palette.text3),
+        );
+    } else if entry.selected || entry.shortcut.is_some() {
         content = content
             .push(Space::new().width(Fill))
             .push(if entry.selected {
