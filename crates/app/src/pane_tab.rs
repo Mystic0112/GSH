@@ -1,6 +1,8 @@
 use crate::{db_engine_icon, labels, pane_model::PaneTab, pane_strip::hairline_v, theme};
 use gsh_db::Engine;
-use iced::widget::{button, column, container, mouse_area, row, svg, text, text_input, Space};
+use iced::widget::{
+    button, column, container, mouse_area, responsive, row, svg, text, text_input, Space,
+};
 use iced::{Alignment, Background, Border, Color, Element, Fill, Length, Point, Theme};
 
 pub(crate) fn drag_feedback<'a, M: 'a>(
@@ -182,6 +184,8 @@ fn indicator_view<'a, M: 'a>(
 }
 
 pub(crate) struct TabPresentation {
+    /// Balão com o título completo ao pairar (`AppTooltip(message: displayTitle)`).
+    pub show_tooltip: bool,
     pub indicator: Option<TabIndicator>,
     /// Relógio da animação (ms) do spinner e do pisca.
     pub anim_ms: u64,
@@ -238,6 +242,7 @@ where
         rename,
     } = actions;
     let TabPresentation {
+        show_tooltip,
         indicator,
         anim_ms,
         title,
@@ -280,6 +285,14 @@ where
         }
     } else {
         match tab {
+            // `FileTypeIcon.file(nome, size: 15)`: o SVG do tema pelo nome do arquivo
+            PaneTab::File(path) => crate::file_icons::view_sized_opacity(
+                &crate::pane_model::file_display_name(path),
+                false,
+                false,
+                theme::PANE_FILE_TAB_ICON_SIZE,
+                drag_alpha,
+            ),
             PaneTab::Redis { .. } => db_engine_icon::view(Engine::Redis, theme::PANE_TAB_ICON_SIZE),
             PaneTab::Mongo { .. } => db_engine_icon::view(Engine::Mongo, theme::PANE_TAB_ICON_SIZE),
             _ => text(tab.icon())
@@ -310,16 +323,35 @@ where
             .width(Fill)
             .style(rename_input_style)
             .into(),
-        None => container(
-            text(title)
-                .font(theme::FONT_TAB)
-                .size(theme::SIZE_TAB)
-                .color(title_color)
-                .wrapping(text::Wrapping::None),
-        )
-        .width(Fill)
-        .clip(true)
-        .into(),
+        None => {
+            let tooltip_title = title.clone();
+            // `TextOverflow.ellipsis`: o corte depende da largura que sobra ao título
+            let label: Element<'a, M> = responsive(move |size| {
+                container(
+                    text(ellipsize_to_width(&title, size.width))
+                        .font(theme::FONT_TAB)
+                        .size(theme::SIZE_TAB)
+                        .color(title_color)
+                        .wrapping(text::Wrapping::None),
+                )
+                .height(Fill)
+                .align_y(Alignment::Center)
+                .into()
+            })
+            .width(Fill)
+            .height(Fill)
+            .into();
+            if show_tooltip {
+                iced::widget::tooltip(
+                    label,
+                    crate::pane_chrome::tip_bubble(tooltip_title),
+                    iced::widget::tooltip::Position::Bottom,
+                )
+                .into()
+            } else {
+                label
+            }
+        }
     };
     let mut tab_label = row![
         leading_icon,
@@ -538,6 +570,55 @@ fn rename_input_style(theme: &Theme, status: text_input::Status) -> text_input::
     style
 }
 
+/// Largura em px que `content` ocupa numa linha só com a fonte da aba (o mesmo
+/// medidor do `text`, sem precisar de renderer).
+fn measure_title(content: &str) -> f32 {
+    use iced::advanced::text::{self as adv, Paragraph as _};
+    type Para = <iced::Renderer as adv::Renderer>::Paragraph;
+    let paragraph = Para::with_text(adv::Text {
+        content,
+        bounds: iced::Size::INFINITE,
+        size: theme::SIZE_TAB.into(),
+        line_height: adv::LineHeight::default(),
+        font: theme::FONT_TAB,
+        align_x: adv::Alignment::Default,
+        align_y: iced::alignment::Vertical::Top,
+        shaping: adv::Shaping::default(),
+        wrapping: adv::Wrapping::None,
+    });
+    paragraph.min_width()
+}
+
+/// Título que cabe em `max_width`: inteiro, ou cortado com "…" no fim (`TextOverflow.ellipsis`).
+fn ellipsize_to_width(title: &str, max_width: f32) -> String {
+    ellipsize_with(title, max_width, measure_title)
+}
+
+fn ellipsize_with(title: &str, max_width: f32, measure: impl Fn(&str) -> f32) -> String {
+    if measure(title) <= max_width {
+        return title.to_owned();
+    }
+    let chars: Vec<char> = title.chars().collect();
+    let fits = |count: usize| {
+        let mut candidate: String = chars.iter().take(count).collect();
+        candidate.push('…');
+        measure(&candidate) <= max_width
+    };
+    // maior prefixo que, com a reticência, cabe: busca binária (a largura só cresce com o prefixo)
+    let (mut low, mut high) = (0, chars.len());
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        if fits(mid) {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    let mut out: String = chars.iter().take(low).collect();
+    out.push('…');
+    out
+}
+
 fn is_focused_active(active: bool, focused: bool) -> bool {
     active && focused
 }
@@ -548,7 +629,10 @@ fn show_dirty_dot(dirty: bool, hovered: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_focused_active, pulse_bright, show_dirty_dot, tab_indicator, TabIndicator};
+    use super::{
+        ellipsize_with, is_focused_active, measure_title, pulse_bright, show_dirty_dot,
+        tab_indicator, TabIndicator,
+    };
     use gsh_core::status::TurnStatus;
 
     #[test]
@@ -610,5 +694,31 @@ mod tests {
         assert!(!show_dirty_dot(true, true));
         assert!(!show_dirty_dot(false, false));
         assert!(!show_dirty_dot(false, true));
+    }
+
+    #[test]
+    fn title_that_fits_is_kept_whole() {
+        assert_eq!(
+            ellipsize_with("abc", 30.0, |s| s.chars().count() as f32 * 10.0),
+            "abc"
+        );
+    }
+
+    #[test]
+    fn long_title_is_cut_with_an_ellipsis_that_still_fits() {
+        // 10 px por caractere, 55 px de espaço: 4 letras + "…" = 50 px
+        let cut = ellipsize_with("abcdefgh", 55.0, |s| s.chars().count() as f32 * 10.0);
+        assert_eq!(cut, "abcd…");
+        // nem a reticência cabe: sobra só ela
+        assert_eq!(
+            ellipsize_with("abcdefgh", 5.0, |s| s.chars().count() as f32 * 10.0),
+            "…"
+        );
+    }
+
+    #[test]
+    fn real_font_measure_grows_with_text() {
+        assert!(measure_title("Terminal") > measure_title("Term"));
+        assert!(measure_title("") <= 1.0);
     }
 }

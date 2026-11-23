@@ -10545,6 +10545,8 @@ mod tab_menu_shell_tests;
 #[cfg(test)]
 mod tab_status_shell_tests;
 #[cfg(test)]
+mod tab_title_shell_tests;
+#[cfg(test)]
 mod telemetry_interaction_tests;
 
 #[cfg(test)]

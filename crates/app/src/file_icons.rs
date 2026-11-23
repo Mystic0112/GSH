@@ -104,19 +104,23 @@ fn resolve(name: &str, is_dir: bool, open: bool) -> Option<&'static [u8]> {
     }
 }
 
-fn gsh_logo<Message: 'static>(size: f32) -> Element<'static, Message> {
+fn gsh_logo<'a, Message: 'a>(size: f32, opacity: f32) -> Element<'a, Message> {
     // um handle só: cada `from_bytes` ganha id novo e o iced redecodifica a cada quadro
     static LOGO: OnceLock<image::Handle> = OnceLock::new();
     let handle = LOGO.get_or_init(|| {
         image::Handle::from_bytes(&include_bytes!("../assets/branding/gsh_logo.png")[..])
     });
-    image(handle.clone()).width(size).height(size).into()
+    image(handle.clone())
+        .width(size)
+        .height(size)
+        .opacity(opacity)
+        .into()
 }
 
 /// Ícone pelo nome do asset (SVG do tema ou `gsh_logo`), em `size` px: cartões da Galeria.
 pub fn asset_view<Message: 'static>(stem: &str, size: f32) -> Element<'static, Message> {
     if stem == "gsh_logo" {
-        gsh_logo(size)
+        gsh_logo(size, 1.0)
     } else if let Some(bytes) = asset(stem) {
         svg(svg::Handle::from_memory(bytes))
             .width(size)
@@ -142,12 +146,24 @@ pub fn view_sized<Message: 'static>(
     open: bool,
     size: f32,
 ) -> Element<'static, Message> {
+    view_sized_opacity(name, is_dir, open, size, 1.0)
+}
+
+/// Como [`view_sized`], com opacidade (aba de arquivo sendo arrastada).
+pub fn view_sized_opacity<'a, Message: 'a>(
+    name: &str,
+    is_dir: bool,
+    open: bool,
+    size: f32,
+    opacity: f32,
+) -> Element<'a, Message> {
     if uses_gsh_logo(name, is_dir) {
-        gsh_logo(size)
+        gsh_logo(size, opacity)
     } else if let Some(bytes) = resolve(name, is_dir, open) {
         svg(svg::Handle::from_memory(bytes))
             .width(size)
             .height(size)
+            .opacity(opacity)
             .into()
     } else {
         text(if is_dir {
@@ -157,7 +173,7 @@ pub fn view_sized<Message: 'static>(
         })
         .font(theme::FONT_ICON)
         .size(size)
-        .color(theme::palette().text3)
+        .color(theme::palette().text3.scale_alpha(opacity))
         .into()
     }
 }
