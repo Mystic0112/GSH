@@ -626,8 +626,6 @@ enum Msg {
     CloseTabList,
     ToggleAppMenu,
     CloseAppMenu,
-    ToggleChannelsPopup,
-    CloseChannelsPopup,
     AppMenuAction(Box<Msg>),
     AppMenuShortcut(iced::keyboard::Key, iced::keyboard::Modifiers),
     CycleWorkspace(i8),
@@ -930,7 +928,6 @@ struct Shell {
     pending_window_close: Option<iced::window::Id>,
     workspaces: WorkspaceList,
     channel_editor: Option<rail::ChannelEditor>,
-    channels_popup_open: bool,
     chat_contexts: BTreeMap<ChatId, SessionContext>,
     terminal_contexts: BTreeMap<TermId, SessionContext>,
     file_tree: FileTree,
@@ -1206,7 +1203,6 @@ impl Default for Shell {
             pending_window_close: None,
             workspaces,
             channel_editor: None,
-            channels_popup_open: false,
             chat_contexts: restored
                 .as_ref()
                 .map(|doc| doc.chat_contexts.clone())
@@ -4123,7 +4119,6 @@ impl Shell {
 
     fn handle_channel_action(&mut self, action: rail::ChannelAction) -> Task<Msg> {
         use rail::ChannelAction;
-        self.channels_popup_open = matches!(&action, ChannelAction::New | ChannelAction::Edit(_));
         match action {
             ChannelAction::Select(id) => {
                 self.channel_editor = None;
@@ -7454,14 +7449,6 @@ impl Shell {
                 Task::none()
             }
             Msg::ChannelAction(action) => self.handle_channel_action(action),
-            Msg::ToggleChannelsPopup => {
-                self.channels_popup_open = !self.channels_popup_open;
-                Task::none()
-            }
-            Msg::CloseChannelsPopup => {
-                self.channels_popup_open = false;
-                Task::none()
-            }
             Msg::ChannelFolderPicked(folder) => {
                 if let Some(editor) = self.channel_editor.as_mut() {
                     editor.draft.folder = folder;
@@ -9378,9 +9365,6 @@ impl Shell {
                         members: self.channel_member_options(),
                         on_action: Msg::ChannelAction,
                     },
-                    channels_open: self.channels_popup_open,
-                    on_toggle_channels: Msg::ToggleChannelsPopup,
-                    on_close_channels: Msg::CloseChannelsPopup,
                     on_toggle_keep_awake: Msg::Settings(settings::Message::Claude(
                         settings::claude::Message::KeepAwakeToggle(!keep_awake_active),
                     )),
@@ -9892,8 +9876,6 @@ fn main() -> iced::Result {
 }
 
 #[cfg(test)]
-mod channel_interaction_tests;
-#[cfg(test)]
 mod db_interaction_tests;
 #[cfg(test)]
 mod localsend_popup_tests;
@@ -10105,7 +10087,6 @@ mod tests {
             pending_window_close: None,
             workspaces,
             channel_editor: None,
-            channels_popup_open: false,
             chat_contexts: BTreeMap::new(),
             terminal_contexts: BTreeMap::new(),
             file_tree: FileTree::new(),

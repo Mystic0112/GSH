@@ -60,9 +60,6 @@ pub struct RailActions<'a, M> {
     pub update_version: Option<&'a str>,
     pub on_add_workspace: M,
     pub channels: ChannelActions<'a, M>,
-    pub channels_open: bool,
-    pub on_toggle_channels: M,
-    pub on_close_channels: M,
     pub on_toggle_keep_awake: M,
     pub on_download_update: M,
     pub on_dismiss_update: M,
@@ -80,32 +77,11 @@ pub fn view<'a, M: Clone + 'a>(
         update_version,
         on_add_workspace,
         channels,
-        channels_open,
-        on_toggle_channels,
-        on_close_channels,
         on_toggle_keep_awake,
         on_download_update,
         on_dismiss_update,
         on_settings,
     } = actions;
-    let channel_button = tooltip(
-        crate::anchored::Anchored::new(
-            channels_icon_button(
-                workspaces.active_context_channel().is_some(),
-                on_toggle_channels,
-            ),
-            channels_open.then(|| {
-                container(channel_editor::card(workspaces, channels))
-                    .width(Length::Fixed(theme::RAIL_WIDTH - 1.0))
-                    .into()
-            }),
-            on_close_channels.clone(),
-        )
-        .side()
-        .on_escape(on_close_channels),
-        labels::CHANNELS_HEADER,
-        tooltip::Position::Bottom,
-    );
     let header = container(
         row![
             text(labels::ICON_LAYERS)
@@ -118,8 +94,6 @@ pub fn view<'a, M: Clone + 'a>(
                 .size(theme::SIZE_TITLE)
                 .color(theme::palette().text),
             Space::new().width(Fill),
-            channel_button,
-            Space::new().width(4.0),
             footer_icon_button(labels::ICON_PLUS, on_add_workspace),
         ]
         .align_y(Alignment::Center),
@@ -174,7 +148,7 @@ pub fn view<'a, M: Clone + 'a>(
     .height(Length::Fixed(theme::FOOTER_HEIGHT))
     .padding([0, 12]);
 
-    let content = column![list];
+    let content = column![channel_editor::card(workspaces, channels), list].spacing(8);
     let mut main_col = column![header, scrollable(content).width(Fill).height(Fill)];
     if let Some(version) = update_version {
         main_col = main_col.push(update_card(version, on_download_update, on_dismiss_update));
@@ -297,46 +271,22 @@ fn footer_icon_button<'a, M: Clone + 'a>(glyph: &'static str, on_press: M) -> El
     footer_icon_button_colored(glyph, theme::palette().text3, on_press)
 }
 
-fn channels_icon_button<'a, M: Clone + 'a>(filtered: bool, on_press: M) -> Element<'a, M> {
-    let indicator: Element<'a, M> = if filtered {
-        container(Space::new())
-            .width(Length::Fixed(5.0))
-            .height(Length::Fixed(5.0))
-            .style(|_: &Theme| container::Style {
-                background: Some(Background::Color(theme::palette().accent)),
-                border: Border {
-                    radius: 3.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .into()
-    } else {
-        Space::new().width(5.0).into()
-    };
-    let icon = row![
-        text(labels::ICON_LAYERS)
-            .font(theme::FONT_ICON)
-            .size(theme::SIZE_ICON)
-            .color(theme::palette().text3),
-        indicator,
-    ]
-    .spacing(2.0)
-    .align_y(Alignment::Center);
-    footer_icon_button_content(icon, theme::palette().text3, on_press)
-}
-
-fn footer_icon_button_content<'a, M: Clone + 'a>(
-    content: impl Into<Element<'a, M>>,
+fn footer_icon_button_colored<'a, M: Clone + 'a>(
+    glyph: &'static str,
     color: Color,
     on_press: M,
 ) -> Element<'a, M> {
     button(
-        container(content)
-            .width(Fill)
-            .height(Fill)
-            .center_x(Fill)
-            .center_y(Fill),
+        container(
+            text(glyph)
+                .font(theme::FONT_ICON)
+                .size(theme::SIZE_ICON)
+                .color(color),
+        )
+        .width(Fill)
+        .height(Fill)
+        .center_x(Fill)
+        .center_y(Fill),
     )
     .width(Length::Fixed(26.0))
     .height(Length::Fixed(26.0))
@@ -345,7 +295,11 @@ fn footer_icon_button_content<'a, M: Clone + 'a>(
     .style(move |_: &Theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
-            background: hovered.then(|| Background::Color(theme::palette().panel3)),
+            background: if hovered {
+                Some(Background::Color(theme::palette().panel3))
+            } else {
+                None
+            },
             text_color: color,
             border: Border {
                 radius: theme::RADIUS_BUTTON.into(),
@@ -355,21 +309,6 @@ fn footer_icon_button_content<'a, M: Clone + 'a>(
         }
     })
     .into()
-}
-
-fn footer_icon_button_colored<'a, M: Clone + 'a>(
-    glyph: &'static str,
-    color: Color,
-    on_press: M,
-) -> Element<'a, M> {
-    footer_icon_button_content(
-        text(glyph)
-            .font(theme::FONT_ICON)
-            .size(theme::SIZE_ICON)
-            .color(color),
-        color,
-        on_press,
-    )
 }
 
 fn update_card<'a, M: Clone + 'a>(
