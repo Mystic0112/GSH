@@ -28,6 +28,13 @@ pub(crate) fn handles(cmd: &str) -> bool {
             | "list-panes"
             | "new-tab"
             | "close-tab"
+            | "db-list"
+            | "db-schema"
+            | "db-query"
+            | "db-execute"
+            | "db-run"
+            | "redis-cmd"
+            | "mongo-cmd"
     )
 }
 
@@ -40,6 +47,10 @@ impl Shell {
             .unwrap_or_default();
         let tab_id = request.get("tabId").and_then(Value::as_str);
         let args = request.get("args").unwrap_or(&Value::Null);
+        if cmd.starts_with("db-") || cmd == "redis-cmd" || cmd == "mongo-cmd" {
+            self.handle_db_cli(command);
+            return;
+        }
         if cmd == "new-tab" {
             let result = self.new_terminal_tab(tab_id, args);
             let reply = match result {
@@ -87,6 +98,64 @@ impl Shell {
             Err(error) => json!({"ok": false, "error": error}),
         };
         let _ = command.reply.send(reply);
+    }
+
+    fn handle_db_cli(&mut self, command: gsh_ipc::PendingCommand) {
+        let args = command.request.get("args").cloned().unwrap_or(Value::Null);
+        let workspace = args.get("workspace").and_then(Value::as_str);
+        let caller = command
+            .request
+            .get("tabId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let selected = if let Some(workspace) = workspace {
+            self.cli_workspace_index(Some(workspace), caller)
+        } else if let Some(id) = term_id_from_pane_id(caller) {
+            self.terminal_contexts
+                .get(&id)
+                .and_then(|context| context.workspace.as_ref())
+                .and_then(|reference| {
+                    self.workspaces
+                        .items()
+                        .iter()
+                        .position(|item| match reference {
+                            gsh_core::workspace::WorkspaceRef::Project(path) => {
+                                item.path.as_ref() == Some(path)
+                            }
+                            gsh_core::workspace::WorkspaceRef::System(id) => item.id == *id,
+                        })
+                })
+                .map(Ok)
+                .unwrap_or_else(|| self.cli_workspace_index(None, caller))
+        } else {
+            self.cli_workspace_index(None, caller)
+        };
+        let root = selected
+            .ok()
+            .and_then(|index| self.workspaces.items().get(index))
+            .and_then(|workspace| workspace.path.clone());
+        let secrets = self.db.secrets().clone();
+        let passphrases = self.db.ssh_passphrases.clone();
+        let mongo_store = self.db.mongo_store().clone();
+        let reply = command.reply;
+        let verb = command
+            .request
+            .get("cmd")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        std::thread::spawn(move || {
+            let response = match root {
+                Some(root) => {
+                    crate::db_cli::run(&root, &verb, &args, &secrets, &passphrases, &mongo_store)
+                }
+                None => serde_json::json!({
+                    "ok": false,
+                    "error": {"kind":"workspace_not_found","message":"missing target workspace (pass --workspace <id|path> or run inside a GSH workspace)"}
+                }),
+            };
+            let _ = reply.send(response);
+        });
     }
 
     fn new_terminal_tab(&mut self, caller: Option<&str>, args: &Value) -> Result<Value, String> {

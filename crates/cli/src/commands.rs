@@ -117,8 +117,32 @@ pub fn run(cmd: Command) -> Result<Option<String>, CliError> {
             tab_id,
             json,
         } => run_exec(&command, cwd.as_deref(), timeout, tab_id.as_deref(), json).map(|_| None),
+        Command::Database { wire, args, tab_id } => database_command(wire, args, tab_id),
         Command::Telemetry(_) => Ok(None),
         Command::LocalSend { args } => crate::localsend::run(&args),
+    }
+}
+
+fn database_command(
+    wire: &str,
+    args: Value,
+    tab_id: Option<String>,
+) -> Result<Option<String>, CliError> {
+    let response = transport::request(
+        gsh_core::wire::cmd_request(wire, tab_id.or_else(self_tab_id).as_deref(), Some(args)),
+        Duration::from_secs(60),
+    )
+    .map_err(|error| {
+        CliError::JsonFailure(json!({
+            "kind": "connection_failed",
+            "message": error.to_string(),
+        }))
+    })?;
+    if response.is_ok() {
+        Ok(Some(format!("{}\n", json!({"ok": response.data()}))))
+    } else {
+        let error = response.error_value();
+        Err(CliError::JsonFailure(error))
     }
 }
 

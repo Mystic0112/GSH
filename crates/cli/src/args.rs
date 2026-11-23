@@ -4,6 +4,7 @@
 //! caminhos é da execução ([`crate::commands`]).
 
 use gsh_core::wire::FOCUSED;
+use serde_json::{Map, Value};
 
 use crate::error::CliError;
 
@@ -330,6 +331,11 @@ pub enum Command {
         tab_id: Option<String>,
         json: bool,
     },
+    Database {
+        wire: &'static str,
+        args: Value,
+        tab_id: Option<String>,
+    },
     Telemetry(Vec<String>),
     LocalSend {
         args: Vec<String>,
@@ -378,12 +384,244 @@ pub fn parse(argv: &[String]) -> Result<Command, CliError> {
         "close-workspace" => parse_close_workspace(args),
         "rename-workspace" => parse_rename_workspace(args),
         "exec" => parse_exec(args),
+        "db" => parse_database(args).map_err(database_usage_error),
+        "redis" => parse_nosql("redis-cmd", args).map_err(database_usage_error),
+        "mongo" => parse_nosql("mongo-cmd", args).map_err(database_usage_error),
         "telemetry" => Ok(Command::Telemetry(args.to_vec())),
         "localsend" => Ok(Command::LocalSend {
             args: args.to_vec(),
         }),
         _ => parse_open(argv),
     }
+}
+
+fn database_usage_error(error: CliError) -> CliError {
+    match error {
+        CliError::Usage(message) => CliError::JsonFailure(serde_json::json!({
+            "kind": "error",
+            "message": message,
+        })),
+        other => other,
+    }
+}
+
+const DB_HELP: &str = "gsh db <list|schema|query|execute|run> [options]\n  list [--workspace <id|path>]\n  schema --db <name> [<table>] [--workspace <id|path>]\n  query --db <name> --sql <SQL> [--limit <n>] [--workspace <id|path>]\n  execute --db <name> --sql <SQL> [--workspace <id|path>]\n  run <file.dbq> [--workspace <id|path>]";
+const REDIS_HELP: &str = "gsh redis --db <name> <CMD> [args...] [--workspace <id|path>]";
+const MONGO_HELP: &str =
+    "gsh mongo --db <name> [--database <name>] --command <json> [--workspace <id|path>]";
+
+fn parse_database(args: &[String]) -> Result<Command, CliError> {
+    let Some(verb) = args.first().map(String::as_str) else {
+        return Err(CliError::usage(DB_HELP));
+    };
+    if wants_help(args) {
+        return Ok(Command::Help(DB_HELP));
+    }
+    let wire = match verb {
+        "list" => "db-list",
+        "schema" => "db-schema",
+        "query" => "db-query",
+        "execute" => "db-execute",
+        "run" => "db-run",
+        _ => return Err(CliError::usage(DB_HELP)),
+    };
+    let mut payload = Map::new();
+    let mut positionals = Vec::new();
+    let mut tab_id = None;
+    let mut i = 1;
+    while let Some(arg) = args.get(i).map(String::as_str) {
+        if arg == "--" {
+            positionals.extend(args.get(i + 1..).unwrap_or_default().iter().cloned());
+            break;
+        }
+        let key = match arg {
+            "--db" | "--sql" | "--limit" | "--workspace" | "--table" | "--tab-id" => {
+                Some(arg.trim_start_matches('-'))
+            }
+            _ => None,
+        };
+        let (key, value, consumed) = if let Some(key) = key {
+            let value = args
+                .get(i + 1)
+                .ok_or_else(|| CliError::usage(format!("gsh db {verb}: {arg} requires a value")))?;
+            (key, value.clone(), 2)
+        } else if let Some((flag, value)) = arg.split_once('=') {
+            let key = match flag {
+                "--db" | "--sql" | "--limit" | "--workspace" | "--table" | "--tab-id" => {
+                    Some(flag.trim_start_matches('-'))
+                }
+                _ => None,
+            };
+            if let Some(key) = key {
+                (key, value.to_string(), 1)
+            } else if arg.starts_with('-') {
+                return Err(CliError::usage(format!(
+                    "gsh db {verb}: unknown flag \"{arg}\"\n{DB_HELP}"
+                )));
+            } else {
+                positionals.push(arg.to_string());
+                i += 1;
+                continue;
+            }
+        } else if arg.starts_with('-') {
+            return Err(CliError::usage(format!(
+                "gsh db {verb}: unknown flag \"{arg}\"\n{DB_HELP}"
+            )));
+        } else {
+            positionals.push(arg.to_string());
+            i += 1;
+            continue;
+        };
+        if key == "tab-id" {
+            tab_id = Some(value);
+        } else {
+            let parsed = if key == "limit" {
+                Value::from(value.parse::<u64>().map_err(|_| {
+                    CliError::usage("gsh db query: --limit requires a non-negative integer")
+                })?)
+            } else {
+                Value::String(value)
+            };
+            payload.insert(key.to_string(), parsed);
+        }
+        i += consumed;
+    }
+    if matches!(wire, "db-schema" | "db-query" | "db-execute")
+        && !payload
+            .get("db")
+            .is_some_and(|value| value.as_str().is_some_and(|s| !s.is_empty()))
+    {
+        return Err(CliError::usage(format!(
+            "gsh db {verb}: missing --db <name>\n{DB_HELP}"
+        )));
+    }
+    if matches!(wire, "db-query" | "db-execute") {
+        let sql = payload
+            .get("sql")
+            .and_then(Value::as_str)
+            .filter(|sql| !sql.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| positionals.join(" "));
+        if sql.trim().is_empty() {
+            return Err(CliError::usage(format!(
+                "gsh db {verb}: missing --sql \"<statement>\"\n{DB_HELP}"
+            )));
+        }
+        payload.insert("sql".to_string(), Value::String(sql));
+    }
+    if wire == "db-schema" {
+        if !payload.contains_key("table") {
+            if let Some(table) = positionals.first() {
+                payload.insert("table".to_string(), Value::String(table.clone()));
+            }
+        }
+    } else if wire == "db-run" {
+        let path = positionals
+            .first()
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| CliError::usage(format!("gsh db run: missing <file.dbq>\n{DB_HELP}")))?;
+        payload.insert(
+            "path".to_string(),
+            Value::String(crate::env::resolve_path(path)),
+        );
+    } else if !positionals.is_empty() && !matches!(wire, "db-query" | "db-execute") {
+        return Err(CliError::usage(format!(
+            "gsh db {verb}: unexpected argument\n{DB_HELP}"
+        )));
+    }
+    Ok(Command::Database {
+        wire,
+        args: Value::Object(payload),
+        tab_id,
+    })
+}
+
+fn parse_nosql(wire: &'static str, args: &[String]) -> Result<Command, CliError> {
+    let help = if wire == "redis-cmd" {
+        REDIS_HELP
+    } else {
+        MONGO_HELP
+    };
+    if args.is_empty() {
+        return Err(CliError::usage(help));
+    }
+    if wants_help(args) {
+        return Ok(Command::Help(help));
+    }
+    let mut payload = Map::new();
+    let mut positionals = Vec::new();
+    let mut tab_id = None;
+    let mut i = 0;
+    while let Some(arg) = args.get(i).map(String::as_str) {
+        let keys: &[&str] = if wire == "redis-cmd" {
+            &["--db", "--workspace", "--tab-id"]
+        } else {
+            &["--db", "--database", "--command", "--workspace", "--tab-id"]
+        };
+        if let Some((flag, value)) = take(args, &mut i, keys) {
+            match flag {
+                "--db" => {
+                    if let Some(value) = value {
+                        payload.insert("db".to_string(), Value::String(value));
+                    }
+                }
+                "--workspace" => {
+                    if let Some(value) = value {
+                        payload.insert("workspace".to_string(), Value::String(value));
+                    }
+                }
+                "--tab-id" => tab_id = value,
+                "--database" => {
+                    if let Some(value) = value {
+                        payload.insert("database".to_string(), Value::String(value));
+                    }
+                }
+                "--command" => {
+                    if let Some(value) = value {
+                        payload.insert("command".to_string(), Value::String(value));
+                    }
+                }
+                _ => {}
+            }
+        } else if wire == "redis-cmd" {
+            positionals.push(arg.to_string());
+        }
+        i += 1;
+    }
+    if !payload
+        .get("db")
+        .is_some_and(|value| value.as_str().is_some_and(|s| !s.is_empty()))
+    {
+        return Err(CliError::usage(format!(
+            "gsh {}: missing --db <name>\n{help}",
+            if wire == "redis-cmd" {
+                "redis"
+            } else {
+                "mongo"
+            }
+        )));
+    }
+    if wire == "redis-cmd" {
+        if positionals.is_empty() {
+            return Err(CliError::usage(format!(
+                "gsh redis: missing command\n{help}"
+            )));
+        }
+        payload.insert("parts".to_string(), serde_json::json!(positionals));
+    } else if !payload
+        .get("command")
+        .is_some_and(|value| value.as_str().is_some_and(|s| !s.is_empty()))
+        || !positionals.is_empty()
+    {
+        return Err(CliError::usage(format!(
+            "gsh mongo: missing or invalid --command '<json>'\n{help}"
+        )));
+    }
+    Ok(Command::Database {
+        wire,
+        args: Value::Object(payload),
+        tab_id,
+    })
 }
 
 fn parse_open(args: &[String]) -> Result<Command, CliError> {
@@ -941,6 +1179,20 @@ mod tests {
                 e.to_string()
             }
             other => panic!("esperava erro de uso, veio {other:?}"),
+        }
+    }
+
+    fn db_usage_msg(r: Result<Command, CliError>) -> String {
+        match r {
+            Err(CliError::JsonFailure(error)) => {
+                assert_eq!(CliError::JsonFailure(error.clone()).exit_code(), 1);
+                error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap()
+                    .to_owned()
+            }
+            other => panic!("esperava erro JSON de banco, veio {other:?}"),
         }
     }
 
@@ -1622,5 +1874,119 @@ mod tests {
             usage_msg(parse(&v(&["exec", "--bad"]))).starts_with("gsh exec: unknown flag --bad\n")
         );
         assert!(usage_msg(parse(&v(&["exec"]))).starts_with("gsh exec: missing command\n"));
+    }
+
+    #[test]
+    fn db_list_monta_wire_e_help_de_uso() {
+        assert_eq!(
+            parse(&v(&["db", "list", "--workspace", "ws-1", "--tab-id", "t7"])).unwrap(),
+            Command::Database {
+                wire: "db-list",
+                args: serde_json::json!({"workspace":"ws-1"}),
+                tab_id: Some("t7".into()),
+            }
+        );
+        assert!(matches!(
+            parse(&v(&["db", "--help"])).unwrap(),
+            Command::Help(_)
+        ));
+        assert!(db_usage_msg(parse(&v(&["db", "list", "--bad=x"]))).contains("unknown flag"));
+    }
+
+    #[test]
+    fn db_schema_preserva_tabela_e_sql_query() {
+        assert_eq!(
+            parse(&v(&["db", "schema", "--db", "local", "--table", "users"])).unwrap(),
+            Command::Database {
+                wire: "db-schema",
+                args: serde_json::json!({"db":"local","table":"users"}),
+                tab_id: None,
+            }
+        );
+        assert_eq!(
+            parse(&v(&["db", "query", "--db", "local", "SELECT", "1"])).unwrap(),
+            Command::Database {
+                wire: "db-query",
+                args: serde_json::json!({"db":"local","sql":"SELECT 1"}),
+                tab_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn db_run_resolve_caminho_e_workspace() {
+        assert_eq!(
+            parse(&v(&["db", "run", "/tmp/query.dbq", "--workspace", "ws-1"])).unwrap(),
+            Command::Database {
+                wire: "db-run",
+                args: serde_json::json!({"path":"/tmp/query.dbq","workspace":"ws-1"}),
+                tab_id: None,
+            }
+        );
+        assert!(db_usage_msg(parse(&v(&["db", "run"]))).contains("missing <file.dbq>"));
+    }
+
+    #[test]
+    fn redis_and_mongo_parse_commands_and_workspace_flags() {
+        assert_eq!(
+            parse(&v(&[
+                "redis",
+                "--db",
+                "cache",
+                "GET",
+                "user:1",
+                "--workspace",
+                "ws",
+                "--tab-id",
+                "t4"
+            ]))
+            .unwrap(),
+            Command::Database {
+                wire: "redis-cmd",
+                args: serde_json::json!({"db":"cache","parts":["GET","user:1"],"workspace":"ws"}),
+                tab_id: Some("t4".into()),
+            }
+        );
+        assert_eq!(
+            parse(&v(&[
+                "mongo",
+                "--db",
+                "docs",
+                "--database",
+                "app",
+                "--command",
+                "{\"find\":\"users\"}"
+            ]))
+            .unwrap(),
+            Command::Database {
+                wire: "mongo-cmd",
+                args: serde_json::json!({"db":"docs","database":"app","command":"{\"find\":\"users\"}"}),
+                tab_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn database_usage_errors_are_json_exit_one_and_help_is_success() {
+        for argv in [
+            v(&["db", "list", "--bad=x"]),
+            v(&["redis"]),
+            v(&["mongo", "--db"]),
+        ] {
+            let Err(CliError::JsonFailure(error)) = parse(&argv) else {
+                panic!("expected JSON database usage error for {argv:?}");
+            };
+            assert_eq!(CliError::JsonFailure(error.clone()).exit_code(), 1);
+            assert_eq!(error.get("kind").and_then(Value::as_str), Some("error"));
+            assert!(error.get("message").and_then(Value::as_str).is_some());
+        }
+        assert!(matches!(
+            parse(&v(&["redis", "--help"])),
+            Ok(Command::Help(_))
+        ));
+        assert!(matches!(
+            parse(&v(&["mongo", "--help"])),
+            Ok(Command::Help(_))
+        ));
     }
 }

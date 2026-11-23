@@ -36,6 +36,7 @@ pub mod claude_permission;
 pub mod clock;
 pub mod content_search_panel;
 pub mod content_search_state;
+mod db_cli;
 pub mod db_dialog;
 pub mod db_engine_icon;
 pub mod db_mongo;
@@ -10144,6 +10145,301 @@ mod tests {
         assert!(data[0]["name"].is_string());
         assert!(data[0]["path"].is_string());
         assert_eq!(data[0]["tabs"], 1);
+    }
+
+    #[test]
+    fn cli_db_list_mostra_conexao_e_access_do_workspace() {
+        let mut shell = test_shell();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".gsh")).unwrap();
+        std::fs::write(
+            dir.path().join(".gsh/databases.json"),
+            r#"{"databases":[{"name":"local","url":"sqlite:./app.db","access":"read"},{"name":"hidden","url":"sqlite:./hidden.db","agents":false}]}"#,
+        )
+        .unwrap();
+        let index = shell.workspaces.open_folder(dir.path());
+        let workspace = shell.workspaces.items().get(index).unwrap().id.clone();
+        let (reply, response) = mpsc::sync_channel(1);
+        shell.handle_terminal_ipc(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"db-list","tabId":"t1","args":{"workspace":workspace}}),
+            reply,
+        });
+        let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["data"].as_array().unwrap().len(), 1);
+        assert_eq!(response["data"][0]["name"], "local");
+        assert_eq!(response["data"][0]["access"], "read");
+        assert_eq!(response["data"][0]["engine"], "SQLite");
+    }
+
+    #[test]
+    fn cli_db_schema_inspeciona_sqlite_real() {
+        let mut shell = test_shell();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".gsh")).unwrap();
+        std::fs::write(
+            dir.path().join(".gsh/databases.json"),
+            r#"{"databases":[{"name":"local","url":"sqlite:./app.db","access":"read"}]}"#,
+        )
+        .unwrap();
+        std::fs::File::create(dir.path().join("app.db")).unwrap();
+        let connection = gsh_db::Connection::sqlite(
+            "local",
+            "app.db",
+            gsh_db::Origin::Registered,
+            gsh_db::Access::Read,
+            true,
+        );
+        let endpoint = gsh_db::Endpoint::resolve(&connection, dir.path(), None).unwrap();
+        gsh_db::driver::execute(
+            &endpoint,
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
+        )
+        .unwrap();
+        let index = shell.workspaces.open_folder(dir.path());
+        let workspace = shell.workspaces.items().get(index).unwrap().id.clone();
+
+        for (table, expected) in [(None, "users"), (Some("users"), "name")] {
+            let (reply, response) = mpsc::sync_channel(1);
+            let mut args = serde_json::json!({"db":"local","workspace":workspace});
+            if let Some(table) = table {
+                args["table"] = serde_json::json!(table);
+            }
+            shell.handle_terminal_ipc(gsh_ipc::PendingCommand {
+                request: serde_json::json!({"cmd":"db-schema","tabId":"t1","args":args}),
+                reply,
+            });
+            let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(response["ok"], true, "{response}");
+            let rows = response["data"]["rows"].as_array().unwrap();
+            if table.is_none() {
+                assert!(rows.iter().any(|row| row[0] == expected));
+            } else {
+                assert!(rows.iter().any(|row| row[0] == expected));
+            }
+        }
+    }
+
+    fn database_workspace(shell: &mut Shell, access: &str) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".gsh")).unwrap();
+        std::fs::write(
+            dir.path().join(".gsh/databases.json"),
+            format!("{{\"databases\":[{{\"name\":\"local\",\"url\":\"sqlite:./app.db\",\"access\":\"{access}\"}}]}}"),
+        )
+        .unwrap();
+        std::fs::File::create(dir.path().join("app.db")).unwrap();
+        let connection = gsh_db::Connection::sqlite(
+            "local",
+            "app.db",
+            gsh_db::Origin::Registered,
+            gsh_db::Access::Read,
+            true,
+        );
+        let endpoint = gsh_db::Endpoint::resolve(&connection, dir.path(), None).unwrap();
+        gsh_db::driver::execute(
+            &endpoint,
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
+        )
+        .unwrap();
+        gsh_db::driver::execute(
+            &endpoint,
+            "INSERT INTO users (name) VALUES ('ana'), ('bia')",
+        )
+        .unwrap();
+        let index = shell.workspaces.open_folder(dir.path());
+        let workspace = shell.workspaces.items().get(index).unwrap().id.clone();
+        (dir, workspace)
+    }
+
+    #[test]
+    fn cli_db_query_devolve_rows_colunas_limite_e_truncated() {
+        let mut shell = test_shell();
+        let (_dir, workspace) = database_workspace(&mut shell, "read");
+        let (reply, response) = mpsc::sync_channel(1);
+        shell.handle_terminal_ipc(gsh_ipc::PendingCommand {
+            request: serde_json::json!({
+                "cmd":"db-query","tabId":"t1",
+                "args":{"db":"local","workspace":workspace,"sql":"SELECT id, name FROM users ORDER BY id","limit":1}
+            }),
+            reply,
+        });
+        let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(response.get("ok"), Some(&serde_json::json!(true)));
+        let data = response.get("data").unwrap();
+        assert_eq!(data.get("rowCount"), Some(&serde_json::json!(1)));
+        assert_eq!(data.get("truncated"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            data.get("columns")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|columns| columns.first())
+                .and_then(|column| column.get("name")),
+            Some(&serde_json::json!("id"))
+        );
+        assert_eq!(
+            data.get("rows")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get(0)),
+            Some(&serde_json::json!(1))
+        );
+    }
+
+    #[test]
+    fn cli_db_query_recusa_truques_de_sql_em_conexao_read() {
+        let mut shell = test_shell();
+        let (_dir, workspace) = database_workspace(&mut shell, "read");
+        for sql in [
+            "WITH gone AS (DELETE FROM users RETURNING *) SELECT * FROM gone",
+            "SELECT 1; DROP TABLE users",
+            "SELECT 1; -- comment\n DELETE FROM users",
+            "EXPLAIN ANALYZE DELETE FROM users",
+            "SELECT id INTO backup FROM users",
+            "SELECT nextval('sequence')",
+            "SELECT dangerous_function()",
+        ] {
+            let (reply, response) = mpsc::sync_channel(1);
+            shell.handle_terminal_ipc(gsh_ipc::PendingCommand {
+                request: serde_json::json!({
+                    "cmd":"db-query","tabId":"t1",
+                    "args":{"db":"local","workspace":workspace,"sql":sql}
+                }),
+                reply,
+            });
+            let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(
+                response.get("error").and_then(|error| error.get("kind")),
+                Some(&serde_json::json!("read_only_connection")),
+                "accepted SQL: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_db_execute_respeita_access_e_reporta_linhas_afetadas() {
+        let mut shell = test_shell();
+        let (_read_dir, read_workspace) = database_workspace(&mut shell, "read");
+        let (reply, response) = mpsc::sync_channel(1);
+        shell.handle_terminal_ipc(gsh_ipc::PendingCommand {
+            request: serde_json::json!({
+                "cmd":"db-execute","tabId":"t1",
+                "args":{"db":"local","workspace":read_workspace,"sql":"DELETE FROM users"}
+            }),
+            reply,
+        });
+        let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            response.get("error").and_then(|error| error.get("kind")),
+            Some(&serde_json::json!("read_only_connection"))
+        );
+
+        let (_write_dir, write_workspace) = database_workspace(&mut shell, "readwrite");
+        let (reply, response) = mpsc::sync_channel(1);
+        shell.handle_terminal_ipc(gsh_ipc::PendingCommand {
+            request: serde_json::json!({
+                "cmd":"db-execute","tabId":"t1",
+                "args":{"db":"local","workspace":write_workspace,"sql":"DELETE FROM users"}
+            }),
+            reply,
+        });
+        let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(response.get("ok"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            response
+                .get("data")
+                .and_then(|data| data.get("affectedRows")),
+            Some(&serde_json::json!(2))
+        );
+    }
+
+    #[test]
+    fn cli_db_run_executa_dbq_respeitando_database_e_limit() {
+        let mut shell = test_shell();
+        let (dir, workspace) = database_workspace(&mut shell, "read");
+        let path = dir.path().join("report.dbq");
+        std::fs::write(
+            &path,
+            "-- db: local\n-- limit: 1\n\nSELECT id, name FROM users ORDER BY id;",
+        )
+        .unwrap();
+        let (reply, response) = mpsc::sync_channel(1);
+        shell.handle_terminal_ipc(gsh_ipc::PendingCommand {
+            request: serde_json::json!({
+                "cmd":"db-run","tabId":"t1",
+                "args":{"path":path.to_string_lossy(),"workspace":workspace}
+            }),
+            reply,
+        });
+        let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(response.get("ok"), Some(&serde_json::json!(true)));
+        let data = response.get("data").unwrap();
+        assert_eq!(data.get("rowCount"), Some(&serde_json::json!(1)));
+        assert_eq!(data.get("truncated"), Some(&serde_json::json!(true)));
+
+        let unsafe_path = dir.path().join("unsafe.dbq");
+        std::fs::write(&unsafe_path, "-- db: local\n\nDELETE FROM users;").unwrap();
+        let (reply, response) = mpsc::sync_channel(1);
+        shell.handle_terminal_ipc(gsh_ipc::PendingCommand {
+            request: serde_json::json!({
+                "cmd":"db-run","tabId":"t1",
+                "args":{"path":unsafe_path.to_string_lossy(),"workspace":workspace}
+            }),
+            reply,
+        });
+        let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            response.get("error").and_then(|error| error.get("kind")),
+            Some(&serde_json::json!("read_only_connection"))
+        );
+    }
+
+    fn nosql_workspace(shell: &mut Shell, name: &str, url: &str) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".gsh")).unwrap();
+        std::fs::write(
+            dir.path().join(".gsh/databases.json"),
+            serde_json::json!({"databases":[{"name":name,"url":url,"access":"read"}]}).to_string(),
+        )
+        .unwrap();
+        let index = shell.workspaces.open_folder(dir.path());
+        let workspace = shell.workspaces.items().get(index).unwrap().id.clone();
+        (dir, workspace)
+    }
+
+    #[test]
+    fn redis_e_mongo_recusam_escrita_sem_conectar_em_read() {
+        let mut shell = test_shell();
+        let (_redis_dir, redis_workspace) =
+            nosql_workspace(&mut shell, "cache", "redis://127.0.0.1:1/0");
+        let (reply, response) = mpsc::sync_channel(1);
+        shell.handle_terminal_ipc(gsh_ipc::PendingCommand {
+            request: serde_json::json!({
+                "cmd":"redis-cmd","tabId":"t1",
+                "args":{"db":"cache","workspace":redis_workspace,"parts":["SET","x","1"]}
+            }),
+            reply,
+        });
+        let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            response.get("error").and_then(|error| error.get("kind")),
+            Some(&serde_json::json!("read_only_connection"))
+        );
+
+        let (_mongo_dir, mongo_workspace) =
+            nosql_workspace(&mut shell, "docs", "mongodb://127.0.0.1:1/app");
+        let (reply, response) = mpsc::sync_channel(1);
+        shell.handle_terminal_ipc(gsh_ipc::PendingCommand {
+            request: serde_json::json!({
+                "cmd":"mongo-cmd","tabId":"t1",
+                "args":{"db":"docs","workspace":mongo_workspace,"command":"{\"insert\":\"users\",\"documents\":[{\"x\":1}]}"}
+            }),
+            reply,
+        });
+        let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            response.get("error").and_then(|error| error.get("kind")),
+            Some(&serde_json::json!("read_only_connection"))
+        );
     }
 
     #[test]
