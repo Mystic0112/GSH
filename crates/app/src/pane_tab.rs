@@ -79,6 +79,7 @@ pub(crate) fn drag_feedback<'a, M: 'a>(
 pub(crate) struct TabPresentation {
     pub title: String,
     pub active: bool,
+    pub focused: bool,
     pub dirty: bool,
     pub hovered: bool,
     pub drop_before: Option<bool>,
@@ -103,14 +104,17 @@ where
     let TabPresentation {
         title,
         active: is_active,
+        focused,
         dirty,
         hovered,
         drop_before,
         dragging,
     } = presentation;
     let drag_alpha = if dragging { 0.3_f32 } else { 1.0_f32 };
-    let icon_color = (if is_active {
+    let icon_color = (if is_focused_active(is_active, focused) {
         theme::palette().accent_text
+    } else if is_active {
+        theme::palette().text2
     } else {
         theme::palette().text3
     })
@@ -285,7 +289,7 @@ where
         ..Default::default()
     });
 
-    let bottom_bar: Element<'a, M> = if is_active {
+    let bottom_bar: Element<'a, M> = if is_focused_active(is_active, focused) {
         container(
             Space::new()
                 .width(Fill)
@@ -348,13 +352,24 @@ where
         .into()
 }
 
+fn is_focused_active(active: bool, focused: bool) -> bool {
+    active && focused
+}
+
 fn show_dirty_dot(dirty: bool, hovered: bool) -> bool {
     dirty && !hovered
 }
 
 #[cfg(test)]
 mod tests {
-    use super::show_dirty_dot;
+    use super::{is_focused_active, show_dirty_dot};
+
+    #[test]
+    fn active_indicator_only_belongs_to_the_focused_pane() {
+        assert!(is_focused_active(true, true));
+        assert!(!is_focused_active(true, false));
+        assert!(!is_focused_active(false, true));
+    }
 
     #[test]
     fn dirty_dot_only_appears_without_hover() {

@@ -27,6 +27,7 @@ pub enum TabDragEvent {
 
 pub struct StripInput<FWheel, M> {
     pub pane: iced::widget::pane_grid::Pane,
+    pub focused: bool,
     pub on_wheel: FWheel,
     pub menu_open: bool,
     pub on_open_menu: M,
@@ -69,6 +70,7 @@ where
 {
     let StripInput {
         pane,
+        focused,
         on_wheel,
         menu_open,
         on_open_menu,
@@ -119,6 +121,7 @@ where
                 crate::pane_tab::TabPresentation {
                     title: tab_title,
                     active: active_idx == Some(idx),
+                    focused,
                     dirty: dirty_flags.get(idx).copied().unwrap_or(false),
                     hovered: hovered == Some(idx),
                     drop_before: drop_target
@@ -414,6 +417,12 @@ fn view_add_tab_button<'a, M: Clone + 'a>(on_new_terminal: M) -> Element<'a, M> 
             ..Default::default()
         }
     });
+
+    let btn = iced::widget::tooltip(
+        btn,
+        labels::PANE_VIEW_NEW_TAB,
+        iced::widget::tooltip::Position::Bottom,
+    );
 
     row![btn, hairline_v()]
         .width(Length::Fixed(theme::PANE_TAB_ADD_WIDTH + 1.0))

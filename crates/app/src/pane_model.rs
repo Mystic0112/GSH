@@ -446,7 +446,7 @@ impl PaneModel {
             if index < curr {
                 Some(curr.saturating_sub(1))
             } else if index == curr {
-                Some(curr.min(self.tabs.len().saturating_sub(1)))
+                Some(index.saturating_sub(1))
             } else {
                 Some(curr)
             }
@@ -536,6 +536,24 @@ mod tests {
         assert_eq!(model.active_index(), None);
         assert!(model.tabs().is_empty());
         assert_eq!(model.close(0), None);
+    }
+
+    #[test]
+    fn fechar_aba_ativa_seleciona_a_anterior_quando_ha_uma_a_direita() {
+        let mut model = with_terminal();
+        model.open_file("/proj/previous.rs");
+        model.open_file("/proj/active.rs");
+        model.activate(1);
+
+        assert_eq!(
+            model.close(2),
+            Some(PaneTab::File(PathBuf::from("/proj/active.rs")))
+        );
+        assert_eq!(model.active_index(), Some(1));
+        assert_eq!(
+            model.active_tab(),
+            Some(&PaneTab::File(PathBuf::from("/proj/previous.rs")))
+        );
     }
 
     #[test]

@@ -771,6 +771,14 @@ fn menu_shortcut_matches(
         })
 }
 
+fn is_close_tab_shortcut(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> bool {
+    modifiers.control()
+        && !modifiers.logo()
+        && !modifiers.alt()
+        && !modifiers.shift()
+        && matches!(key.as_ref(), iced::keyboard::Key::Character(value) if value.eq_ignore_ascii_case("w"))
+}
+
 /// Escolha do diálogo ao fechar uma query com alterações não salvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloseChoice {
@@ -6340,6 +6348,10 @@ impl Shell {
                 self.app_menu_open = false;
                 self.update_inner(*message)
             }
+            Msg::AppMenuShortcut(key, modifiers) if is_close_tab_shortcut(&key, modifiers) => {
+                let active = self.panes.focused_model().active_index();
+                active.map_or_else(Task::none, |index| self.update_inner(Msg::CloseTab(index)))
+            }
             Msg::AppMenuShortcut(key, modifiers) => self
                 .app_menu_shortcut_action(&key, modifiers)
                 .and_then(|action| self.app_menu_message(action))
@@ -7125,6 +7137,13 @@ impl Shell {
                 }
                 // pane que perdeu a última aba some, se houver outro (como `_closeTabIn`)
                 self.panes.close_if_empty(self.panes.focused());
+                if self
+                    .panes
+                    .model(self.panes.focused())
+                    .is_some_and(|model| model.tabs().is_empty())
+                {
+                    return self.update_inner(Msg::NewTerminalTab);
+                }
                 Task::none()
             }
             Msg::OpenSettings => {
@@ -9147,6 +9166,7 @@ impl Shell {
             move |index| Msg::TabHover(index.map(|index| (pane, index))),
             pane_strip::StripInput {
                 pane,
+                focused: self.panes.focused() == pane,
                 on_wheel: move |delta| Msg::TabStripWheel(pane, delta),
                 menu_open: self.tab_list_open == Some(pane),
                 on_open_menu: Msg::OpenTabList(pane),
@@ -9917,6 +9937,16 @@ mod tests {
     use iced_test::simulator::Simulator;
 
     use crate::island::IslandAgentState;
+
+    #[test]
+    fn ctrl_w_is_the_close_tab_shortcut_without_other_modifiers() {
+        let key = keyboard::Key::Character("W".into());
+        assert!(is_close_tab_shortcut(&key, keyboard::Modifiers::CTRL));
+        assert!(!is_close_tab_shortcut(
+            &key,
+            keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT
+        ));
+    }
 
     #[path = "channel_popup_tests.rs"]
     mod channel_popup_tests;

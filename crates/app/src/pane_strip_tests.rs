@@ -102,6 +102,7 @@ fn capture_pane_tab_strip_states() {
             |_| (),
             StripInput {
                 pane: first_pane,
+                focused: true,
                 on_wheel: |_| (),
                 menu_open: false,
                 on_open_menu: (),
@@ -135,6 +136,7 @@ fn capture_pane_tab_strip_states() {
             |_| (),
             StripInput {
                 pane: last_pane,
+                focused: false,
                 on_wheel: |_| (),
                 menu_open: true,
                 on_open_menu: (),
