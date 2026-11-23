@@ -9558,6 +9558,217 @@ mod tests {
     }
 
     #[test]
+    fn cli_list_tabs_returns_active_terminal_metadata() {
+        let mut shell = test_shell();
+        let id = *shell.terminals.keys().next().unwrap();
+        let label = "Stable worker";
+        shell.terminal_labels.insert(id, label.to_owned());
+        let pane = shell.panes.pane_of(&PaneTab::Terminal(id)).unwrap();
+        shell
+            .panes
+            .model_mut(pane)
+            .unwrap()
+            .set_terminal_label(id, label.to_owned());
+        let workspace = shell.workspaces.items().first().unwrap();
+        let workspace_id = workspace.id.clone();
+        let workspace_path = workspace
+            .path
+            .as_ref()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(shell.status_runtime.apply_update(
+            StatusUpdate {
+                pane_id: pane_id_for_term(id),
+                status: TurnStatus::Idle,
+                event: None,
+                session_id: None,
+                transcript_path: None,
+                harness: Some(AgentHarness::Codex),
+                files: Vec::new(),
+            },
+            1_000,
+        ));
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"list-panes","tabId":"t7"}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], true);
+        let tabs = response["data"].as_array().unwrap();
+        let terminal = tabs
+            .iter()
+            .find(|tab| tab["id"] == pane_id_for_term(id))
+            .unwrap();
+        assert_eq!(terminal["kind"], "agent");
+        assert_eq!(terminal["label"], label);
+        assert_eq!(terminal["workspaceId"], workspace_id);
+        assert_eq!(terminal["workspacePath"], workspace_path);
+        assert_eq!(terminal["harness"], "codex");
+        assert_eq!(terminal["working"], false);
+    }
+
+    #[test]
+    fn cli_new_tab_creates_terminal_with_requested_cwd_title_and_split() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_string_lossy().into_owned();
+        let mut shell = test_shell();
+        shell.static_test_mode = false;
+        let caller = pane_id_for_term(*shell.terminals.keys().next().unwrap());
+        let pane_count = shell.panes.leaves().len();
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"new-tab","tabId":caller,"args":{"cwd":cwd,"title":"Requested title","split":"right"}}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], true);
+        let id = response["data"]["tabId"].as_str().unwrap().to_owned();
+        let term_id = term_id_from_pane_id(&id).unwrap();
+        assert!(shell
+            .terminals
+            .get(&term_id)
+            .unwrap()
+            .cwd()
+            .unwrap()
+            .starts_with(dir.path()));
+        assert_eq!(shell.panes.leaves().len(), pane_count + 1);
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"list-panes"}),
+            reply,
+        });
+        let tabs = response.recv().unwrap()["data"].as_array().unwrap().clone();
+        let tab = tabs.iter().find(|tab| tab["id"] == id).unwrap();
+        assert_eq!(tab["kind"], "terminal");
+        assert_eq!(tab["title"], "Terminal");
+        assert_eq!(tab["label"], "Requested title");
+
+        let encoded = "ZWNobyB0ZXN0";
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"write","tabId":id,"args":{"data":encoded}}),
+            reply,
+        });
+        assert_eq!(response.recv().unwrap()["ok"], true);
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"write","tabId":id,"args":{"data":"Aw=="}}),
+            reply,
+        });
+        assert_eq!(response.recv().unwrap()["ok"], true);
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"read-pane","tabId":id,"args":{"lines":10}}),
+            reply,
+        });
+        assert_eq!(response.recv().unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn cli_close_tab_resolves_id_and_case_insensitive_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_string_lossy().into_owned();
+        let mut shell = test_shell();
+        let caller = pane_id_for_term(*shell.terminals.keys().next().unwrap());
+        let create = |shell: &mut Shell, title: &str| {
+            let (reply, response) = mpsc::sync_channel(1);
+            let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+                request: serde_json::json!({"cmd":"new-tab","tabId":caller,"args":{"cwd":cwd,"title":title}}),
+                reply,
+            });
+            response.recv().unwrap()["data"]["tabId"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let by_id = create(&mut shell, "By id");
+        let by_label = create(&mut shell, "By label");
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"close-tab","args":{"target":by_id}}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["data"]["tabId"], by_id);
+        assert!(term_id_from_pane_id(&by_id).is_some_and(|id| !shell.terminals.contains_key(&id)));
+
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"close-tab","args":{"target":"bY lAbEl"}}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["data"]["tabId"], by_label);
+        assert!(
+            term_id_from_pane_id(&by_label).is_some_and(|id| !shell.terminals.contains_key(&id))
+        );
+    }
+
+    #[test]
+    fn cli_close_tab_rejects_ambiguous_and_missing_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_string_lossy().into_owned();
+        let mut shell = test_shell();
+        let caller = pane_id_for_term(*shell.terminals.keys().next().unwrap());
+        for _ in 0..2 {
+            let (reply, response) = mpsc::sync_channel(1);
+            let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+                request: serde_json::json!({"cmd":"new-tab","tabId":caller,"args":{"cwd":cwd,"title":"Duplicate"}}),
+                reply,
+            });
+            assert_eq!(response.recv().unwrap()["ok"], true);
+        }
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"close-tab","args":{"target":"duplicate"}}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(
+            response["error"],
+            "label \"duplicate\" is ambiguous — use a tab-id"
+        );
+
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"close-tab","args":{"target":"t9999"}}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"], "tab \"t9999\" does not exist");
+    }
+
+    #[test]
+    fn cli_close_tab_without_target_closes_caller_and_keeps_terminal() {
+        let mut shell = test_shell();
+        let caller_id = *shell.terminals.keys().next().unwrap();
+        let caller = pane_id_for_term(caller_id);
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"close-tab","tabId":caller}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["data"]["tabId"], caller);
+        assert!(!shell.terminals.contains_key(&caller_id));
+        let remaining = shell
+            .panes
+            .models()
+            .iter()
+            .flat_map(|model| model.tabs())
+            .collect::<Vec<_>>();
+        assert_eq!(remaining.len(), 1);
+        assert!(matches!(remaining.first(), Some(PaneTab::Terminal(_))));
+    }
+
+    #[test]
     fn cli_new_workspace_opens_and_selects_the_local_folder() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("project");
