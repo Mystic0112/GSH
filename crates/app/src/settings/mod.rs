@@ -79,6 +79,22 @@ pub enum Message {
 
 #[derive(Debug, Clone)]
 pub enum LocalSendMessage {
+    PopupTabChanged(LocalSendPopupTab),
+    ClosePopup,
+    PickFiles,
+    PickFolder,
+    FolderPicked(Option<PathBuf>),
+    FolderFilesCollected(Result<Vec<PathBuf>, String>),
+    FilesPicked(Vec<PathBuf>),
+    FilesPickedResult(Result<Vec<PathBuf>, String>),
+    TextChanged(String),
+    SendText,
+    PasteClipboard,
+    ClipboardLoaded(Result<Vec<PathBuf>, String>),
+    RefreshPeers,
+    SendSelectedTo(String),
+    RestartServer,
+    StopServer,
     AlwaysOnChanged(bool),
     AliasChanged(String),
     ChooseReceiveDir,
@@ -97,8 +113,23 @@ pub enum LocalSendMessage {
     Noop,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LocalSendPopupTab {
+    #[default]
+    Receive,
+    Send,
+    SettingsReceive,
+    SettingsNetwork,
+}
+
 #[derive(Debug, Clone)]
 pub struct LocalSendState {
+    pub popup_open: bool,
+    pub popup_tab: LocalSendPopupTab,
+    pub draft_text: String,
+    pub selected_files: Vec<PathBuf>,
+    pub transfer_status: Option<String>,
+    pub server_alias: Option<String>,
     pub always_on: bool,
     pub alias: String,
     pub receive_dir: PathBuf,
@@ -116,6 +147,12 @@ impl Default for LocalSendState {
     fn default() -> Self {
         let config = gsh_config::schema::LocalSend::default();
         Self {
+            popup_open: false,
+            popup_tab: LocalSendPopupTab::Receive,
+            draft_text: String::new(),
+            selected_files: Vec::new(),
+            transfer_status: None,
+            server_alias: None,
             always_on: config.always_on,
             alias: config.alias,
             receive_dir: PathBuf::from(config.receive_dir),

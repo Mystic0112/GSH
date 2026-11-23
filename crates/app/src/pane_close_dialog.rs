@@ -244,6 +244,33 @@ fn overlay<'a, M: Clone + 'a>(content: Element<'a, M>, on_cancel: M, on_noop: M)
     .into()
 }
 
+/// Centraliza um painel modal próprio sobre o scrim, sem adicionar cabeçalho ou ações.
+pub fn modal<'a, M: Clone + 'a>(
+    content: Element<'a, M>,
+    on_cancel: M,
+    on_noop: M,
+) -> Element<'a, M> {
+    let scrim = mouse_area(
+        container(Space::new().width(Fill).height(Fill))
+            .width(Fill)
+            .height(Fill)
+            .style(|_: &Theme| container::Style {
+                background: Some(Background::Color(theme::palette().scrim)),
+                ..Default::default()
+            }),
+    )
+    .on_press(on_cancel);
+    iced::widget::stack![
+        scrim,
+        container(mouse_area(content).on_press(on_noop))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill)
+    ]
+    .into()
+}
+
 /// Botão do diálogo: confirmação (`emphasis`) ou `OutlineButton` (contorno).
 fn dialog_button<'a, M: Clone + 'a>(
     label: &'static str,

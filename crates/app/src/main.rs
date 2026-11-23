@@ -86,6 +86,7 @@ pub mod labels;
 pub mod layout_store;
 mod localsend_agent;
 pub mod localsend_dialog;
+pub mod localsend_popup;
 mod localsend_runtime;
 #[cfg(target_os = "linux")]
 mod lsp_runtime;
@@ -171,6 +172,7 @@ use crate::topbar::TopbarProps;
 
 /// Intervalo de polling do canal de status na `Subscription` do `Shell` (50 ms).
 const STATUS_POLL_INTERVAL_MS: u64 = 50;
+const LOCALSEND_IDLE_GRACE: Duration = Duration::from_secs(20);
 
 /// Quadro do spinner da busca (~30 fps).
 const SEARCH_SPIN_TICK_MS: u64 = 33;
@@ -624,6 +626,8 @@ enum Msg {
     CloseTabList,
     ToggleAppMenu,
     CloseAppMenu,
+    ToggleChannelsPopup,
+    CloseChannelsPopup,
     AppMenuAction(Box<Msg>),
     AppMenuShortcut(iced::keyboard::Key, iced::keyboard::Modifiers),
     CycleWorkspace(i8),
@@ -855,6 +859,8 @@ struct Shell {
     localsend_agent_preparation: Option<mpsc::Receiver<localsend_agent::PendingSend>>,
     localsend_agent_busy: Arc<AtomicBool>,
     localsend_active_config: Option<gsh_config::schema::LocalSend>,
+    localsend_stop_due: Option<Instant>,
+    localsend_server_manually_stopped: bool,
     localsend_requests: MpscReceiver<ReceiveEvent>,
     localsend_pending: VecDeque<IncomingRequest>,
     localsend_active_request: Option<IncomingRequest>,
@@ -924,6 +930,7 @@ struct Shell {
     pending_window_close: Option<iced::window::Id>,
     workspaces: WorkspaceList,
     channel_editor: Option<rail::ChannelEditor>,
+    channels_popup_open: bool,
     chat_contexts: BTreeMap<ChatId, SessionContext>,
     terminal_contexts: BTreeMap<TermId, SessionContext>,
     file_tree: FileTree,
@@ -1130,6 +1137,8 @@ impl Default for Shell {
             localsend_agent_preparation: None,
             localsend_agent_busy: Arc::new(AtomicBool::new(false)),
             localsend_active_config: None,
+            localsend_stop_due: None,
+            localsend_server_manually_stopped: false,
             localsend_requests,
             localsend_pending: VecDeque::new(),
             localsend_active_request: None,
@@ -1197,6 +1206,7 @@ impl Default for Shell {
             pending_window_close: None,
             workspaces,
             channel_editor: None,
+            channels_popup_open: false,
             chat_contexts: restored
                 .as_ref()
                 .map(|doc| doc.chat_contexts.clone())
@@ -1311,6 +1321,144 @@ async fn pick_localsend_files() -> Vec<PathBuf> {
         .into_iter()
         .map(|handle| handle.path().to_path_buf())
         .collect()
+}
+
+async fn pick_localsend_folder() -> Option<PathBuf> {
+    rfd::AsyncFileDialog::new()
+        .pick_folder()
+        .await
+        .map(|handle| handle.path().to_path_buf())
+}
+
+fn collect_localsend_folder(
+    folder: Option<PathBuf>,
+    max_files: usize,
+    max_file_bytes: u64,
+) -> Result<Vec<PathBuf>, String> {
+    let folder = folder.ok_or_else(|| labels::LOCALSEND_EMPTY_SELECTION.to_owned())?;
+    if !folder.is_dir() {
+        return Err(labels::LOCALSEND_EMPTY_SELECTION.to_owned());
+    }
+    let mut pending = vec![folder];
+    let mut files = Vec::new();
+    while let Some(directory) = pending.pop() {
+        let entries = std::fs::read_dir(&directory).map_err(|error| error.to_string())?;
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file() {
+                if files.len() >= max_files {
+                    return Err(labels::SETTINGS_INVALID_LOCALSEND_LIMIT.to_owned());
+                }
+                if metadata.len() > max_file_bytes {
+                    return Err(labels::SETTINGS_INVALID_LOCALSEND_LIMIT.to_owned());
+                }
+                files.push(path);
+            }
+        }
+    }
+    if files.is_empty() {
+        return Err(labels::LOCALSEND_EMPTY_SELECTION.to_owned());
+    }
+    Ok(files)
+}
+
+fn write_localsend_text(text: String, max_file_bytes: u64) -> Result<Vec<PathBuf>, String> {
+    if text.is_empty() {
+        return Err(labels::LOCALSEND_EMPTY_SELECTION.to_owned());
+    }
+    let bytes = text.into_bytes();
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_file_bytes {
+        return Err(labels::SETTINGS_INVALID_LOCALSEND_LIMIT.to_owned());
+    }
+    Ok(vec![create_localsend_temp_file("txt", bytes)?])
+}
+
+async fn read_localsend_clipboard(max_file_bytes: u64) -> Result<Vec<PathBuf>, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
+        if let Ok(text) = clipboard.get_text() {
+            if !text.is_empty() {
+                return write_localsend_clipboard_asset(text.into_bytes(), "txt", max_file_bytes);
+            }
+        }
+        let image = clipboard.get_image().map_err(|error| error.to_string())?;
+        let image = image::RgbaImage::from_raw(
+            u32::try_from(image.width).map_err(|error| error.to_string())?,
+            u32::try_from(image.height).map_err(|error| error.to_string())?,
+            image.bytes.into_owned(),
+        )
+        .ok_or_else(|| labels::LOCALSEND_SEND_FAILED.to_owned())?;
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .map_err(|error| error.to_string())?;
+        write_localsend_clipboard_asset(png.into_inner(), "png", max_file_bytes)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn write_localsend_clipboard_asset(
+    bytes: Vec<u8>,
+    extension: &str,
+    max_file_bytes: u64,
+) -> Result<Vec<PathBuf>, String> {
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_file_bytes {
+        return Err(labels::SETTINGS_INVALID_LOCALSEND_LIMIT.to_owned());
+    }
+    Ok(vec![create_localsend_temp_file(extension, bytes)?])
+}
+
+fn create_localsend_temp_file(extension: &str, bytes: Vec<u8>) -> Result<PathBuf, String> {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    for _ in 0..8 {
+        let path = std::env::temp_dir().join(format!(
+            "gsh-localsend-{}-{}.{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            extension
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                use std::io::Write as _;
+                #[cfg(unix)]
+                use std::os::unix::fs::PermissionsExt as _;
+                #[cfg(unix)]
+                if let Err(error) = file.set_permissions(std::fs::Permissions::from_mode(0o600)) {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(error.to_string());
+                }
+                if let Err(error) = file.write_all(&bytes) {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(error.to_string());
+                }
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err(labels::LOCALSEND_SEND_FAILED.to_owned())
+}
+
+fn is_localsend_temporary_file(path: &Path) -> bool {
+    let prefix = format!("gsh-localsend-{}-", std::process::id());
+    path.parent() == Some(std::env::temp_dir().as_path())
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(&prefix))
 }
 
 fn open_in_file_manager(path: &Path) {
@@ -1842,15 +1990,17 @@ impl Shell {
         self.settings.localsend.receive_dir = PathBuf::from(&config.receive_dir);
         self.settings.localsend.max_file_mb = config.max_file_mb.to_string();
         self.settings.localsend.max_files = config.max_files.to_string();
-        if self.localsend_active_config.as_ref() == Some(&config) {
-            return;
+        let changed = self.localsend_active_config.as_ref() != Some(&config);
+        if changed {
+            self.stop_localsend_sender();
+            self.localsend_host = None;
+            self.localsend_active_config = Some(config.clone());
+            self.settings.localsend.error = None;
+            self.settings.localsend.server_status = None;
+            self.settings.localsend.server_alias = None;
         }
-        self.stop_localsend_sender();
-        self.localsend_host = None;
-        self.localsend_active_config = Some(config.clone());
-        self.settings.localsend.error = None;
-        self.settings.localsend.server_status = None;
-        if !config.always_on {
+        let should_run = config.always_on || self.settings.localsend.popup_open;
+        if !should_run && changed {
             if let Some(request) = self.localsend_active_request.take() {
                 let _ = request.reply.send(ReceiveDecision::Reject);
             }
@@ -1860,16 +2010,41 @@ impl Shell {
             self.settings.localsend.incoming = None;
             self.settings.localsend.transfer = None;
             self.settings.localsend.peers.clear();
+        }
+        if !should_run || self.localsend_server_manually_stopped || self.localsend_host.is_some() {
             return;
         }
+        self.start_localsend_runtime(&config);
+    }
+
+    fn start_localsend_runtime(&mut self, config: &gsh_config::schema::LocalSend) {
         let limits = localsend_runtime::limits(config.max_file_mb, config.max_files);
         let address = std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
             std::net::Ipv4Addr::UNSPECIFIED,
             gsh_localsend::protocol::PORT,
         ));
-        match LocalSendHost::start(address, &config.alias, limits, self.receive_bridge.clone()) {
+        #[cfg(test)]
+        let started = if self.static_test_mode {
+            let ephemeral = std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
+                std::net::Ipv4Addr::LOCALHOST,
+                0,
+            ));
+            LocalSendHost::start_for_test(
+                ephemeral,
+                &config.alias,
+                limits.clone(),
+                self.receive_bridge.clone(),
+            )
+        } else {
+            LocalSendHost::start(address, &config.alias, limits, self.receive_bridge.clone())
+        };
+        #[cfg(not(test))]
+        let started =
+            LocalSendHost::start(address, &config.alias, limits, self.receive_bridge.clone());
+        match started {
             Ok(host) => {
                 let fingerprint = host.info().fingerprint.chars().take(8).collect::<String>();
+                self.settings.localsend.server_alias = Some(host.info().alias.clone());
                 self.settings.localsend.server_status = Some(labels::localsend_server_status(
                     host.address().port(),
                     &fingerprint,
@@ -1888,6 +2063,30 @@ impl Shell {
         }
     }
 
+    fn localsend_has_activity(&self) -> bool {
+        self.localsend_active_request.is_some()
+            || !self.localsend_pending.is_empty()
+            || self.settings.localsend.transfer.is_some()
+    }
+
+    fn close_localsend_popup(&mut self, now: Instant) {
+        self.clear_localsend_selected_files();
+        self.settings.localsend.popup_open = false;
+        if self.settings.current.localsend.always_on {
+            self.localsend_stop_due = None;
+        } else {
+            self.localsend_stop_due = Some(now + LOCALSEND_IDLE_GRACE);
+        }
+    }
+
+    fn clear_localsend_selected_files(&mut self) {
+        for path in std::mem::take(&mut self.settings.localsend.selected_files) {
+            if is_localsend_temporary_file(&path) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
     fn start_localsend_send(&mut self, ip: &str, paths: Vec<PathBuf>) {
         let Some(host) = self.localsend_host.as_ref() else {
             self.settings.localsend.error = Some(labels::LOCALSEND_SERVER_ERROR.to_owned());
@@ -1901,6 +2100,18 @@ impl Shell {
             self.settings.localsend.error = Some(labels::LOCALSEND_SEND_FAILED.to_owned());
             return;
         };
+        self.start_localsend_send_to_peer(peer, paths);
+    }
+
+    fn start_localsend_send_to_peer(&mut self, peer: gsh_localsend::Peer, paths: Vec<PathBuf>) {
+        if self.localsend_send_cancel.is_some() {
+            self.settings.localsend.error = Some(labels::LOCALSEND_SEND_IN_PROGRESS.to_owned());
+            return;
+        }
+        let Some(host) = self.localsend_host.as_ref() else {
+            self.settings.localsend.error = Some(labels::LOCALSEND_SERVER_ERROR.to_owned());
+            return;
+        };
         if paths.is_empty() || paths.len() > self.settings.current.localsend.max_files {
             self.settings.localsend.error =
                 Some(labels::SETTINGS_INVALID_LOCALSEND_LIMIT.to_owned());
@@ -1910,11 +2121,19 @@ impl Shell {
         let max_file_size =
             u64::from(self.settings.current.localsend.max_file_mb).saturating_mul(1024 * 1024);
         let alias = peer.info.alias.clone();
+        let temporary_files = paths
+            .iter()
+            .filter(|path| is_localsend_temporary_file(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.settings.localsend.selected_files.clear();
         let cancel = Arc::new(AtomicBool::new(false));
         self.localsend_send_generation = self.localsend_send_generation.wrapping_add(1);
         let generation = self.localsend_send_generation;
         self.localsend_send_cancel = Some(Arc::clone(&cancel));
         self.settings.localsend.error = None;
+        self.settings.localsend.transfer_status =
+            Some(labels::LOCALSEND_AWAITING_ACCEPTANCE.to_owned());
         self.settings.localsend.transfer = Some(settings::LocalSendTransfer {
             peer_alias: alias.clone(),
             file_name: paths
@@ -1944,7 +2163,10 @@ impl Shell {
                     },
                     cancel,
                 )
-                .map_err(|_| labels::LOCALSEND_SEND_FAILED.to_owned());
+                .map_err(|error| error.to_string());
+            for path in temporary_files {
+                let _ = std::fs::remove_file(path);
+            }
             let _ = events.send(LocalSendSendEvent::Finished(generation, result));
         });
     }
@@ -1965,6 +2187,7 @@ impl Shell {
             .fold(0u64, |sum, file| sum.saturating_add(file.size));
         if request.reply.send(ReceiveDecision::Accept { dir }).is_ok() {
             self.settings.localsend.incoming = None;
+            self.settings.localsend.transfer_status = Some(labels::LOCALSEND_PROGRESS.to_owned());
             self.settings.localsend.transfer = Some(settings::LocalSendTransfer {
                 peer_alias,
                 file_name,
@@ -1976,6 +2199,7 @@ impl Shell {
             self.localsend_active_request = None;
             self.settings.localsend.incoming = None;
             self.settings.localsend.transfer = None;
+            self.settings.localsend.transfer_status = None;
         }
     }
 
@@ -1985,13 +2209,17 @@ impl Shell {
         }
         self.settings.localsend.incoming = None;
         self.settings.localsend.transfer = None;
+        self.settings.localsend.transfer_status = None;
     }
 
     fn stop_localsend_sender(&mut self) {
         if let Some(cancel) = self.localsend_send_cancel.take() {
             cancel.store(true, Ordering::Relaxed);
             self.localsend_send_generation = self.localsend_send_generation.wrapping_add(1);
+            self.settings.localsend.transfer_status =
+                Some(labels::LOCALSEND_SEND_CANCELLED.to_owned());
         }
+        self.clear_localsend_selected_files();
         self.settings.localsend.transfer = None;
     }
 
@@ -2017,6 +2245,10 @@ impl Shell {
     }
 
     fn poll_localsend(&mut self) {
+        self.poll_localsend_at(Instant::now());
+    }
+
+    fn poll_localsend_at(&mut self, now: Instant) {
         if let Some(preparation) = &self.localsend_agent_preparation {
             match preparation.try_recv() {
                 Ok(pending) => {
@@ -2030,7 +2262,7 @@ impl Shell {
         if self
             .pending_localsend_agent
             .as_ref()
-            .is_some_and(|pending| Instant::now() >= pending.deadline)
+            .is_some_and(|pending| now >= pending.deadline)
         {
             if let Some(pending) = self.pending_localsend_agent.take() {
                 pending.busy.store(false, Ordering::Release);
@@ -2039,7 +2271,10 @@ impl Shell {
         }
         while let Ok(event) = self.localsend_requests.try_recv() {
             match event {
-                ReceiveEvent::Request(request) if self.settings.current.localsend.always_on => {
+                ReceiveEvent::Request(request)
+                    if self.settings.current.localsend.always_on
+                        || self.settings.localsend.popup_open =>
+                {
                     self.localsend_pending.push_back(request)
                 }
                 ReceiveEvent::Request(request) => {
@@ -2054,6 +2289,8 @@ impl Shell {
                     if let Some(request) = &self.localsend_active_request {
                         if request.address == address {
                             self.settings.localsend.incoming = None;
+                            self.settings.localsend.transfer_status =
+                                Some(labels::LOCALSEND_PROGRESS.to_owned());
                             self.settings.localsend.transfer = Some(settings::LocalSendTransfer {
                                 peer_alias: request.sender.alias.clone(),
                                 file_name: name,
@@ -2073,6 +2310,7 @@ impl Shell {
                         self.localsend_active_request = None;
                         self.settings.localsend.incoming = None;
                         self.settings.localsend.transfer = None;
+                        self.settings.localsend.transfer_status = None;
                         self.settings.localsend.received_dir = Some(dir);
                     }
                 }
@@ -2085,6 +2323,8 @@ impl Shell {
                 {
                     if let Some(transfer) = &mut self.settings.localsend.transfer {
                         if transfer.sending {
+                            self.settings.localsend.transfer_status =
+                                Some(labels::LOCALSEND_SENDING.to_owned());
                             transfer.file_name = progress.name;
                             transfer.bytes = progress.bytes;
                             transfer.total_bytes = progress.total;
@@ -2097,10 +2337,22 @@ impl Shell {
                     self.localsend_send_cancel = None;
                     self.settings.localsend.transfer = None;
                     match result {
-                        Ok(()) => self.settings.localsend.received_dir = None,
+                        Ok(()) => {
+                            self.settings.localsend.received_dir = None;
+                            self.settings.localsend.transfer_status =
+                                Some(labels::LOCALSEND_SEND_COMPLETED.to_owned());
+                        }
+                        Err(error) if error.contains("403") => {
+                            self.settings.localsend.transfer_status =
+                                Some(labels::LOCALSEND_SEND_REJECTED.to_owned());
+                        }
+                        Err(error) if error.contains("cancelled") => {
+                            self.settings.localsend.transfer_status =
+                                Some(labels::LOCALSEND_SEND_CANCELLED.to_owned());
+                        }
                         Err(_) => {
                             self.settings.localsend.error =
-                                Some(labels::LOCALSEND_SEND_FAILED.to_owned())
+                                Some(labels::LOCALSEND_SEND_FAILED.to_owned());
                         }
                     }
                 }
@@ -2110,7 +2362,7 @@ impl Shell {
         if self
             .localsend_active_request
             .as_ref()
-            .is_some_and(|request| Instant::now() >= request.deadline)
+            .is_some_and(|request| now >= request.deadline)
         {
             if let Some(request) = self.localsend_active_request.take() {
                 let _ = request.reply.send(ReceiveDecision::Reject);
@@ -2156,6 +2408,17 @@ impl Shell {
                 ip: peer.ip.to_string(),
             })
             .collect();
+        if self.localsend_stop_due.is_some_and(|due| now >= due)
+            && !self.settings.current.localsend.always_on
+            && !self.settings.localsend.popup_open
+            && !self.localsend_has_activity()
+        {
+            self.localsend_host = None;
+            self.settings.localsend.server_status = None;
+            self.settings.localsend.server_alias = None;
+            self.settings.localsend.peers.clear();
+            self.localsend_stop_due = None;
+        }
     }
 
     fn team_config(&self) -> TeamConfig {
@@ -3860,6 +4123,7 @@ impl Shell {
 
     fn handle_channel_action(&mut self, action: rail::ChannelAction) -> Task<Msg> {
         use rail::ChannelAction;
+        self.channels_popup_open = matches!(&action, ChannelAction::New | ChannelAction::Edit(_));
         match action {
             ChannelAction::Select(id) => {
                 self.channel_editor = None;
@@ -6859,13 +7123,12 @@ impl Shell {
                 self.reveal_focused_active_tab()
             }
             Msg::OpenLocalSend => {
-                self.settings.claude.workspace = self.active_workspace_dir().map(Path::to_path_buf);
-                self.settings.reload();
-                let _ = self
-                    .settings
-                    .update(settings::Message::Select(settings::Section::LocalSend));
-                self.panes.focused_model_mut().open_settings();
-                self.reveal_focused_active_tab()
+                self.settings.localsend.popup_open = true;
+                self.settings.localsend.popup_tab = settings::LocalSendPopupTab::Receive;
+                self.localsend_stop_due = None;
+                self.localsend_server_manually_stopped = false;
+                self.configure_localsend();
+                Task::none()
             }
             Msg::Settings(settings::Message::RoutineOpenLog(path)) => {
                 if self
@@ -6883,6 +7146,168 @@ impl Shell {
             Msg::Settings(message) => {
                 if let settings::Message::LocalSend(action) = &message {
                     match action {
+                        settings::LocalSendMessage::PopupTabChanged(tab) => {
+                            self.settings.localsend.popup_tab = *tab;
+                            return Task::none();
+                        }
+                        settings::LocalSendMessage::ClosePopup => {
+                            self.close_localsend_popup(Instant::now());
+                            return Task::none();
+                        }
+                        settings::LocalSendMessage::PickFiles => {
+                            return Task::perform(pick_localsend_files(), |files| {
+                                Msg::Settings(settings::Message::LocalSend(
+                                    settings::LocalSendMessage::FilesPicked(files),
+                                ))
+                            });
+                        }
+                        settings::LocalSendMessage::PickFolder => {
+                            return Task::perform(pick_localsend_folder(), |folder| {
+                                Msg::Settings(settings::Message::LocalSend(
+                                    settings::LocalSendMessage::FolderPicked(folder),
+                                ))
+                            });
+                        }
+                        settings::LocalSendMessage::FolderPicked(folder) => {
+                            let folder = folder.clone();
+                            let max_files = self.settings.current.localsend.max_files;
+                            let max_file_bytes =
+                                u64::from(self.settings.current.localsend.max_file_mb)
+                                    .saturating_mul(1024 * 1024);
+                            return Task::perform(
+                                tokio::task::spawn_blocking(move || {
+                                    collect_localsend_folder(folder, max_files, max_file_bytes)
+                                }),
+                                |result| {
+                                    let result =
+                                        result.unwrap_or_else(|error| Err(error.to_string()));
+                                    Msg::Settings(settings::Message::LocalSend(
+                                        settings::LocalSendMessage::FolderFilesCollected(result),
+                                    ))
+                                },
+                            );
+                        }
+                        settings::LocalSendMessage::FolderFilesCollected(result)
+                        | settings::LocalSendMessage::FilesPickedResult(result) => {
+                            match result {
+                                Ok(paths) if !self.settings.localsend.popup_open => {
+                                    for path in paths {
+                                        if is_localsend_temporary_file(path) {
+                                            let _ = std::fs::remove_file(path);
+                                        }
+                                    }
+                                }
+                                Ok(paths) => {
+                                    self.clear_localsend_selected_files();
+                                    self.settings.localsend.selected_files = paths.clone();
+                                    self.settings.localsend.error = None;
+                                    self.settings.localsend.transfer_status = None;
+                                }
+                                Err(error) => self.settings.localsend.error = Some(error.clone()),
+                            }
+                            return Task::none();
+                        }
+                        settings::LocalSendMessage::FilesPicked(paths) => {
+                            self.clear_localsend_selected_files();
+                            self.settings.localsend.selected_files = paths.clone();
+                            self.settings.localsend.error = None;
+                            self.settings.localsend.transfer_status = None;
+                            return Task::none();
+                        }
+                        settings::LocalSendMessage::TextChanged(value) => {
+                            self.settings.localsend.draft_text = value.clone();
+                            return Task::none();
+                        }
+                        settings::LocalSendMessage::SendText => {
+                            let max_file_bytes =
+                                u64::from(self.settings.current.localsend.max_file_mb)
+                                    .saturating_mul(1024 * 1024);
+                            let draft = self.settings.localsend.draft_text.clone();
+                            return Task::perform(
+                                tokio::task::spawn_blocking(move || {
+                                    write_localsend_text(draft, max_file_bytes)
+                                }),
+                                |result| {
+                                    let result =
+                                        result.unwrap_or_else(|error| Err(error.to_string()));
+                                    Msg::Settings(settings::Message::LocalSend(
+                                        settings::LocalSendMessage::FilesPickedResult(result),
+                                    ))
+                                },
+                            );
+                        }
+                        settings::LocalSendMessage::PasteClipboard => {
+                            let max_file_bytes =
+                                u64::from(self.settings.current.localsend.max_file_mb)
+                                    .saturating_mul(1024 * 1024);
+                            return Task::perform(
+                                read_localsend_clipboard(max_file_bytes),
+                                |result| {
+                                    Msg::Settings(settings::Message::LocalSend(
+                                        settings::LocalSendMessage::ClipboardLoaded(result),
+                                    ))
+                                },
+                            );
+                        }
+                        settings::LocalSendMessage::ClipboardLoaded(result) => {
+                            match result {
+                                Ok(paths) => {
+                                    self.clear_localsend_selected_files();
+                                    self.settings.localsend.selected_files = paths.clone();
+                                    self.settings.localsend.error = None;
+                                    self.settings.localsend.transfer_status = None;
+                                }
+                                Err(error) => self.settings.localsend.error = Some(error.clone()),
+                            }
+                            return Task::none();
+                        }
+                        settings::LocalSendMessage::RefreshPeers => {
+                            if let Some(host) = self.localsend_host.as_ref() {
+                                host.rescan();
+                                self.settings.localsend.peers =
+                                    host.peers()
+                                        .into_iter()
+                                        .map(|peer| settings::LocalSendPeer {
+                                            alias: peer.info.alias,
+                                            device_type: peer.info.device_type.unwrap_or_else(
+                                                || labels::LOCALSEND_TITLE.to_owned(),
+                                            ),
+                                            ip: peer.ip.to_string(),
+                                        })
+                                        .collect();
+                            }
+                            return Task::none();
+                        }
+                        settings::LocalSendMessage::SendSelectedTo(ip) => {
+                            let paths = self.settings.localsend.selected_files.clone();
+                            if paths.is_empty() {
+                                self.settings.localsend.error =
+                                    Some(labels::LOCALSEND_EMPTY_SELECTION.to_owned());
+                            } else {
+                                self.start_localsend_send(ip, paths);
+                            }
+                            return Task::none();
+                        }
+                        settings::LocalSendMessage::RestartServer => {
+                            self.localsend_server_manually_stopped = false;
+                            self.localsend_host = None;
+                            self.settings.localsend.server_status = None;
+                            self.configure_localsend();
+                            return Task::none();
+                        }
+                        settings::LocalSendMessage::StopServer => {
+                            self.localsend_server_manually_stopped = true;
+                            self.reject_localsend_receive();
+                            for request in self.localsend_pending.drain(..) {
+                                let _ = request.reply.send(ReceiveDecision::Reject);
+                            }
+                            self.stop_localsend_sender();
+                            self.localsend_host = None;
+                            self.settings.localsend.server_status = None;
+                            self.settings.localsend.server_alias = None;
+                            self.settings.localsend.peers.clear();
+                            return Task::none();
+                        }
                         settings::LocalSendMessage::ChooseReceiveDir => {
                             let initial = self.settings.localsend.receive_dir.clone();
                             return Task::perform(pick_localsend_receive_dir(initial), |path| {
@@ -7029,6 +7454,14 @@ impl Shell {
                 Task::none()
             }
             Msg::ChannelAction(action) => self.handle_channel_action(action),
+            Msg::ToggleChannelsPopup => {
+                self.channels_popup_open = !self.channels_popup_open;
+                Task::none()
+            }
+            Msg::CloseChannelsPopup => {
+                self.channels_popup_open = false;
+                Task::none()
+            }
             Msg::ChannelFolderPicked(folder) => {
                 if let Some(editor) = self.channel_editor.as_mut() {
                     editor.draft.folder = folder;
@@ -8190,6 +8623,19 @@ impl Shell {
                 }) if modifiers.control() => Some(Msg::AppMenuShortcut(key, modifiers)),
                 _ => None,
             });
+        let localsend_popup_escape = if self.settings.localsend.popup_open {
+            iced::event::listen_with(|event, status, _| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                    ..
+                }) if status == iced::event::Status::Ignored => Some(Msg::Settings(
+                    settings::Message::LocalSend(settings::LocalSendMessage::ClosePopup),
+                )),
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
         let search_visible = self.files_open && self.right_tab() == RightTab::Search;
         // Esc no campo (o text_input captura e desfoca): limpa a busca
         let search_clear = if search_visible {
@@ -8305,6 +8751,7 @@ impl Shell {
                 windows,
                 cancel_create,
                 menu_shortcuts,
+                localsend_popup_escape,
                 search_clear,
                 search_spinner,
             ]
@@ -8931,6 +9378,9 @@ impl Shell {
                         members: self.channel_member_options(),
                         on_action: Msg::ChannelAction,
                     },
+                    channels_open: self.channels_popup_open,
+                    on_toggle_channels: Msg::ToggleChannelsPopup,
+                    on_close_channels: Msg::CloseChannelsPopup,
                     on_toggle_keep_awake: Msg::Settings(settings::Message::Claude(
                         settings::claude::Message::KeepAwakeToggle(!keep_awake_active),
                     )),
@@ -9229,6 +9679,89 @@ impl Shell {
             .into(),
             None => layered,
         };
+        let layered: Element<'_, Msg> = if self.settings.localsend.popup_open {
+            let popup_tab = match self.settings.localsend.popup_tab {
+                settings::LocalSendPopupTab::Receive => localsend_popup::PopupTab::Receive,
+                settings::LocalSendPopupTab::Send => localsend_popup::PopupTab::Send,
+                settings::LocalSendPopupTab::SettingsReceive => {
+                    localsend_popup::PopupTab::SettingsReceive
+                }
+                settings::LocalSendPopupTab::SettingsNetwork => {
+                    localsend_popup::PopupTab::SettingsNetwork
+                }
+            };
+            let action = |message| Msg::Settings(settings::Message::LocalSend(message));
+            let popup = localsend_popup::view(
+                &self.settings.localsend,
+                popup_tab,
+                &self.settings.localsend.draft_text,
+                localsend_popup::PopupActions {
+                    close: action(settings::LocalSendMessage::ClosePopup),
+                    receive: action(settings::LocalSendMessage::PopupTabChanged(
+                        settings::LocalSendPopupTab::Receive,
+                    )),
+                    send: action(settings::LocalSendMessage::PopupTabChanged(
+                        settings::LocalSendPopupTab::Send,
+                    )),
+                    settings_receive: action(settings::LocalSendMessage::PopupTabChanged(
+                        settings::LocalSendPopupTab::SettingsReceive,
+                    )),
+                    settings_network: action(settings::LocalSendMessage::PopupTabChanged(
+                        settings::LocalSendPopupTab::SettingsNetwork,
+                    )),
+                    pick_files: action(settings::LocalSendMessage::PickFiles),
+                    pick_folder: action(settings::LocalSendMessage::PickFolder),
+                    text_changed: |value| {
+                        Msg::Settings(settings::Message::LocalSend(
+                            settings::LocalSendMessage::TextChanged(value),
+                        ))
+                    },
+                    send_text: action(settings::LocalSendMessage::SendText),
+                    paste: Some(action(settings::LocalSendMessage::PasteClipboard)),
+                    refresh: action(settings::LocalSendMessage::RefreshPeers),
+                    send_to: |ip| {
+                        Msg::Settings(settings::Message::LocalSend(
+                            settings::LocalSendMessage::SendSelectedTo(ip),
+                        ))
+                    },
+                    choose_receive_dir: action(settings::LocalSendMessage::ChooseReceiveDir),
+                    alias_changed: |value| {
+                        Msg::Settings(settings::Message::LocalSend(
+                            settings::LocalSendMessage::AliasChanged(value),
+                        ))
+                    },
+                    always_on_changed: |value| {
+                        Msg::Settings(settings::Message::LocalSend(
+                            settings::LocalSendMessage::AlwaysOnChanged(value),
+                        ))
+                    },
+                    limits_changed: |max_file_mb, max_files| {
+                        Msg::Settings(settings::Message::LocalSend(
+                            settings::LocalSendMessage::LimitsChanged {
+                                max_file_mb,
+                                max_files,
+                            },
+                        ))
+                    },
+                    server_restart: action(settings::LocalSendMessage::RestartServer),
+                    server_stop: action(settings::LocalSendMessage::StopServer),
+                    cancel_send: action(settings::LocalSendMessage::CancelSend),
+                },
+            );
+            stack![
+                layered,
+                pane_close_dialog::modal(
+                    popup,
+                    Msg::Settings(settings::Message::LocalSend(
+                        settings::LocalSendMessage::ClosePopup,
+                    )),
+                    Msg::Noop,
+                )
+            ]
+            .into()
+        } else {
+            layered
+        };
         let layered: Element<'_, Msg> = match localsend_dialog::view(&self.settings.localsend) {
             Some(dialog) => stack![layered, dialog.map(Msg::Settings)].into(),
             None => layered,
@@ -9359,7 +9892,11 @@ fn main() -> iced::Result {
 }
 
 #[cfg(test)]
+mod channel_interaction_tests;
+#[cfg(test)]
 mod db_interaction_tests;
+#[cfg(test)]
+mod localsend_popup_tests;
 #[cfg(test)]
 mod telemetry_interaction_tests;
 
@@ -9372,6 +9909,74 @@ mod tests {
     use iced_test::simulator::Simulator;
 
     use crate::island::IslandAgentState;
+
+    struct TestLocalSendReceiver {
+        decision: ReceiveDecision,
+        progress_delay: Duration,
+        request_seen: Option<Sender<()>>,
+        release: Option<Mutex<MpscReceiver<()>>>,
+    }
+
+    impl gsh_localsend::Receiver for TestLocalSendReceiver {
+        fn accept(
+            &self,
+            _sender: &gsh_localsend::DeviceInfo,
+            _sender_address: std::net::SocketAddr,
+            _files: &[gsh_localsend::FileMetadata],
+        ) -> ReceiveDecision {
+            if let Some(request_seen) = &self.request_seen {
+                let _ = request_seen.send(());
+            }
+            if let Some(release) = &self.release {
+                if let Ok(receiver) = release.lock() {
+                    let _ = receiver.recv_timeout(Duration::from_secs(5));
+                }
+            }
+            self.decision.clone()
+        }
+
+        fn progress(
+            &self,
+            _sender_address: std::net::SocketAddr,
+            _name: &str,
+            _bytes: u64,
+            _total: u64,
+        ) {
+            if !self.progress_delay.is_zero() {
+                std::thread::sleep(self.progress_delay);
+            }
+        }
+    }
+
+    fn test_localsend_receiver(
+        decision: ReceiveDecision,
+        progress_delay: Duration,
+        request_seen: Option<Sender<()>>,
+        release: Option<MpscReceiver<()>>,
+    ) -> (gsh_localsend::LocalSendServer, gsh_localsend::Peer) {
+        let identity = gsh_localsend::Identity::generate(0).unwrap();
+        let receiver = TestLocalSendReceiver {
+            decision,
+            progress_delay,
+            request_seen,
+            release: release.map(Mutex::new),
+        };
+        let server = gsh_localsend::LocalSendServer::bind(
+            identity.clone(),
+            (std::net::Ipv4Addr::LOCALHOST, 0).into(),
+            Arc::new(receiver),
+            localsend_runtime::limits(32, 8),
+        )
+        .unwrap();
+        let mut info = identity.info;
+        info.port = Some(server.address().port());
+        let peer = gsh_localsend::Peer {
+            info,
+            ip: std::net::Ipv4Addr::LOCALHOST,
+            seen_at: 0,
+        };
+        (server, peer)
+    }
 
     #[test]
     fn app_menu_shortcuts_resolve_ctrl_shift_and_comma() {
@@ -9429,6 +10034,8 @@ mod tests {
             localsend_agent_preparation: None,
             localsend_agent_busy: Arc::new(AtomicBool::new(false)),
             localsend_active_config: None,
+            localsend_stop_due: None,
+            localsend_server_manually_stopped: false,
             localsend_requests,
             localsend_pending: VecDeque::new(),
             localsend_active_request: None,
@@ -9498,6 +10105,7 @@ mod tests {
             pending_window_close: None,
             workspaces,
             channel_editor: None,
+            channels_popup_open: false,
             chat_contexts: BTreeMap::new(),
             terminal_contexts: BTreeMap::new(),
             file_tree: FileTree::new(),
@@ -9976,8 +10584,228 @@ mod tests {
         shell.settings.current.localsend.always_on = false;
         shell.configure_localsend();
         assert!(shell.localsend_host.is_none());
-        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        assert!(listener.local_addr().unwrap().port() > 0);
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 53317))
+            .expect("always_on=false leaves the LocalSend port free");
+        assert_eq!(listener.local_addr().unwrap().port(), 53317);
+    }
+
+    #[test]
+    fn localsend_popup_opens_runtime_and_releases_it_after_idle_grace() {
+        let mut shell = test_shell();
+        shell.settings.current.localsend.always_on = false;
+        let _ = shell.update_inner(Msg::OpenLocalSend);
+        assert!(shell.settings.localsend.popup_open);
+        assert!(shell.localsend_host.is_some());
+
+        let _ = shell.update_inner(Msg::Settings(settings::Message::LocalSend(
+            settings::LocalSendMessage::ClosePopup,
+        )));
+        assert!(!shell.settings.localsend.popup_open);
+        assert!(shell.localsend_host.is_some());
+
+        let fake_now = Instant::now() + LOCALSEND_IDLE_GRACE + Duration::from_millis(1);
+        shell.poll_localsend_at(fake_now);
+        assert!(shell.localsend_host.is_none());
+        assert!(shell.settings.localsend.server_status.is_none());
+    }
+
+    #[test]
+    fn localsend_popup_keeps_runtime_for_a_pending_receive_request() {
+        let mut shell = test_shell();
+        let _ = shell.update_inner(Msg::OpenLocalSend);
+        let (reply, _answer) = mpsc::sync_channel(1);
+        let request_deadline = Instant::now() + LOCALSEND_IDLE_GRACE + Duration::from_secs(30);
+        shell.localsend_active_request = Some(IncomingRequest {
+            sender: gsh_localsend::Identity::generate(0).unwrap().info,
+            address: (std::net::Ipv4Addr::LOCALHOST, 53317).into(),
+            files: vec![gsh_localsend::FileMetadata {
+                id: "file-0".to_owned(),
+                file_name: "pending.txt".to_owned(),
+                size: 5,
+                file_type: "text/plain".to_owned(),
+                sha256: None,
+                preview: None,
+                metadata: None,
+            }],
+            reply,
+            deadline: request_deadline,
+        });
+        let _ = shell.update_inner(Msg::Settings(settings::Message::LocalSend(
+            settings::LocalSendMessage::ClosePopup,
+        )));
+
+        let fake_now = Instant::now() + LOCALSEND_IDLE_GRACE + Duration::from_secs(1);
+        shell.poll_localsend_at(fake_now);
+        assert!(shell.localsend_host.is_some());
+        shell.reject_localsend_receive();
+        shell.poll_localsend_at(fake_now);
+        assert!(shell.localsend_host.is_none());
+    }
+
+    #[test]
+    fn localsend_popup_tabs_change_through_shell_messages_without_settings_navigation() {
+        let mut shell = test_shell();
+        let selected = shell.settings.section;
+        let _ = shell.update_inner(Msg::OpenLocalSend);
+        for (tab, expected) in [
+            (
+                settings::LocalSendPopupTab::Send,
+                settings::LocalSendPopupTab::Send,
+            ),
+            (
+                settings::LocalSendPopupTab::SettingsReceive,
+                settings::LocalSendPopupTab::SettingsReceive,
+            ),
+            (
+                settings::LocalSendPopupTab::SettingsNetwork,
+                settings::LocalSendPopupTab::SettingsNetwork,
+            ),
+        ] {
+            let _ = shell.update_inner(Msg::Settings(settings::Message::LocalSend(
+                settings::LocalSendMessage::PopupTabChanged(tab),
+            )));
+            assert_eq!(shell.settings.localsend.popup_tab, expected);
+        }
+        assert_eq!(shell.settings.section, selected);
+        assert!(!matches!(
+            shell.panes.focused_model().active_tab(),
+            Some(PaneTab::Settings)
+        ));
+    }
+
+    #[test]
+    fn localsend_popup_rejects_a_second_concurrent_send() {
+        let mut shell = test_shell();
+        let cancel = Arc::new(AtomicBool::new(false));
+        shell.localsend_send_cancel = Some(Arc::clone(&cancel));
+        shell.start_localsend_send_to_peer(test_localsend_peer(), Vec::new());
+        assert!(shell
+            .localsend_send_cancel
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, &cancel)));
+        assert_eq!(
+            shell.settings.localsend.error.as_deref(),
+            Some(labels::LOCALSEND_SEND_IN_PROGRESS)
+        );
+    }
+
+    #[test]
+    fn localsend_popup_send_completes_and_exposes_progress_with_test_receiver() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("payload.bin");
+        let destination = temp.path().join("received");
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::write(&source, vec![0x5a; 8 * 1024 * 1024]).unwrap();
+        let (receiver, peer) = test_localsend_receiver(
+            ReceiveDecision::Accept {
+                dir: destination.clone(),
+            },
+            Duration::from_millis(1),
+            None,
+            None,
+        );
+        let mut shell = test_shell();
+        shell.settings.current.localsend.max_file_mb = 32;
+        shell.settings.current.localsend.max_files = 8;
+        let _ = shell.update_inner(Msg::OpenLocalSend);
+        shell.start_localsend_send_to_peer(peer, vec![source]);
+        assert_eq!(
+            shell.settings.localsend.transfer_status.as_deref(),
+            Some(labels::LOCALSEND_AWAITING_ACCEPTANCE)
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut progress_seen = false;
+        while Instant::now() < deadline
+            && shell.settings.localsend.transfer_status.as_deref()
+                != Some(labels::LOCALSEND_SEND_COMPLETED)
+        {
+            shell.poll_localsend();
+            progress_seen |= shell
+                .settings
+                .localsend
+                .transfer
+                .as_ref()
+                .is_some_and(|transfer| transfer.bytes > 0);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(progress_seen, "transfer progress was not observed");
+        assert_eq!(
+            shell.settings.localsend.transfer_status.as_deref(),
+            Some(labels::LOCALSEND_SEND_COMPLETED)
+        );
+        assert_eq!(
+            std::fs::metadata(destination.join("payload.bin"))
+                .unwrap()
+                .len(),
+            8 * 1024 * 1024
+        );
+        drop(receiver);
+    }
+
+    #[test]
+    fn localsend_popup_send_refusal_is_visible() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("refused.txt");
+        std::fs::write(&source, b"will be refused").unwrap();
+        let (receiver, peer) =
+            test_localsend_receiver(ReceiveDecision::Reject, Duration::ZERO, None, None);
+        let mut shell = test_shell();
+        let _ = shell.update_inner(Msg::OpenLocalSend);
+        shell.start_localsend_send_to_peer(peer, vec![source]);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline
+            && shell.settings.localsend.transfer_status.as_deref()
+                != Some(labels::LOCALSEND_SEND_REJECTED)
+        {
+            shell.poll_localsend();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(
+            shell.settings.localsend.transfer_status.as_deref(),
+            Some(labels::LOCALSEND_SEND_REJECTED)
+        );
+        drop(receiver);
+    }
+
+    #[test]
+    fn localsend_popup_cancel_interrupts_an_awaiting_receiver() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("cancel.txt");
+        let destination = temp.path().join("received");
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::write(&source, b"cancel before upload").unwrap();
+        let (seen_tx, seen_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (receiver, peer) = test_localsend_receiver(
+            ReceiveDecision::Accept {
+                dir: destination.clone(),
+            },
+            Duration::ZERO,
+            Some(seen_tx),
+            Some(release_rx),
+        );
+        let mut shell = test_shell();
+        let _ = shell.update_inner(Msg::OpenLocalSend);
+        shell.start_localsend_send_to_peer(peer, vec![source]);
+        seen_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("receiver approval request");
+        let _ = shell.update_inner(Msg::Settings(settings::Message::LocalSend(
+            settings::LocalSendMessage::CancelSend,
+        )));
+        release_tx.send(()).expect("release receiver");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            shell.poll_localsend();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(
+            shell.settings.localsend.transfer_status.as_deref(),
+            Some(labels::LOCALSEND_SEND_CANCELLED)
+        );
+        assert!(!destination.join("cancel.txt").exists());
+        drop(receiver);
     }
 
     #[test]
