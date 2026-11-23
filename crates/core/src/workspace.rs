@@ -153,6 +153,10 @@ pub struct Workspace {
     pub name: String,
     pub path: Option<PathBuf>,
     pub git_branch: Option<String>,
+    /// Cor de fundo do avatar (ARGB).
+    pub color: Option<u32>,
+    /// Caminho da imagem do avatar.
+    pub image_path: Option<PathBuf>,
     pub kind: WorkspaceKind,
     pub realm: String,
     channel_id: Option<ChannelId>,
@@ -170,6 +174,8 @@ impl Workspace {
             name: name.into(),
             path: None,
             git_branch,
+            color: None,
+            image_path: None,
             kind: WorkspaceKind::SystemTerminal,
             realm: CHANNEL_DEFAULT.to_string(),
             channel_id: None,
@@ -185,6 +191,8 @@ impl Workspace {
             name,
             path: Some(path_buf),
             git_branch: None,
+            color: None,
+            image_path: None,
             kind: WorkspaceKind::Project,
             realm: CHANNEL_DEFAULT.to_string(),
             channel_id: None,
@@ -200,6 +208,16 @@ impl Workspace {
     /// Define o caminho da pasta associado ao workspace.
     pub fn with_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.path = Some(path.into());
+        self
+    }
+
+    pub fn with_color(mut self, color: Option<u32>) -> Self {
+        self.color = color;
+        self
+    }
+
+    pub fn with_image_path(mut self, path: Option<PathBuf>) -> Self {
+        self.image_path = path;
         self
     }
 
@@ -426,6 +444,21 @@ impl WorkspaceList {
             return false;
         }
         workspace.name = name.to_owned();
+        true
+    }
+
+    /// Atualiza a aparência do avatar de um workspace.
+    pub fn set_avatar(
+        &mut self,
+        index: usize,
+        color: Option<u32>,
+        image_path: Option<PathBuf>,
+    ) -> bool {
+        let Some(workspace) = self.items.get_mut(index) else {
+            return false;
+        };
+        workspace.color = color;
+        workspace.image_path = image_path;
         true
     }
 

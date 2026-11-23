@@ -80,6 +80,8 @@ fn empty_doc() -> LayoutDoc {
         query_connections: Vec::new(),
         workspace_names: BTreeMap::new(),
         workspace_realms: BTreeMap::new(),
+        workspace_colors: BTreeMap::new(),
+        workspace_images: BTreeMap::new(),
         system_workspaces: Vec::new(),
         active_channel: None,
         channel_state: None,

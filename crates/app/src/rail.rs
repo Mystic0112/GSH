@@ -1,6 +1,6 @@
 //! Rail de projetos/workspaces à esquerda (`projects_rail.dart` do Flutter).
 
-use gsh_core::workspace::{Workspace, WorkspaceList};
+use gsh_core::workspace::{Workspace, WorkspaceKind, WorkspaceList};
 use iced::widget::{button, column, container, row, scrollable, text, tooltip, Space};
 use iced::{Alignment, Background, Border, Color, Element, Fill, Length, Padding, Theme};
 
@@ -12,6 +12,16 @@ mod channel_editor;
 #[path = "channel_footer.rs"]
 mod channel_footer;
 pub use channel_editor::{ChannelAction, ChannelActions, ChannelEditor, ChannelMemberOption};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceMenuAction {
+    Configure,
+    CopyId,
+    Close,
+    MoveTo(String),
+    Toggle,
+    Dismiss,
+}
 
 /// Estado visual do botão de manter acordado no rodapé do rail.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -69,6 +79,8 @@ pub struct RailActions<'a, M> {
     pub on_download_update: M,
     pub on_dismiss_update: M,
     pub on_settings: M,
+    pub workspace_menu_open: Option<usize>,
+    pub on_workspace_menu: fn(usize, WorkspaceMenuAction) -> M,
 }
 
 /// Renderiza o rail lateral de workspaces com o botão "+" de abrir projeto.
@@ -89,6 +101,8 @@ pub fn view<'a, M: Clone + 'a>(
         on_download_update,
         on_dismiss_update,
         on_settings,
+        workspace_menu_open,
+        on_workspace_menu,
     } = actions;
     let header = container(
         row![
@@ -125,6 +139,10 @@ pub fn view<'a, M: Clone + 'a>(
                 workspace,
                 idx == selected_idx,
                 on_select(idx),
+                workspace_menu_open == Some(idx),
+                &workspaces.channels(),
+                idx,
+                on_workspace_menu,
             ));
         }
     }
@@ -192,25 +210,44 @@ fn workspace_row<'a, M: Clone + 'a>(
     item: &'a Workspace,
     selected: bool,
     on_press: M,
+    menu_open: bool,
+    channels: &[String],
+    index: usize,
+    on_menu: fn(usize, WorkspaceMenuAction) -> M,
 ) -> Element<'a, M> {
-    let avatar = container(
-        text(item.initial())
-            .font(theme::FONT_TITLE)
-            .size(theme::WORKSPACE_AVATAR_SIZE * theme::WORKSPACE_AVATAR_INITIAL_SCALE)
-            .color(theme::palette().text),
-    )
-    .width(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
-    .height(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
-    .center_x(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
-    .center_y(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
-    .style(move |_: &Theme| container::Style {
-        background: Some(Background::Color(theme::palette().panel)),
-        border: Border {
-            radius: theme::RADIUS_CARD.into(),
-            ..Default::default()
-        },
-        ..Default::default()
+    let avatar_content: Element<'a, M> =
+        match item.image_path.as_ref().filter(|path| path.is_file()) {
+            Some(path) => iced::widget::image(iced::widget::image::Handle::from_path(path))
+                .width(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
+                .height(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
+                .into(),
+            None => text(item.initial())
+                .font(theme::FONT_TITLE)
+                .size(theme::WORKSPACE_AVATAR_SIZE * theme::WORKSPACE_AVATAR_INITIAL_SCALE)
+                .color(theme::palette().text)
+                .into(),
+        };
+    let avatar_color = item.color.map_or(theme::palette().panel, |value| {
+        iced::Color::from_rgba8(
+            (value >> 16) as u8,
+            (value >> 8) as u8,
+            value as u8,
+            ((value >> 24) as u8) as f32 / 255.0,
+        )
     });
+    let avatar = container(avatar_content)
+        .width(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
+        .height(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
+        .center_x(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
+        .center_y(Length::Fixed(theme::WORKSPACE_AVATAR_SIZE))
+        .style(move |_: &Theme| container::Style {
+            background: Some(Background::Color(avatar_color)),
+            border: Border {
+                radius: theme::RADIUS_CARD.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
 
     let mut details = column![text(&item.name)
         .font(if selected {
@@ -254,7 +291,7 @@ fn workspace_row<'a, M: Clone + 'a>(
         details = details.push(branch_badge);
     }
 
-    button(
+    let select = button(
         row![avatar, container(details).width(Fill)]
             .spacing(10)
             .align_y(Alignment::Center),
@@ -280,8 +317,51 @@ fn workspace_row<'a, M: Clone + 'a>(
             },
             ..Default::default()
         }
-    })
-    .into()
+    });
+    let trigger: Element<'a, M> = if item.kind == WorkspaceKind::Project {
+        button(text("⋮").size(18).color(theme::palette().text3))
+            .padding([4, 8])
+            .on_press(on_menu(index, WorkspaceMenuAction::Toggle))
+            .style(|_: &Theme, _| button::Style {
+                background: None,
+                text_color: theme::palette().text,
+                ..Default::default()
+            })
+            .into()
+    } else {
+        Space::new().width(0).into()
+    };
+    let base = iced::widget::mouse_area(row![select, trigger].align_y(Alignment::Center))
+        .on_right_press(on_menu(index, WorkspaceMenuAction::Toggle));
+    let menu = (menu_open && item.kind == WorkspaceKind::Project).then(|| {
+        let mut items = vec![
+            crate::app_menu::Item::Entry(crate::app_menu::Entry::new(
+                labels::WORKSPACE_MENU_CONFIGURE,
+                on_menu(index, WorkspaceMenuAction::Configure),
+            )),
+            crate::app_menu::Item::Entry(crate::app_menu::Entry::new(
+                labels::WORKSPACE_MENU_COPY_ID,
+                on_menu(index, WorkspaceMenuAction::CopyId),
+            )),
+            crate::app_menu::Item::Divider,
+        ];
+        for channel in channels {
+            items.push(crate::app_menu::Item::Entry(crate::app_menu::Entry::new(
+                format!("{} {channel}", labels::WORKSPACE_MENU_MOVE_TO),
+                on_menu(index, WorkspaceMenuAction::MoveTo(channel.clone())),
+            )));
+        }
+        items.push(crate::app_menu::Item::Divider);
+        items.push(crate::app_menu::Item::Entry(
+            crate::app_menu::Entry::new("Fechar", on_menu(index, WorkspaceMenuAction::Close))
+                .danger(),
+        ));
+        crate::app_menu::menu(items, 190.0)
+    });
+    crate::anchored::Anchored::new(base, menu, on_menu(index, WorkspaceMenuAction::Dismiss))
+        .side()
+        .on_escape(on_menu(index, WorkspaceMenuAction::Dismiss))
+        .into()
 }
 
 /// Botão pequeno do rodapé (`_SmallIcon` de `projects_rail.dart`): 26×26,

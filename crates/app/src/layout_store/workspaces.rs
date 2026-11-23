@@ -17,6 +17,10 @@ pub(super) struct SystemWorkspace {
     name: String,
     git_branch: Option<String>,
     realm: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    color: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image_path: Option<std::path::PathBuf>,
     index: usize,
     active: bool,
 }
@@ -27,6 +31,8 @@ impl LayoutDoc {
         self.active_workspace = 0;
         self.workspace_names.clear();
         self.workspace_realms.clear();
+        self.workspace_colors.clear();
+        self.workspace_images.clear();
         self.system_workspaces.clear();
         for (index, workspace) in list.items().iter().enumerate() {
             let active = index == list.selected_index();
@@ -39,12 +45,20 @@ impl LayoutDoc {
                     .insert(path.clone(), workspace.name.clone());
                 self.workspace_realms
                     .insert(path.clone(), workspace.realm().to_owned());
+                if let Some(color) = workspace.color {
+                    self.workspace_colors.insert(path.clone(), color);
+                }
+                if let Some(image) = &workspace.image_path {
+                    self.workspace_images.insert(path.clone(), image.clone());
+                }
             } else {
                 self.system_workspaces.push(SystemWorkspace {
                     id: workspace.id.clone(),
                     name: workspace.name.clone(),
                     git_branch: workspace.git_branch.clone(),
                     realm: workspace.realm().to_owned(),
+                    color: workspace.color,
+                    image_path: workspace.image_path.clone(),
                     index,
                     active,
                 });
@@ -67,6 +81,8 @@ impl LayoutDoc {
                 if let Some(realm) = self.workspace_realms.get(path) {
                     workspace.set_realm(realm);
                 }
+                workspace.color = self.workspace_colors.get(path).copied();
+                workspace.image_path = self.workspace_images.get(path).cloned();
                 workspace
             })
             .collect();
@@ -85,7 +101,9 @@ impl LayoutDoc {
             workspaces.insert(
                 index,
                 Workspace::system(&system.id, &system.name, system.git_branch.clone())
-                    .with_realm(&system.realm),
+                    .with_realm(&system.realm)
+                    .with_color(system.color)
+                    .with_image_path(system.image_path.clone()),
             );
             if system.active {
                 active_id = Some(system.id.clone());
@@ -202,5 +220,40 @@ mod tests {
         let restored = doc.restore_workspaces();
         assert_eq!(restored.active_context_channel().unwrap().id, empty);
         assert!(restored.active().is_none());
+    }
+
+    #[test]
+    fn workspace_avatar_metadata_survives_layout_roundtrip_and_old_layout_defaults() {
+        let path = std::path::PathBuf::from("/tmp/avatar-project");
+        let workspace = Workspace::from_path("ws-1", &path)
+            .with_color(Some(0xFF2F6FF0))
+            .with_image_path(Some("/tmp/avatar.webp".into()));
+        let list = WorkspaceList::new(vec![workspace]);
+        let mut doc = crate::pane_tree::PaneTree::default().snapshot();
+        doc.save_workspaces(&list);
+        let encoded = serde_json::to_vec(&doc).expect("layout serializes");
+        let doc: crate::layout_store::LayoutDoc =
+            serde_json::from_slice(&encoded).expect("layout reloads");
+        let restored = doc.restore_workspaces();
+        let restored = restored.items().first().expect("workspace restored");
+        assert_eq!(restored.color, Some(0xFF2F6FF0));
+        assert_eq!(
+            restored.image_path.as_deref(),
+            Some(std::path::Path::new("/tmp/avatar.webp"))
+        );
+
+        let old = serde_json::to_value(crate::pane_tree::PaneTree::default().snapshot())
+            .expect("serialize layout");
+        let mut old = old;
+        old.as_object_mut()
+            .expect("layout object")
+            .remove("workspace_colors");
+        old.as_object_mut()
+            .expect("layout object")
+            .remove("workspace_images");
+        let parsed: crate::layout_store::LayoutDoc =
+            serde_json::from_value(old).expect("old layout loads");
+        assert!(parsed.workspace_colors.is_empty());
+        assert!(parsed.workspace_images.is_empty());
     }
 }
