@@ -76,7 +76,7 @@ pub fn view<'a, M: Clone + 'a>(
         keep_awake,
         update_version,
         on_add_workspace,
-        channels,
+        channels: _,
         on_toggle_keep_awake,
         on_download_update,
         on_dismiss_update,
@@ -148,7 +148,7 @@ pub fn view<'a, M: Clone + 'a>(
     .height(Length::Fixed(theme::FOOTER_HEIGHT))
     .padding([0, 12]);
 
-    let content = column![channel_editor::card(workspaces, channels), list].spacing(8);
+    let content = column![list];
     let mut main_col = column![header, scrollable(content).width(Fill).height(Fill)];
     if let Some(version) = update_version {
         main_col = main_col.push(update_card(version, on_download_update, on_dismiss_update));

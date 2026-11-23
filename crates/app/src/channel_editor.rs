@@ -1,3 +1,6 @@
+// ponytail: a caixa de canais saiu da barra lateral; o editor fica guardado até ganhar lugar nas Configurações.
+#![allow(dead_code)]
+
 use std::fmt;
 
 use gsh_core::workspace::{
