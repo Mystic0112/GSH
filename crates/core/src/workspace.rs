@@ -415,4 +415,37 @@ impl WorkspaceList {
         let _ = self.select(new_idx);
         new_idx
     }
+
+    /// Atualiza o nome visível de um item do rail. Nomes vazios são recusados.
+    pub fn rename(&mut self, index: usize, name: &str) -> bool {
+        let name = name.trim();
+        let Some(workspace) = self.items.get_mut(index) else {
+            return false;
+        };
+        if name.is_empty() {
+            return false;
+        }
+        workspace.name = name.to_owned();
+        true
+    }
+
+    /// Remove um item sem tocar nos arquivos da pasta e mantém a seleção válida.
+    pub fn remove(&mut self, index: usize) -> Option<Workspace> {
+        if index >= self.items.len() {
+            return None;
+        }
+        let removed = self.items.remove(index);
+        for channel in &mut self.channels {
+            if channel.last_workspace.as_ref() == Some(&removed.reference()) {
+                channel.last_workspace = None;
+            }
+        }
+        self.selected = match (self.items.len(), self.selected) {
+            (0, _) => 0,
+            (_, selected) if selected > index => selected - 1,
+            (len, selected) if selected >= len => len - 1,
+            (_, selected) => selected,
+        };
+        Some(removed)
+    }
 }

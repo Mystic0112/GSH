@@ -11,6 +11,7 @@ USAGE:
   gsh send --to <Name/agent> [--json] <text>    knock on a teammate's agent over the LAN
   gsh send [--tab-id <id> | --focused] [--enter] <text>
                                                type text into a tab (--enter submits)
+  gsh send-key [--tab-id <id>] <Key>...    press keys in a terminal tab
   gsh peers [--json]                          list linked and reachable agents
   gsh deliver --to <Name/agent> [--json] <file> [note]
                                                hand a file to a teammate's agent
@@ -27,6 +28,14 @@ USAGE:
   gsh localsend send <alias|ip> [--timeout <s>] <file...>
                                                send files to a LocalSend device
   gsh list-tabs       [--json]             list active tabs (alias: list-panes)
+  gsh list-workspaces [--json]             list open workspaces
+  gsh new-workspace <path> [--host <target>] [--name <title>] [--json]
+                                               add and select a workspace
+  gsh close-workspace [<id|path>] [--json]  remove a workspace from the rail
+  gsh rename-workspace [<id|path>] <name> [--json]
+                                               rename a workspace in the rail
+  gsh exec [--cwd <dir>] [--timeout <s>] [--json] [--] <command...>
+                                               run a shell line through the app
   gsh new-tab [--cwd <dir>] [--title <name>] [--split h|v] [--tab-id <id>] [--json]
                                                open a new terminal tab (prints its id)
   gsh close-tab [<label|tab-id>] [--json]  close a tab (default: the current
@@ -97,6 +106,10 @@ TARGET:
                   legacy fallback $GSH_PANE_ID). Ids (t0, t1…) reset on every
                   app boot → find them with `gsh list-tabs` before targeting
                   another tab (cross-tab).
+
+SEND-KEY:
+  Enter, Tab, Escape, Space, BSpace, Up/Down/Left/Right, Home/End,
+  PageUp/PageDown, Delete, and C-a through C-z.
 
 NEW-TAB:
   --cwd <dir>     working directory (default: current directory)

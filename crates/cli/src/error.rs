@@ -18,6 +18,9 @@ pub enum CliError {
     /// Sem app para falar, ou conexão falhou (exit 3).
     #[error("gsh: {0}")]
     Transport(#[from] TransportError),
+    /// O verbo exec preserva o código retornado pelo processo filho sem imprimir erro.
+    #[error("")]
+    CommandExit(i32),
 }
 
 impl CliError {
@@ -26,6 +29,7 @@ impl CliError {
             CliError::Usage(_) | CliError::Blocked(_) => 2,
             CliError::App(_) => 1,
             CliError::Transport(_) => 3,
+            CliError::CommandExit(code) => u8::try_from(*code).unwrap_or(1),
         }
     }
 

@@ -244,6 +244,10 @@ pub enum Command {
         enter: bool,
         target: Target,
     },
+    SendKey {
+        keys: Vec<String>,
+        target: Target,
+    },
     TeamPeers {
         json: bool,
     },
@@ -298,6 +302,34 @@ pub enum Command {
         target: Target,
         json: bool,
     },
+    ListWorkspaces {
+        json: bool,
+    },
+    NewWorkspace {
+        path: String,
+        host: Option<String>,
+        name: Option<String>,
+        tab_id: Option<String>,
+        json: bool,
+    },
+    CloseWorkspace {
+        target: Option<String>,
+        tab_id: Option<String>,
+        json: bool,
+    },
+    RenameWorkspace {
+        target: Option<String>,
+        name: String,
+        tab_id: Option<String>,
+        json: bool,
+    },
+    Exec {
+        command: String,
+        cwd: Option<String>,
+        timeout: Option<u64>,
+        tab_id: Option<String>,
+        json: bool,
+    },
     Telemetry(Vec<String>),
     LocalSend {
         args: Vec<String>,
@@ -319,6 +351,7 @@ pub fn parse(argv: &[String]) -> Result<Command, CliError> {
         "mcp" => parse_mcp(args),
         "msg" => parse_msg(args),
         "send" => parse_send(args),
+        "send-key" => parse_send_key(args),
         "peers" => Ok(Command::TeamPeers {
             json: Flags::parse(args)?.json,
         }),
@@ -338,6 +371,13 @@ pub fn parse(argv: &[String]) -> Result<Command, CliError> {
                 json: f.json,
             })
         }
+        "list-workspaces" => Ok(Command::ListWorkspaces {
+            json: Flags::parse(args)?.json,
+        }),
+        "new-workspace" | "open-workspace" | "new-remote-workspace" => parse_new_workspace(args),
+        "close-workspace" => parse_close_workspace(args),
+        "rename-workspace" => parse_rename_workspace(args),
+        "exec" => parse_exec(args),
         "telemetry" => Ok(Command::Telemetry(args.to_vec())),
         "localsend" => Ok(Command::LocalSend {
             args: args.to_vec(),
@@ -416,6 +456,271 @@ fn parse_send(args: &[String]) -> Result<Command, CliError> {
         target: parsed.target(),
     })
 }
+
+fn parse_send_key(args: &[String]) -> Result<Command, CliError> {
+    let parsed = Flags::parse(args)?;
+    if wants_help(args) {
+        return Ok(Command::Help(SEND_KEY_HELP));
+    }
+    if parsed.positionals.is_empty() {
+        return Err(CliError::usage(
+            "gsh send-key: missing key (e.g. Enter, C-c, Escape)",
+        ));
+    }
+    for name in &parsed.positionals {
+        if resolve_key(name).is_none() {
+            return Err(CliError::usage(format!(
+                "gsh send-key: unknown key \"{name}\""
+            )));
+        }
+    }
+    let target = parsed.target();
+    Ok(Command::SendKey {
+        keys: parsed.positionals,
+        target,
+    })
+}
+
+fn parse_new_workspace(args: &[String]) -> Result<Command, CliError> {
+    if wants_help(args) {
+        return Ok(Command::Help(NEW_WORKSPACE_HELP));
+    }
+    let (mut path, mut host, mut name, mut tab_id, mut json) = (None, None, None, None, false);
+    let mut i = 0;
+    while let Some(arg) = args.get(i).map(String::as_str) {
+        if arg == "--" {
+            path.get_or_insert_with(|| args.get(i + 1..).unwrap_or_default().join(" "));
+            break;
+        }
+        if arg == "--json" {
+            json = true;
+        } else if arg == "--host" || arg == "--remote" {
+            host = Some(
+                args.get(i + 1)
+                    .ok_or_else(|| CliError::usage("gsh new-workspace: --host requires a value"))?
+                    .clone(),
+            );
+            i += 1;
+        } else if let Some(value) = arg
+            .strip_prefix("--host=")
+            .or_else(|| arg.strip_prefix("--remote="))
+        {
+            host = Some(value.to_owned());
+        } else if arg == "--name" {
+            name = Some(
+                args.get(i + 1)
+                    .ok_or_else(|| CliError::usage("gsh new-workspace: --name requires a value"))?
+                    .clone(),
+            );
+            i += 1;
+        } else if let Some(value) = arg.strip_prefix("--name=") {
+            name = Some(value.to_owned());
+        } else if arg == "--tab-id" || arg == "-t" {
+            tab_id = Some(
+                args.get(i + 1)
+                    .ok_or_else(|| CliError::usage("gsh: --tab-id requires a value"))?
+                    .clone(),
+            );
+            i += 1;
+        } else if let Some(value) = arg.strip_prefix("--tab-id=") {
+            tab_id = Some(value.to_owned());
+        } else if arg.starts_with('-') {
+            return Err(CliError::usage(format!("gsh: unknown flag \"{arg}\"")));
+        } else if path.is_none() {
+            path = Some(arg.to_owned());
+        }
+        i += 1;
+    }
+    let path = path
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| CliError::usage("gsh new-workspace: missing <path> (or --path <path>)"))?;
+    Ok(Command::NewWorkspace {
+        path,
+        host,
+        name,
+        tab_id,
+        json,
+    })
+}
+
+fn parse_close_workspace(args: &[String]) -> Result<Command, CliError> {
+    let (mut target, mut tab_id, mut json) = (None, None, false);
+    let mut i = 0;
+    while let Some(arg) = args.get(i).map(String::as_str) {
+        if arg == "--help" || arg == "-h" {
+            return Ok(Command::Help(CLOSE_WORKSPACE_HELP));
+        }
+        if arg == "--json" {
+            json = true;
+        } else if arg == "--tab-id" || arg == "-t" {
+            tab_id = Some(
+                args.get(i + 1)
+                    .ok_or_else(|| CliError::usage("gsh: --tab-id requires a value"))?
+                    .clone(),
+            );
+            i += 1;
+        } else if let Some(value) = arg.strip_prefix("--tab-id=") {
+            tab_id = Some(value.to_owned());
+        } else if arg.starts_with('-') {
+            return Err(CliError::usage(format!("gsh: unknown flag \"{arg}\"")));
+        } else if target.is_none() {
+            target = Some(arg.to_owned());
+        }
+        i += 1;
+    }
+    Ok(Command::CloseWorkspace {
+        target,
+        tab_id,
+        json,
+    })
+}
+
+fn parse_rename_workspace(args: &[String]) -> Result<Command, CliError> {
+    let (mut target, mut name, mut tab_id, mut json) = (None, None, None, false);
+    let mut i = 0;
+    while let Some(arg) = args.get(i).map(String::as_str) {
+        if arg == "--help" || arg == "-h" {
+            return Ok(Command::Help(RENAME_WORKSPACE_HELP));
+        }
+        if arg == "--json" {
+            json = true;
+        } else if arg == "--tab-id" || arg == "-t" {
+            tab_id = Some(
+                args.get(i + 1)
+                    .ok_or_else(|| CliError::usage("gsh: --tab-id requires a value"))?
+                    .clone(),
+            );
+            i += 1;
+        } else if let Some(value) = arg.strip_prefix("--tab-id=") {
+            tab_id = Some(value.to_owned());
+        } else if arg.starts_with('-') {
+            return Err(CliError::usage(format!("gsh: unknown flag \"{arg}\"")));
+        } else if target.is_none() {
+            target = Some(arg.to_owned());
+        } else if name.is_none() {
+            name = Some(arg.to_owned());
+        }
+        i += 1;
+    }
+    let (target, name) = match (target, name) {
+        (Some(target), Some(name)) => (Some(target), name),
+        (Some(name), None) => (None, name),
+        _ => {
+            return Err(CliError::usage(
+                "gsh rename-workspace: missing workspace name",
+            ))
+        }
+    };
+    Ok(Command::RenameWorkspace {
+        target,
+        name,
+        tab_id,
+        json,
+    })
+}
+
+pub const EXEC_HELP: &str = "gsh exec [--cwd <dir>] [--timeout <s>] [--json] [--] <command...>\n  Runs a shell line through the app. Timeout defaults to 60 seconds; exit code\n  is the command's code (124 on timeout). --json prints {ok, code, stdout, stderr, timedOut}.";
+
+fn parse_exec(args: &[String]) -> Result<Command, CliError> {
+    let (mut cwd, mut timeout, mut tab_id, mut json) = (None, None, None, false);
+    let mut command = Vec::new();
+    let mut i = 0;
+    while let Some(arg) = args.get(i).map(String::as_str) {
+        match arg {
+            "--help" | "-h" => return Ok(Command::Help(EXEC_HELP)),
+            "--cwd" => {
+                cwd = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| CliError::usage("gsh exec: --cwd requires a value"))?
+                        .clone(),
+                );
+                i += 1;
+            }
+            "--timeout" => {
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| CliError::usage("gsh exec: --timeout requires a value"))?;
+                timeout = Some(raw.parse::<u64>().map_err(|_| {
+                    CliError::usage("gsh exec: --timeout requires a non-negative integer")
+                })?);
+                i += 1;
+            }
+            "--tab-id" | "-t" => {
+                tab_id = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| CliError::usage("gsh: --tab-id requires a value"))?
+                        .clone(),
+                );
+                i += 1;
+            }
+            "--json" => json = true,
+            "--" => {
+                command.extend(args.get(i + 1..).unwrap_or_default().iter().cloned());
+                break;
+            }
+            _ if arg.starts_with("--") => {
+                return Err(CliError::usage(format!(
+                    "gsh exec: unknown flag {arg}\n{EXEC_HELP}"
+                )))
+            }
+            _ => {
+                command.extend(args.get(i..).unwrap_or_default().iter().cloned());
+                break;
+            }
+        }
+        i += 1;
+    }
+    if command.is_empty() {
+        return Err(CliError::usage(format!(
+            "gsh exec: missing command\n{EXEC_HELP}"
+        )));
+    }
+    Ok(Command::Exec {
+        command: command.join(" "),
+        cwd,
+        timeout,
+        tab_id,
+        json,
+    })
+}
+
+/// Byte-for-byte key mapping from the Flutter CLI's `keys.rs`.
+pub(crate) fn resolve_key(name: &str) -> Option<String> {
+    let lower = name.to_lowercase();
+    let sequence = match lower.as_str() {
+        "enter" | "return" | "cr" => "\r",
+        "tab" => "\t",
+        "escape" | "esc" => "\x1b",
+        "space" => " ",
+        "bspace" | "backspace" => "\x7f",
+        "up" => "\x1b[A",
+        "down" => "\x1b[B",
+        "right" => "\x1b[C",
+        "left" => "\x1b[D",
+        "home" => "\x1b[H",
+        "end" => "\x1b[F",
+        "pageup" | "ppage" => "\x1b[5~",
+        "pagedown" | "npage" => "\x1b[6~",
+        "delete" | "del" => "\x1b[3~",
+        _ => {
+            if let [b'c', b'-', ch] = lower.as_bytes() {
+                if ch.is_ascii_lowercase() {
+                    return Some(char::from(*ch - b'`').to_string());
+                }
+            }
+            if name.chars().count() == 1 {
+                return Some(name.to_owned());
+            }
+            return None;
+        }
+    };
+    Some(sequence.to_owned())
+}
+
+pub const SEND_KEY_HELP: &str = "gsh send-key [--tab-id <id>] <Key>...\n  Press one or more keys in a terminal tab. Keys: Enter, Tab, Escape, Space,\n  BSpace, arrows, Home, End, PageUp, PageDown, Delete, C-<letter>.";
+const NEW_WORKSPACE_HELP: &str = "gsh new-workspace <path> [--host <ssh-target>] [--name <title>] [--json]\n  Adds and selects a workspace, then ensures an initial terminal tab is open.\n  --host <target> remote workspace (not supported by the Rust app yet)\n  --name <title>  custom display title (default: folder name)";
+const CLOSE_WORKSPACE_HELP: &str = "gsh close-workspace [<id|path>] [--json]\n  Removes a workspace from GSH's rail; files on disk are kept.\n  Without a target, closes the workspace owning the current tab.";
+const RENAME_WORKSPACE_HELP: &str = "gsh rename-workspace [<id|path>] <new-name> [--json]\n  Renames the display title of a workspace in the rail.\n  Without a target, renames the workspace owning the current tab.";
 
 fn parse_read_tab(args: &[String]) -> Result<Command, CliError> {
     let parsed = Flags::parse(args)?;
@@ -1163,5 +1468,159 @@ mod tests {
             usage_msg(parse(&v(&["send"]))),
             "gsh send: missing text to send"
         );
+    }
+
+    #[test]
+    fn send_key_parseia_target_e_tabela_completa_e_rejeita_nome_invalido() {
+        assert_eq!(
+            parse(&v(&["send-key", "--tab-id", "t9", "Enter", "C-z"])).unwrap(),
+            Command::SendKey {
+                keys: vec!["Enter".into(), "C-z".into()],
+                target: Target {
+                    focused: false,
+                    tab_id: Some("t9".into())
+                }
+            }
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["send-key"]))),
+            "gsh send-key: missing key (e.g. Enter, C-c, Escape)"
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["send-key", "NoSuchKey"]))),
+            "gsh send-key: unknown key \"NoSuchKey\""
+        );
+        assert!(matches!(
+            parse(&v(&["send-key", "--help"])).unwrap(),
+            Command::Help(_)
+        ));
+        let named = [
+            ("Enter", "\r"),
+            ("Tab", "\t"),
+            ("Escape", "\x1b"),
+            ("Space", " "),
+            ("BSpace", "\x7f"),
+            ("Up", "\x1b[A"),
+            ("Down", "\x1b[B"),
+            ("Left", "\x1b[D"),
+            ("Right", "\x1b[C"),
+            ("Home", "\x1b[H"),
+            ("End", "\x1b[F"),
+            ("PageUp", "\x1b[5~"),
+            ("PageDown", "\x1b[6~"),
+            ("Delete", "\x1b[3~"),
+        ];
+        for (name, expected) in named {
+            assert_eq!(resolve_key(name).as_deref(), Some(expected), "{name}");
+        }
+        for ch in b'a'..=b'z' {
+            assert_eq!(
+                resolve_key(&format!("C-{}", char::from(ch)))
+                    .unwrap()
+                    .as_bytes(),
+                &[ch - b'`']
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_verbs_parseiam_argumentos_e_validam_uso() {
+        assert_eq!(
+            parse(&v(&[
+                "new-workspace",
+                "/tmp/project",
+                "--host",
+                "ssh",
+                "--name",
+                "Demo",
+                "--json"
+            ]))
+            .unwrap(),
+            Command::NewWorkspace {
+                path: "/tmp/project".into(),
+                host: Some("ssh".into()),
+                name: Some("Demo".into()),
+                tab_id: None,
+                json: true,
+            }
+        );
+        assert_eq!(
+            parse(&v(&["close-workspace", "/tmp/project", "--json"])).unwrap(),
+            Command::CloseWorkspace {
+                target: Some("/tmp/project".into()),
+                tab_id: None,
+                json: true,
+            }
+        );
+        assert_eq!(
+            parse(&v(&["rename-workspace", "ws-1", "Demo"])).unwrap(),
+            Command::RenameWorkspace {
+                target: Some("ws-1".into()),
+                name: "Demo".into(),
+                tab_id: None,
+                json: false,
+            }
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["new-workspace"]))),
+            "gsh new-workspace: missing <path> (or --path <path>)"
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["new-workspace", "/tmp/project", "--host"]))),
+            "gsh new-workspace: --host requires a value"
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["rename-workspace"]))),
+            "gsh rename-workspace: missing workspace name"
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["close-workspace", "--unknown"]))),
+            "gsh: unknown flag \"--unknown\""
+        );
+        for args in [
+            v(&["new-workspace", "--help"]),
+            v(&["close-workspace", "--help"]),
+            v(&["rename-workspace", "--help"]),
+            v(&["exec", "--help"]),
+        ] {
+            assert!(matches!(parse(&args).unwrap(), Command::Help(_)));
+        }
+    }
+
+    #[test]
+    fn exec_preserva_linha_shell_e_valida_flags() {
+        assert_eq!(
+            parse(&v(&[
+                "exec",
+                "--cwd",
+                "/tmp",
+                "--timeout",
+                "4",
+                "--json",
+                "--",
+                "echo",
+                "oi"
+            ]))
+            .unwrap(),
+            Command::Exec {
+                command: "echo oi".into(),
+                cwd: Some("/tmp".into()),
+                timeout: Some(4),
+                tab_id: None,
+                json: true,
+            }
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["exec", "--cwd"]))),
+            "gsh exec: --cwd requires a value"
+        );
+        assert_eq!(
+            usage_msg(parse(&v(&["exec", "--timeout", "-1", "echo"]))),
+            "gsh exec: --timeout requires a non-negative integer"
+        );
+        assert!(
+            usage_msg(parse(&v(&["exec", "--bad"]))).starts_with("gsh exec: unknown flag --bad\n")
+        );
+        assert!(usage_msg(parse(&v(&["exec"]))).starts_with("gsh exec: missing command\n"));
     }
 }

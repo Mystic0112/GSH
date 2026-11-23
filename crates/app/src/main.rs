@@ -175,6 +175,187 @@ const STATUS_POLL_INTERVAL_MS: u64 = 50;
 /// Quadro do spinner da busca (~30 fps).
 const SEARCH_SPIN_TICK_MS: u64 = 33;
 
+fn cli_exec_result(command: &str, cwd: Option<&Path>, timeout_secs: u64) -> serde_json::Value {
+    if let Some(cwd) = cwd.filter(|cwd| !cwd.is_dir()) {
+        return serde_json::json!({"error":format!("cwd not found: \"{}\"", cwd.display())});
+    }
+    let mut process = std::process::Command::new(cli_exec_shell());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        process.arg("-lc").arg(command).process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        if cli_powershell_path().is_some() {
+            process.args(["-NoLogo", "-NonInteractive", "-Command", command]);
+        } else {
+            process.args(["/d", "/s", "/c", command]);
+        }
+    }
+    if let Some(cwd) = cwd {
+        process.current_dir(cwd);
+    }
+    let mut child = match process
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return serde_json::json!({"code":127,"stdout":"","stderr":error.to_string(),"timedOut":false})
+        }
+    };
+    let out_capture = CliExecCapture::default();
+    let err_capture = CliExecCapture::default();
+    let out_reader = spawn_cli_exec_reader(child.stdout.take(), out_capture.clone());
+    let err_reader = spawn_cli_exec_reader(child.stderr.take(), err_capture.clone());
+    let deadline = std::time::Instant::now().checked_add(Duration::from_secs(timeout_secs));
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if deadline.is_none_or(|deadline| std::time::Instant::now() < deadline) => {
+                std::thread::sleep(Duration::from_millis(10))
+            }
+            Ok(None) => {
+                timed_out = true;
+                #[cfg(unix)]
+                if let Ok(pid) = i32::try_from(child.id()) {
+                    // SAFETY: `process_group(0)` made this child a process-group leader.
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
+                }
+                let _ = child.kill();
+                break child.wait().ok();
+            }
+            Err(_) => {
+                let _ = child.kill();
+                break child.wait().ok();
+            }
+        }
+    };
+    let code = if timed_out {
+        124
+    } else {
+        status.and_then(|status| status.code()).unwrap_or(1)
+    };
+    // Um processo deixado em segundo plano (`servidor &`) mantém a saída aberta e
+    // faria o exec esperar por ele: depois que o comando termina, só esperamos um
+    // instante pelo resto da saída e devolvemos o que já foi lido.
+    let grace = std::time::Instant::now() + CLI_EXEC_DRAIN_GRACE;
+    while !(out_reader.is_finished() && err_reader.is_finished())
+        && std::time::Instant::now() < grace
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let (stdout, out_truncated) = out_capture.take();
+    let (stderr, err_truncated) = err_capture.take();
+    let truncated = out_truncated || err_truncated;
+    let mut stderr = String::from_utf8_lossy(&stderr).into_owned();
+    if truncated {
+        stderr.push_str(&format!(
+            "\n[gsh: saída truncada em {} MiB]\n",
+            CLI_EXEC_OUTPUT_CAP / (1024 * 1024)
+        ));
+    }
+    let mut result = serde_json::json!({
+        "code": code,
+        "stdout": String::from_utf8_lossy(&stdout),
+        "stderr": stderr,
+        "timedOut": timed_out,
+    });
+    if truncated {
+        if let Some(object) = result.as_object_mut() {
+            object.insert("truncated".to_owned(), serde_json::Value::Bool(true));
+        }
+    }
+    result
+}
+
+/// Teto da saída (stdout e stderr, cada um) que o `gsh exec` guarda: um comando
+/// que imprime sem parar não pode encher a memória do app. O que passa do teto é
+/// lido e descartado, para o processo não travar escrevendo no pipe.
+const CLI_EXEC_OUTPUT_CAP: usize = 8 * 1024 * 1024;
+/// Quanto esperar pela saída restante depois que o comando termina.
+const CLI_EXEC_DRAIN_GRACE: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Default)]
+struct CliExecCapture(std::sync::Arc<std::sync::Mutex<(Vec<u8>, bool)>>);
+
+impl CliExecCapture {
+    fn push(&self, chunk: &[u8]) {
+        let mut guard = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let room = CLI_EXEC_OUTPUT_CAP.saturating_sub(guard.0.len());
+        if chunk.len() > room {
+            guard.1 = true;
+        }
+        let keep = chunk.len().min(room);
+        guard
+            .0
+            .extend_from_slice(chunk.get(..keep).unwrap_or_default());
+    }
+
+    fn take(&self) -> (Vec<u8>, bool) {
+        let mut guard = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::mem::take(&mut *guard)
+    }
+}
+
+fn spawn_cli_exec_reader<R: std::io::Read + Send + 'static>(
+    pipe: Option<R>,
+    capture: CliExecCapture,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let Some(mut pipe) = pipe else { return };
+        let mut chunk = vec![0_u8; 64 * 1024];
+        loop {
+            match pipe.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => capture.push(chunk.get(..read).unwrap_or_default()),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+    })
+}
+
+#[cfg(unix)]
+fn cli_exec_shell() -> String {
+    std::env::var("SHELL")
+        .ok()
+        .filter(|shell| !shell.is_empty())
+        .unwrap_or_else(|| "/bin/sh".to_owned())
+}
+
+#[cfg(windows)]
+fn cli_exec_shell() -> String {
+    cli_powershell_path()
+        .unwrap_or_else(|| std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_owned()))
+}
+
+#[cfg(windows)]
+fn cli_powershell_path() -> Option<String> {
+    if let Some(path) = std::env::var_os("PATH") {
+        if let Some(found) = std::env::split_paths(&path)
+            .flat_map(|directory| [directory.join("powershell.exe"), directory.join("pwsh.exe")])
+            .find(|candidate| candidate.is_file())
+        {
+            return Some(found.to_string_lossy().into_owned());
+        }
+    }
+    let system_root = std::env::var_os("SystemRoot")?;
+    let path = PathBuf::from(system_root).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    path.is_file().then(|| path.to_string_lossy().into_owned())
+}
+
 /// Espera do debounce da busca (200 ms) sem ocupar a thread da UI.
 async fn search_debounce() {
     let _ = tokio::task::spawn_blocking(|| {
@@ -2887,6 +3068,187 @@ impl Shell {
                 .send(serde_json::json!({"ok": true, "data": {"from": tab_id, "to": target_id}}));
             return Task::none();
         }
+        if cmd == "exec" {
+            let shell_line = args
+                .and_then(|value| value.get("command"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if shell_line.trim().is_empty() {
+                let _ = command
+                    .reply
+                    .send(serde_json::json!({"ok":false,"error":"missing command"}));
+                return Task::none();
+            }
+            let cwd = args
+                .and_then(|value| value.get("cwd"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|cwd| !cwd.is_empty())
+                .map(PathBuf::from);
+            let timeout = args
+                .and_then(|value| value.get("timeout"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(60);
+            let timeout = if timeout == 0 { 60 } else { timeout };
+            let worker_reply = command.reply.clone();
+            let spawn_result = std::thread::Builder::new()
+                .name("gsh-cli-exec".into())
+                .spawn(move || {
+                    let result = cli_exec_result(&shell_line, cwd.as_deref(), timeout);
+                    if let Some(error) = result.get("error").and_then(serde_json::Value::as_str) {
+                        let _ = worker_reply.send(serde_json::json!({"ok":false,"error":error}));
+                    } else {
+                        let _ = worker_reply.send(serde_json::json!({"ok":true,"data":result}));
+                    }
+                });
+            if let Err(error) = spawn_result {
+                let _ = command.reply.send(serde_json::json!({"ok":false,"error":format!("could not start exec worker: {error}")}));
+            }
+            return Task::none();
+        }
+        if cmd == "new-workspace" {
+            let raw_path = args
+                .and_then(|value| value.get("path"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if raw_path.is_empty() {
+                let _ = command
+                    .reply
+                    .send(serde_json::json!({"ok":false,"error":"missing path"}));
+                return Task::none();
+            }
+            let host = args
+                .and_then(|value| value.get("host"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if !host.is_empty() {
+                let _ = command.reply.send(serde_json::json!({"ok":false,"error":"remote workspaces are not supported yet"}));
+                return Task::none();
+            }
+            let path = PathBuf::from(raw_path);
+            if !path.is_absolute() || !path.is_dir() {
+                let _ = command.reply.send(serde_json::json!({"ok":false,"error":format!("directory not found: \"{}\"", path.display())}));
+                return Task::none();
+            }
+            let index = self.workspaces.open_folder(path.clone());
+            let name = args
+                .and_then(|value| value.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if !name.is_empty() {
+                let _ = self.workspaces.rename(index, name);
+            }
+            self.files_open = true;
+            self.activate_workspace_path(Some(path.clone()));
+            if self.terminals.is_empty() {
+                self.open_terminal_in_focused();
+            }
+            self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
+            let workspace = self.workspaces.items().get(index);
+            let id = workspace
+                .map(|workspace| workspace.id.as_str())
+                .unwrap_or_default();
+            let name = workspace
+                .map(|workspace| workspace.name.as_str())
+                .unwrap_or_default();
+            let tabs = self.cli_workspace_tab_count(index);
+            let _ = command.reply.send(
+                serde_json::json!({"ok":true,"data":{"id":id,"name":name,"path":path,"tabs":tabs}}),
+            );
+            return self.sync_telemetry_workspace();
+        }
+        if cmd == "close-workspace" || cmd == "rename-workspace" {
+            let target = args
+                .and_then(|value| value.get("target"))
+                .and_then(serde_json::Value::as_str);
+            let index = match self.cli_workspace_index(target, tab_id) {
+                Ok(index) => index,
+                Err(error) => {
+                    let _ = command
+                        .reply
+                        .send(serde_json::json!({"ok":false,"error":error}));
+                    return Task::none();
+                }
+            };
+            let workspace = self.workspaces.items().get(index);
+            if workspace.is_some_and(|workspace| {
+                workspace.kind == gsh_core::workspace::WorkspaceKind::SystemTerminal
+            }) {
+                let _ = command.reply.send(serde_json::json!({"ok":false,"error":if cmd == "close-workspace" { "cannot close the system terminal workspace" } else { "cannot rename the system terminal workspace" }}));
+                return Task::none();
+            }
+            if cmd == "rename-workspace" {
+                let name = args
+                    .and_then(|value| value.get("name"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .trim();
+                if name.is_empty() {
+                    let _ = command
+                        .reply
+                        .send(serde_json::json!({"ok":false,"error":"missing new workspace name"}));
+                    return Task::none();
+                }
+                let _ = self.workspaces.rename(index, name);
+                let workspace = self.workspaces.items().get(index);
+                let data = workspace.map(|workspace| serde_json::json!({"id":workspace.id,"name":workspace.name,"path":workspace.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()})).unwrap_or(serde_json::Value::Null);
+                self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
+                let _ = command
+                    .reply
+                    .send(serde_json::json!({"ok":true,"data":data}));
+                return self.sync_telemetry_workspace();
+            }
+            let was_active = self.workspaces.selected_index() == index;
+            let removed = self.workspaces.remove(index);
+            let Some(removed) = removed else {
+                let _ = command
+                    .reply
+                    .send(serde_json::json!({"ok":false,"error":"workspace not found"}));
+                return Task::none();
+            };
+            let id = removed.id.clone();
+            let path = removed
+                .path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if was_active {
+                let next = self
+                    .workspaces
+                    .active()
+                    .and_then(|workspace| workspace.path.clone());
+                self.activate_workspace_path(next);
+            }
+            self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
+            let _ = command
+                .reply
+                .send(serde_json::json!({"ok":true,"data":{"id":id,"path":path,"closed":true}}));
+            return self.sync_telemetry_workspace();
+        }
+        if cmd == "list-workspaces" {
+            let workspaces = self
+                .workspaces
+                .items()
+                .iter()
+                .enumerate()
+                .map(|(index, workspace)| {
+                    let tabs = self.cli_workspace_tab_count(index);
+                    serde_json::json!({
+                        "id": workspace.id,
+                        "name": workspace.name,
+                        "path": workspace.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+                        "tabs": tabs,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let _ = command
+                .reply
+                .send(serde_json::json!({"ok": true, "data": workspaces}));
+            return Task::none();
+        }
         if cmd == "peers" || cmd == "agents" {
             let external_caller = self
                 .active_workspace_dir()
@@ -3379,6 +3741,121 @@ impl Shell {
                     .active_context_channel()
                     .and_then(|channel| channel.draft.folder.as_deref())
             })
+    }
+
+    fn cli_workspace_index(&self, target: Option<&str>, caller: &str) -> Result<usize, String> {
+        let items = self.workspaces.items();
+        if let Some(target) = target.filter(|target| !target.trim().is_empty()) {
+            if let Some(index) = items.iter().position(|workspace| workspace.id == target) {
+                return Ok(index);
+            }
+            if let Some(index) = items.iter().position(|workspace| {
+                workspace
+                    .path
+                    .as_deref()
+                    .is_some_and(|path| path == Path::new(target))
+            }) {
+                return Ok(index);
+            }
+            let matching = items
+                .iter()
+                .enumerate()
+                .filter(|(_, workspace)| workspace.name.eq_ignore_ascii_case(target))
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            return match matching.as_slice() {
+                [index] => Ok(*index),
+                [] => Err(format!("no workspace matches \"{target}\"")),
+                _ => Err(format!("no workspace matches \"{target}\"")),
+            };
+        }
+        let cwd = term_id_from_pane_id(caller)
+            .and_then(|id| self.terminals.get(&id))
+            .and_then(TerminalPane::cwd);
+        if let Some(index) = cwd.and_then(|cwd| {
+            items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, workspace)| {
+                    workspace
+                        .path
+                        .as_deref()
+                        .filter(|path| cwd.starts_with(path))
+                        .map(|path| (index, path.components().count()))
+                })
+                .max_by_key(|(_, depth)| *depth)
+                .map(|(index, _)| index)
+        }) {
+            return Ok(index);
+        }
+        if !caller.is_empty() {
+            return Err("the caller tab is not inside a workspace".into());
+        }
+        if self.workspaces.items().is_empty() {
+            return Err(
+                "missing target workspace (pass <id|path> or run inside a GSH workspace)".into(),
+            );
+        }
+        Ok(self.workspaces.selected_index())
+    }
+
+    fn cli_workspace_tab_count(&self, workspace_index: usize) -> usize {
+        let Some(workspace) = self.workspaces.items().get(workspace_index) else {
+            return 0;
+        };
+        let Some(path) = workspace.path.as_deref() else {
+            let reference = workspace.reference();
+            return self
+                .terminal_contexts
+                .values()
+                .filter(|context| context.workspace.as_ref() == Some(&reference))
+                .count()
+                + self
+                    .chat_contexts
+                    .values()
+                    .filter(|context| context.workspace.as_ref() == Some(&reference))
+                    .count();
+        };
+        let terminal_count = self
+            .terminals
+            .values()
+            .filter(|term| {
+                let Some(cwd) = term.cwd() else { return false };
+                self.workspaces
+                    .items()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, item)| {
+                        item.path
+                            .as_deref()
+                            .filter(|root| cwd.starts_with(root))
+                            .map(|root| (index, root.components().count()))
+                    })
+                    .max_by_key(|(_, depth)| *depth)
+                    .is_some_and(|(index, _)| index == workspace_index)
+            })
+            .count();
+        terminal_count
+            + self
+                .chats
+                .values()
+                .filter(|chat| {
+                    let Some(cwd) = chat.cwd() else { return false };
+                    cwd.starts_with(path)
+                        && !self
+                            .workspaces
+                            .items()
+                            .iter()
+                            .enumerate()
+                            .any(|(index, item)| {
+                                index != workspace_index
+                                    && item.path.as_deref().is_some_and(|root| {
+                                        cwd.starts_with(root)
+                                            && root.components().count() > path.components().count()
+                                    })
+                            })
+                })
+                .count()
     }
 
     fn handle_channel_action(&mut self, action: rail::ChannelAction) -> Task<Msg> {
@@ -9060,6 +9537,211 @@ mod tests {
         let live = shell.live_graph_agents(&workspace);
 
         assert!(live.contains(&format!("c{id}")));
+    }
+
+    #[test]
+    fn cli_list_workspaces_returns_the_open_rail_items() {
+        let mut shell = test_shell();
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"list-workspaces"}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], true);
+        let data = response["data"].as_array().unwrap();
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0]["id"], "gsh");
+        assert!(data[0]["name"].is_string());
+        assert!(data[0]["path"].is_string());
+        assert_eq!(data[0]["tabs"], 1);
+    }
+
+    #[test]
+    fn cli_new_workspace_opens_and_selects_the_local_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("project");
+        std::fs::create_dir(&path).unwrap();
+        let mut shell = test_shell();
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"new-workspace","args":{"path":path,"name":"Demo"}}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["data"]["name"], "Demo");
+        assert_eq!(response["data"]["path"], path.to_string_lossy().as_ref());
+        assert!(shell
+            .workspaces
+            .items()
+            .iter()
+            .any(|workspace| workspace.path.as_deref() == Some(path.as_path())));
+        assert_eq!(shell.active_workspace_dir(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn cli_new_remote_workspace_reports_not_supported_yet() {
+        let mut shell = test_shell();
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"new-workspace","args":{"path":"/tmp/demo","host":"ssh-target"}}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"], "remote workspaces are not supported yet");
+    }
+
+    #[test]
+    fn cli_rename_workspace_updates_the_rail_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rename");
+        std::fs::create_dir(&path).unwrap();
+        let mut shell = test_shell();
+        let index = shell.workspaces.open_folder(&path);
+        let id = shell.workspaces.items()[index].id.clone();
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"rename-workspace","args":{"target":id,"name":"Renamed"}}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(shell.workspaces.items()[index].name, "Renamed");
+    }
+
+    #[test]
+    fn cli_rename_workspace_defaults_to_callers_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("caller");
+        std::fs::create_dir(&path).unwrap();
+        let mut shell = test_shell();
+        let index = shell.workspaces.open_folder(&path);
+        if let Some(term) = shell.terminals.get_mut(&1) {
+            term.respawn_in_dir(Some(&path));
+        }
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"rename-workspace","tabId":"t1","args":{"name":"Caller workspace"}}),
+            reply,
+        });
+        assert_eq!(response.recv().unwrap()["ok"], true);
+        assert_eq!(shell.workspaces.items()[index].name, "Caller workspace");
+    }
+
+    #[test]
+    fn cli_close_workspace_removes_rail_item_and_keeps_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("keep");
+        std::fs::create_dir(&path).unwrap();
+        let mut shell = test_shell();
+        let index = shell.workspaces.open_folder(&path);
+        let id = shell.workspaces.items()[index].id.clone();
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"close-workspace","args":{"target":id}}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], true);
+        assert!(!shell
+            .workspaces
+            .items()
+            .iter()
+            .any(|workspace| workspace.path.as_deref() == Some(path.as_path())));
+        assert!(path.is_dir());
+    }
+
+    #[test]
+    fn cli_exec_runs_shell_and_returns_output_and_exit_code() {
+        let mut shell = test_shell();
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"exec","args":{"command":"echo oi"}}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["data"]["stdout"], "oi\n");
+        assert_eq!(response["data"]["code"], 0);
+        assert_eq!(response["data"]["timedOut"], false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_exec_limita_a_saida_e_avisa_que_truncou() {
+        // 20 MB de saída: o app guarda só o teto e o processo termina normalmente.
+        let result = cli_exec_result("head -c 20000000 /dev/zero | tr '\\0' x", None, 30);
+        assert_eq!(result["code"], 0);
+        assert_eq!(result["timedOut"], false);
+        assert_eq!(result["truncated"], true);
+        assert_eq!(
+            result["stdout"].as_str().unwrap().len(),
+            CLI_EXEC_OUTPUT_CAP,
+            "a saída tem que parar exatamente no teto"
+        );
+        assert!(result["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("saída truncada"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_exec_nao_trava_com_processo_em_segundo_plano_segurando_a_saida() {
+        let started = std::time::Instant::now();
+        let result = cli_exec_result("sleep 6 & echo pronto", None, 30);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "o exec não pode esperar o processo em segundo plano: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(result["code"], 0);
+        assert_eq!(result["stdout"], "pronto\n");
+        assert!(result.get("truncated").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_exec_preserva_codigo_de_saida_do_shell() {
+        let mut shell = test_shell();
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"exec","args":{"command":"sh -c 'exit 3'"}}),
+            reply,
+        });
+        assert_eq!(response.recv().unwrap()["data"]["code"], 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_exec_mata_o_processo_ao_estourar_timeout() {
+        let mut shell = test_shell();
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"exec","args":{"command":"sleep 3","timeout":1}}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["data"]["code"], 124);
+        assert_eq!(response["data"]["timedOut"], true);
+    }
+
+    #[test]
+    fn cli_exec_rejeita_cwd_inexistente_sem_panic() {
+        let mut shell = test_shell();
+        let (reply, response) = mpsc::sync_channel(1);
+        let _ = shell.handle_team_cli(gsh_ipc::PendingCommand {
+            request: serde_json::json!({"cmd":"exec","args":{"command":"echo oi","cwd":"/no/such/gsh-path"}}),
+            reply,
+        });
+        let response = response.recv().unwrap();
+        assert_eq!(response["ok"], false);
+        assert!(response["error"]
+            .as_str()
+            .unwrap()
+            .contains("cwd not found"));
     }
 
     #[test]

@@ -679,6 +679,120 @@ fn send_com_enter_manda_duas_escritas_em_base64() {
 }
 
 #[test]
+fn send_key_manda_sequencia_combinada_em_uma_escrita() {
+    let r = Setup::new(&["send-key", "--tab-id", "t4", "Up", "Enter"])
+        .reply(r#"{"ok":true,"data":{"tabId":"t4"}}"#)
+        .run();
+    assert_eq!(
+        r.line(),
+        "{\"args\":{\"data\":\"G1tBDQ==\"},\"cmd\":\"write\",\"tabId\":\"t4\",\"type\":\"cmd\"}\n"
+    );
+    assert_eq!((r.stdout.as_str(), r.stderr.as_str(), r.code), ("", "", 0));
+}
+
+#[test]
+fn list_workspaces_formata_texto_e_json() {
+    let r = Setup::new(&["list-workspaces"])
+        .reply(r#"{"ok":true,"data":[{"id":"ws-1","name":"Demo","path":"/tmp/demo","tabs":2}]}"#)
+        .run();
+    assert_eq!(
+        r.line(),
+        "{\"cmd\":\"list-workspaces\",\"tabId\":\"t7\",\"type\":\"cmd\"}\n"
+    );
+    assert_eq!(
+        (r.stdout.as_str(), r.stderr.as_str(), r.code),
+        ("Demo               2 tabs    /tmp/demo\n", "", 0)
+    );
+
+    let r = Setup::new(&["list-workspaces", "--json"])
+        .reply(r#"{"ok":true,"data":[{"id":"ws-1","name":"Demo","path":"/tmp/demo","tabs":2}]}"#)
+        .run();
+    assert!(r.stdout.contains("\"id\": \"ws-1\""));
+    assert_eq!((r.stderr.as_str(), r.code), ("", 0));
+}
+
+#[test]
+fn new_workspace_envia_path_name_e_host_e_imprime_id() {
+    let r = Setup::new(&[
+        "new-workspace",
+        "/tmp/demo",
+        "--host",
+        "box",
+        "--name",
+        "Demo",
+    ])
+    .reply(r#"{"ok":true,"data":{"id":"ws-4","name":"Demo","path":"/tmp/demo","tabs":1}}"#)
+    .run();
+    assert_eq!(r.line(), "{\"args\":{\"host\":\"box\",\"name\":\"Demo\",\"path\":\"/tmp/demo\"},\"cmd\":\"new-workspace\",\"tabId\":\"t7\",\"type\":\"cmd\"}\n");
+    assert_eq!(
+        (r.stdout.as_str(), r.stderr.as_str(), r.code),
+        ("ws-4\n", "", 0)
+    );
+}
+
+#[test]
+fn close_workspace_envia_target_e_json() {
+    let r = Setup::new(&["close-workspace", "./demo", "--json"])
+        .reply(r#"{"ok":true,"data":{"id":"ws-4","path":"/tmp/demo","closed":true}}"#)
+        .run();
+    assert!(r.line().contains("\"cmd\":\"close-workspace\""));
+    assert!(r.line().contains("\"target\":\""));
+    assert_eq!(
+        r.stdout,
+        "{\"closed\":true,\"id\":\"ws-4\",\"path\":\"/tmp/demo\"}\n"
+    );
+    assert_eq!(r.code, 0);
+}
+
+#[test]
+fn rename_workspace_envia_name_e_imprime_id() {
+    let r = Setup::new(&["rename-workspace", "ws-4", "Demo"])
+        .reply(r#"{"ok":true,"data":{"id":"ws-4","name":"Demo","path":"/tmp/demo"}}"#)
+        .run();
+    assert!(r.line().contains("\"cmd\":\"rename-workspace\""));
+    assert!(r.line().contains("\"name\":\"Demo\""));
+    assert_eq!(
+        (r.stdout.as_str(), r.stderr.as_str(), r.code),
+        ("ws-4\n", "", 0)
+    );
+}
+
+#[test]
+fn exec_envia_shell_linea_e_retorna_json_e_codigo_real() {
+    let r = Setup::new(&[
+        "exec",
+        "--cwd",
+        "/tmp",
+        "--timeout",
+        "3",
+        "--json",
+        "echo",
+        "oi",
+    ])
+    .reply(r#"{"ok":true,"data":{"code":3,"stdout":"oi\n","stderr":"falhou\n","timedOut":false}}"#)
+    .run();
+    assert!(r.line().contains("\"cmd\":\"exec\""));
+    assert!(r.line().contains("\"command\":\"echo oi\""));
+    assert!(r.line().contains("\"timeout\":3"));
+    assert_eq!(r.code, 3);
+    let output: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(output["ok"], false);
+    assert_eq!(output["code"], 3);
+    assert_eq!(output["stdout"], "oi\n");
+    assert_eq!(output["stderr"], "falhou\n");
+}
+
+#[test]
+fn exec_timeout_sai_124_e_imprime_aviso_como_flutter() {
+    let r = Setup::new(&["exec", "--timeout", "1", "--json", "sleep", "2"])
+        .reply(r#"{"ok":true,"data":{"code":124,"stdout":"","stderr":"","timedOut":true}}"#)
+        .run();
+    let output: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(output["timedOut"], true);
+    assert_eq!(r.code, 124);
+}
+
+#[test]
 fn send_focused_com_enter_mantem_a_aba_resolvida_no_primeiro_envio() {
     let r = Setup::new(&["send", "--focused", "--enter", "oi"])
         .reply(r#"{"ok":true,"data":{"tabId":"t4"}}"#)

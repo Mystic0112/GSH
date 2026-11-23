@@ -71,6 +71,9 @@ fn main() -> ExitCode {
                 }
                 ExitCode::SUCCESS
             }
+            Err(error::CliError::CommandExit(code)) => {
+                ExitCode::from(u8::try_from(code).unwrap_or(1))
+            }
             Err(e) => {
                 eprintln!("{e}");
                 ExitCode::from(e.exit_code())

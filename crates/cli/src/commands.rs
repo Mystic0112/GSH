@@ -2,6 +2,7 @@
 //! [`transport`] e formata a saída. Cada verbo devolve o texto do stdout (já
 //! com a quebra de linha final); erro e código de saída vêm de [`CliError`].
 
+use std::io::Write;
 use std::time::Duration;
 
 use gsh_core::tabs::format_tab_list;
@@ -29,6 +30,7 @@ pub fn run(cmd: Command) -> Result<Option<String>, CliError> {
             enter,
             target,
         } => send_to_tab(&text, enter, &target),
+        Command::SendKey { keys, target } => send_keys_to_tab(&keys, &target),
         Command::TeamPeers { json } => team_peers(json),
         Command::Deliver {
             to,
@@ -82,6 +84,39 @@ pub fn run(cmd: Command) -> Result<Option<String>, CliError> {
             json,
         } => close_tab(label, &target, json).map(Some),
         Command::ListTabs { target, json } => list_tabs(&target, json),
+        Command::ListWorkspaces { json } => list_workspaces(json),
+        Command::NewWorkspace {
+            path,
+            host,
+            name,
+            tab_id,
+            json,
+        } => new_workspace(
+            &path,
+            host.as_deref(),
+            name.as_deref(),
+            tab_id.as_deref(),
+            json,
+        )
+        .map(Some),
+        Command::CloseWorkspace {
+            target,
+            tab_id,
+            json,
+        } => close_workspace(target.as_deref(), tab_id.as_deref(), json).map(Some),
+        Command::RenameWorkspace {
+            target,
+            name,
+            tab_id,
+            json,
+        } => rename_workspace(target.as_deref(), &name, tab_id.as_deref(), json).map(Some),
+        Command::Exec {
+            command,
+            cwd,
+            timeout,
+            tab_id,
+            json,
+        } => run_exec(&command, cwd.as_deref(), timeout, tab_id.as_deref(), json).map(|_| None),
         Command::Telemetry(_) => Ok(None),
         Command::LocalSend { args } => crate::localsend::run(&args),
     }
@@ -252,6 +287,213 @@ fn list_tabs(target: &Target, json: bool) -> Result<Option<String>, CliError> {
     Ok((!lines.is_empty()).then(|| format!("{}\n", lines.join("\n"))))
 }
 
+fn list_workspaces(json: bool) -> Result<Option<String>, CliError> {
+    let resp = call(cmd_request(
+        "list-workspaces",
+        self_tab_id().as_deref(),
+        None,
+    ))?;
+    let data = resp.data_list();
+    if json {
+        return Ok(Some(format!("{:#}\n", Value::Array(data))));
+    }
+    if data.is_empty() {
+        return Ok(Some("(none)\n".to_owned()));
+    }
+    let lines = data
+        .iter()
+        .filter(|entry| entry.is_object())
+        .map(|entry| {
+            let name = entry.get("name").and_then(Value::as_str).unwrap_or("");
+            let tabs = entry
+                .get("tabs")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "0".into());
+            let path = entry.get("path").and_then(Value::as_str).unwrap_or("");
+            format!(
+                "{name:<18} {tabs_with_label:<9} {path}",
+                tabs_with_label = format!("{tabs} tabs")
+            )
+        })
+        .collect::<Vec<_>>();
+    Ok((!lines.is_empty()).then(|| format!("{}\n", lines.join("\n"))))
+}
+
+fn workspace_target(target: Option<&str>) -> Option<String> {
+    target.map(|target| {
+        if target.starts_with('~')
+            || target.starts_with('.')
+            || target.contains('/')
+            || target.contains('\\')
+        {
+            resolve_path(target)
+        } else {
+            target.to_owned()
+        }
+    })
+}
+
+fn new_workspace(
+    path: &str,
+    host: Option<&str>,
+    name: Option<&str>,
+    tab_id: Option<&str>,
+    json: bool,
+) -> Result<String, CliError> {
+    let path = if host.is_some_and(|host| !host.is_empty()) {
+        path.to_owned()
+    } else {
+        resolve_path(path)
+    };
+    let mut args = Map::new();
+    args.insert("path".into(), json!(path));
+    if let Some(host) = host.filter(|host| !host.is_empty()) {
+        args.insert("host".into(), json!(host));
+    }
+    if let Some(name) = name.filter(|name| !name.is_empty()) {
+        args.insert("name".into(), json!(name));
+    }
+    let resp = call(cmd_request(
+        "new-workspace",
+        tab_id.map(str::to_owned).or_else(self_tab_id).as_deref(),
+        Some(Value::Object(args)),
+    ))?;
+    let data = resp.data();
+    if json {
+        Ok(format!("{data}\n"))
+    } else {
+        Ok(format!(
+            "{}\n",
+            data.get("id").and_then(Value::as_str).unwrap_or("")
+        ))
+    }
+}
+
+fn close_workspace(
+    target: Option<&str>,
+    tab_id: Option<&str>,
+    json: bool,
+) -> Result<String, CliError> {
+    let mut args = Map::new();
+    if let Some(target) = workspace_target(target).filter(|target| !target.is_empty()) {
+        args.insert("target".into(), json!(target));
+    }
+    let resp = call(cmd_request(
+        "close-workspace",
+        tab_id.map(str::to_owned).or_else(self_tab_id).as_deref(),
+        Some(Value::Object(args)),
+    ))?;
+    let data = resp.data();
+    if json {
+        Ok(format!("{data}\n"))
+    } else {
+        Ok(format!(
+            "{}\n",
+            data.get("id").and_then(Value::as_str).unwrap_or("")
+        ))
+    }
+}
+
+fn rename_workspace(
+    target: Option<&str>,
+    name: &str,
+    tab_id: Option<&str>,
+    json: bool,
+) -> Result<String, CliError> {
+    let mut args = Map::new();
+    if let Some(target) = workspace_target(target).filter(|target| !target.is_empty()) {
+        args.insert("target".into(), json!(target));
+    }
+    args.insert("name".into(), json!(name));
+    let resp = call(cmd_request(
+        "rename-workspace",
+        tab_id.map(str::to_owned).or_else(self_tab_id).as_deref(),
+        Some(Value::Object(args)),
+    ))?;
+    let data = resp.data();
+    if json {
+        Ok(format!("{data}\n"))
+    } else {
+        Ok(format!(
+            "{}\n",
+            data.get("id").and_then(Value::as_str).unwrap_or("")
+        ))
+    }
+}
+
+fn run_exec(
+    command: &str,
+    cwd: Option<&str>,
+    timeout: Option<u64>,
+    tab_id: Option<&str>,
+    json_output: bool,
+) -> Result<(), CliError> {
+    let cwd = cwd.map(resolve_path).or_else(|| {
+        std::env::current_dir()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
+    });
+    let mut args = Map::new();
+    args.insert("command".into(), json!(command));
+    if let Some(cwd) = cwd {
+        args.insert("cwd".into(), json!(cwd));
+    }
+    if let Some(timeout) = timeout {
+        args.insert("timeout".into(), json!(timeout));
+    }
+    let timeout_seconds = match timeout.unwrap_or(60) {
+        0 => 60,
+        seconds => seconds,
+    };
+    let resp = call_with_timeout(
+        cmd_request(
+            "exec",
+            tab_id.map(str::to_owned).or_else(self_tab_id).as_deref(),
+            Some(Value::Object(args)),
+        ),
+        Duration::from_secs(timeout_seconds.saturating_add(5)),
+    )?;
+    let mut data = resp.data();
+    let code = data.get("code").and_then(Value::as_i64).unwrap_or(1) as i32;
+    if json_output {
+        if let Value::Object(fields) = &mut data {
+            fields.insert("ok".into(), json!(code == 0));
+        }
+        println!("{data}");
+    } else {
+        for (key, stderr) in [("stdout", false), ("stderr", true)] {
+            if let Some(text) = data
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+            {
+                if stderr {
+                    eprint!("{text}");
+                } else {
+                    print!("{text}");
+                }
+                if !text.ends_with('\n') {
+                    if stderr {
+                        eprintln!();
+                    } else {
+                        println!();
+                    }
+                }
+            }
+        }
+        if data.get("timedOut") == Some(&Value::Bool(true)) {
+            eprintln!("gsh exec: timed out");
+        }
+    }
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(CliError::CommandExit(code))
+    }
+}
+
 fn send_to_tab(text: &str, enter: bool, target: &Target) -> Result<Option<String>, CliError> {
     let tab_id = target.resolve(self_tab_id()).ok_or_else(|| {
         CliError::usage(
@@ -265,6 +507,23 @@ terminal (GSH_TAB_ID is unset). Use `gsh list-tabs`.",
         let destination = data.get("tabId").and_then(Value::as_str).unwrap_or(&tab_id);
         write_once(destination, "\r")?;
     }
+    Ok(None)
+}
+
+fn send_keys_to_tab(keys: &[String], target: &Target) -> Result<Option<String>, CliError> {
+    let tab_id = target.resolve(self_tab_id()).ok_or_else(|| {
+        CliError::usage(
+            "gsh: no target — pass --tab-id <id> or run inside a GSH \
+terminal (GSH_TAB_ID is unset). Use `gsh list-tabs`.",
+        )
+    })?;
+    let mut bytes = Vec::new();
+    for key in keys {
+        let sequence = crate::args::resolve_key(key)
+            .ok_or_else(|| CliError::usage(format!("gsh send-key: unknown key \"{key}\"")))?;
+        bytes.extend_from_slice(sequence.as_bytes());
+    }
+    write_once(&tab_id, &String::from_utf8_lossy(&bytes))?;
     Ok(None)
 }
 

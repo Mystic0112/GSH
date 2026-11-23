@@ -131,6 +131,23 @@ fn writes_utf8_to_the_focused_terminal_through_ipc() {
 }
 
 #[test]
+fn writes_send_key_escape_and_control_bytes_to_terminal() {
+    let mut fixture = Fixture::new();
+    let payload = b"\x1b[A\x01\r";
+    assert_eq!(
+        fixture.call(
+            "write",
+            "t1",
+            json!({"data": BASE64_STANDARD.encode(payload)})
+        )["ok"],
+        true
+    );
+    let mut bytes = [0; 5];
+    fixture.terminal.read_exact(&mut bytes).unwrap();
+    assert_eq!(&bytes, payload);
+}
+
+#[test]
 fn reads_scrollback_order_and_offsets_through_ipc() {
     let mut fixture = Fixture::new();
     fixture
