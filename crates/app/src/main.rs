@@ -3681,13 +3681,8 @@ impl Shell {
             });
             if let Some(id) = chat_id {
                 if let Some(chat) = self.chats.get_mut(&id) {
-                    if !chat.is_busy() {
-                        let _ = chat.update(ChatMsg::InputChanged(text.to_owned()));
-                        tasks.push(
-                            chat.update(ChatMsg::Send)
-                                .map(move |msg| Msg::Chat(id, msg)),
-                        );
-                    }
+                    // Só o texto: o rascunho e os anexos do destinatário ficam como estavam.
+                    chat.deliver_text(text);
                 }
                 continue;
             }

@@ -961,7 +961,16 @@ fn show_raw_toast(c: &mut ClaudeState, message: String) -> Task<Message> {
     )
 }
 
+/// Só `https://`: `open`, `explorer` e `xdg-open` abrem qualquer coisa que recebam
+/// (arquivo, esquema registrado no sistema), então nada além de um link web passa.
+fn is_openable_url(url: &str) -> bool {
+    url.starts_with("https://") && !url.chars().any(|c| c.is_control() || c.is_whitespace())
+}
+
 fn open_url(url: &str) {
+    if !is_openable_url(url) {
+        return;
+    }
     let program = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(windows) {
@@ -981,6 +990,26 @@ fn open_url(url: &str) {
 mod tests {
     use super::*;
     use crate::settings::claude::cli::{Account, InfoError};
+
+    #[test]
+    fn open_url_so_aceita_links_https_sem_caracteres_estranhos() {
+        assert!(is_openable_url(
+            "https://console.anthropic.com/settings/keys"
+        ));
+        for ruim in [
+            "http://exemplo.com",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "ms-msdt:/id PCWDiagnostic",
+            "C:\\Windows\\System32\\calc.exe",
+            "https://a.com/x y",
+            "https://a.com/\n--flag",
+            "",
+        ] {
+            assert!(!is_openable_url(ruim), "deveria recusar: {ruim:?}");
+        }
+    }
+
     use crate::settings::claude::Switch;
     use crate::settings::Message as RootMsg;
     use gsh_config::schema::{TranscriptView, TranscriptWidth};

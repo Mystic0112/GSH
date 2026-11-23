@@ -1561,6 +1561,33 @@ impl ChatPane {
         Ok(())
     }
 
+    /// Entrega uma mensagem vinda de fora (roteador de canais) a este chat **sem
+    /// tocar no rascunho nem nos anexos** de quem o usa: só o texto vai ao
+    /// modelo. `false` = vazio ou chat ocupado, e nada foi feito.
+    pub fn deliver_text(&mut self, text: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() || self.busy {
+            return false;
+        }
+        self.items.push(ChatItem::User {
+            text: text.to_string(),
+        });
+        self.busy = true;
+        if !self.static_test_mode {
+            let sent = self
+                .ensure_engine()
+                .and_then(|engine| engine.send(text, &[]));
+            if let Err(err) = sent {
+                self.busy = false;
+                self.engine = None;
+                self.items.push(ChatItem::Error {
+                    message: labels::format_chat_start_failed(&err.to_string()),
+                });
+            }
+        }
+        true
+    }
+
     fn finish_last_assistant(&mut self) {
         if let Some(ChatItem::Assistant { streaming, .. }) = self.items.last_mut() {
             *streaming = false;
@@ -1896,6 +1923,47 @@ mod tests {
             fs::read_to_string(profile.join("launched")).unwrap(),
             profile.to_str().unwrap()
         );
+    }
+
+    #[test]
+    fn entrega_de_canal_nao_toca_no_rascunho_nem_nos_anexos() {
+        let mut pane =
+            ChatPane::new(Some(PathBuf::from("/home/dev/GSH")), None).with_static_test_mode(true);
+        let _ = pane.update(ChatMsg::InputChanged("rascunho meu".to_string()));
+        let _ = pane.update(ChatMsg::PickFiles(Some(vec![PathBuf::from(
+            "/tmp/segredo.txt",
+        )])));
+        assert_eq!(pane.attachments().len(), 1);
+
+        assert!(pane.deliver_text("  oi do canal  "));
+
+        assert_eq!(
+            pane.input(),
+            "rascunho meu",
+            "o rascunho nao pode ser enviado nem apagado"
+        );
+        assert_eq!(
+            pane.attachments().len(),
+            1,
+            "o anexo nao enviado tem que continuar anexado"
+        );
+        assert_eq!(
+            pane.items(),
+            &[ChatItem::User {
+                text: "oi do canal".to_string()
+            }]
+        );
+        assert!(pane.is_busy());
+        assert!(!pane.deliver_text("segunda"), "ocupado: nao entrega");
+        assert_eq!(pane.items().len(), 1);
+    }
+
+    #[test]
+    fn entrega_de_canal_recusa_texto_vazio() {
+        let mut pane = ChatPane::new(None, None).with_static_test_mode(true);
+        assert!(!pane.deliver_text("   \n"));
+        assert!(!pane.is_busy());
+        assert!(pane.items().is_empty());
     }
 
     #[test]
