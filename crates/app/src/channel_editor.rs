@@ -1,6 +1,3 @@
-// ponytail: a caixa de canais saiu da barra lateral; o editor fica guardado até ganhar lugar nas Configurações.
-#![allow(dead_code)]
-
 use std::fmt;
 
 use gsh_core::workspace::{
@@ -8,11 +5,11 @@ use gsh_core::workspace::{
     WorkspaceList,
 };
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, text, text_editor, text_input, tooltip,
+    button, checkbox, column, container, pick_list, row, text, text_editor, text_input,
 };
 use iced::{Alignment, Border, Element, Fill};
 
-use crate::{labels, pane_chrome, theme};
+use crate::{labels, theme};
 
 #[derive(Debug, Clone)]
 pub enum ChannelAction {
@@ -70,113 +67,17 @@ pub struct ChannelActions<'a, M> {
     pub on_action: fn(ChannelAction) -> M,
 }
 
-#[derive(Clone, PartialEq)]
-struct Choice {
-    id: ChannelId,
-    label: String,
-}
-
-impl From<&Channel> for Choice {
-    fn from(channel: &Channel) -> Self {
-        Self {
-            id: channel.id.clone(),
-            label: if channel.archived {
-                labels::channel_archived_label(channel.name())
-            } else {
-                channel.name().to_owned()
-            },
-        }
-    }
-}
-
-impl fmt::Display for Choice {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.label)
-    }
-}
-
-#[derive(Clone, PartialEq)]
-struct Filter(Option<Choice>);
-
-impl fmt::Display for Filter {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.0 {
-            Some(choice) => choice.fmt(f),
-            None => f.write_str(labels::CHANNELS_ALL),
-        }
-    }
-}
-
 pub(super) fn card<'a, M: Clone + 'a>(
     workspaces: &'a WorkspaceList,
-    actions: ChannelActions<'a, M>,
+    editor: &'a ChannelEditor,
+    members: Vec<ChannelMemberOption>,
+    action: fn(ChannelAction) -> M,
 ) -> Element<'a, M> {
-    let action = actions.on_action;
-    let mut channels: Vec<_> = workspaces.context_channels().iter().collect();
-    channels.sort_by_cached_key(|channel| (channel.archived, channel.name().to_lowercase()));
-
-    let filters: Vec<_> = std::iter::once(Filter(None))
-        .chain(
-            channels
-                .iter()
-                .filter(|channel| !channel.archived)
-                .map(|channel| Filter(Some(Choice::from(*channel)))),
-        )
-        .collect();
-    let selected = Filter(workspaces.active_context_channel().map(Choice::from));
-    let filter = pick_list(filters, Some(selected), move |filter| {
-        action(ChannelAction::Select(filter.0.map(|choice| choice.id)))
-    })
-    .width(Fill)
-    .padding([5, 7])
-    .font(theme::FONT_BODY)
-    .text_size(theme::SIZE_LABEL);
-
-    let mut content = column![].spacing(6);
-    if let Some(editor) = actions.editor {
-        content = content.push(heading(labels::CHANNELS_HEADER)).push(form(
-            workspaces,
-            editor,
-            &actions.members,
-            action,
-        ));
-    } else {
-        content = content
-            .push(
-                row![
-                    heading(labels::CHANNELS_HEADER).width(Fill),
-                    control(labels::CHANNEL_NEW, action(ChannelAction::New))
-                ]
-                .spacing(4)
-                .align_y(Alignment::Center),
-            )
-            .push(filter);
-        let choices: Vec<_> = channels
-            .iter()
-            .map(|channel| Choice::from(*channel))
-            .collect();
-        content = content.push(channel_picker(
-            choices,
-            labels::CHANNEL_EDIT_PICKER,
-            move |choice| action(ChannelAction::Edit(choice.id)),
-        ));
-        if let Some(workspace) = workspaces.active() {
-            let choices: Vec<_> = channels
-                .iter()
-                .filter(|channel| !channel.archived && workspace.channel_id() != Some(&channel.id))
-                .map(|channel| Choice::from(*channel))
-                .collect();
-            if !choices.is_empty() {
-                content = content.push(tooltip(
-                    channel_picker(choices, labels::CHANNEL_MOVE_WORKSPACE, move |choice| {
-                        action(ChannelAction::AssignWorkspace(choice.id))
-                    }),
-                    pane_chrome::tip_bubble(labels::channel_workspace_tooltip(&workspace.name)),
-                    tooltip::Position::Bottom,
-                ));
-            }
-        }
-    }
+    let content = column![
+        heading(labels::CHANNELS_HEADER),
+        form(workspaces, editor, &members, action)
+    ]
+    .spacing(6);
 
     container(container(content).padding(8).width(Fill).style(|_| {
         let p = theme::palette();
@@ -373,20 +274,6 @@ impl fmt::Display for ReplyChoice {
             ChannelReplyRule::All => labels::CHANNEL_REPLY_ALL,
         })
     }
-}
-
-fn channel_picker<'a, M: Clone + 'a>(
-    choices: Vec<Choice>,
-    prompt: &'static str,
-    on_selected: impl Fn(Choice) -> M + 'a,
-) -> Element<'a, M> {
-    pick_list(choices, None::<Choice>, on_selected)
-        .placeholder(prompt)
-        .width(Fill)
-        .padding([5, 7])
-        .font(theme::FONT_BODY)
-        .text_size(theme::SIZE_LABEL)
-        .into()
 }
 
 fn control<'a, M: Clone + 'a>(title: &'static str, action: M) -> Element<'a, M> {

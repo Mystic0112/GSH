@@ -22,8 +22,7 @@ pub const WORKSPACE_EXAMPLE_BRANCH: &str = "feat/ui";
 pub const DEFAULT_REALM: &str = "Padrão";
 pub const RAIL_KEEP_AWAKE_ON: &str =
     "Mantendo este computador acordado para acesso remoto. Clique para deixá-lo dormir de novo.";
-pub const RAIL_KEEP_AWAKE_OFF: &str =
-    "Manter este computador acordado para acesso remoto. Desliga sozinho quando o GSH Desktop reinicia.";
+pub const RAIL_KEEP_AWAKE_OFF: &str = "Manter este computador acordado para acesso remoto. Desliga sozinho quando o GSH Desktop reinicia.";
 pub const RAIL_KEEP_AWAKE_BATTERY: &str = "Acordado na bateria. Isso consome a bateria.";
 pub const RAIL_KEEP_AWAKE_LID: &str =
     "Fechar a tampa do notebook continua colocando-o para dormir.";
@@ -39,8 +38,7 @@ pub const CHANNELS_EMPTY: &str = "Nenhum workspace neste canal";
 pub const CHANNEL_NEW: &str = "Novo canal";
 pub const CHANNEL_EDIT: &str = "Editar canal";
 pub const CHANNEL_EDIT_ARCHIVED: &str = "Editar canal arquivado";
-pub const CHANNEL_EDIT_PICKER: &str = "Editar canal…";
-pub const CHANNEL_MOVE_WORKSPACE: &str = "Mover workspace…";
+pub const CHANNEL_MOVE_WORKSPACE_SECTION: &str = "Mover workspace ativo para";
 pub const CHANNEL_NAME: &str = "Nome";
 pub const CHANNEL_NAME_PLACEHOLDER: &str = "Nome do canal";
 pub const CHANNEL_INSTRUCTIONS: &str = "Instruções";
@@ -59,14 +57,6 @@ pub const CHANNEL_REPLY_RULE: &str = "Regra de resposta";
 pub const CHANNEL_REPLY_MANUAL: &str = "Manual";
 pub const CHANNEL_REPLY_MENTION: &str = "Só ao mencionar";
 pub const CHANNEL_REPLY_ALL: &str = "Todos";
-
-pub fn channel_workspace_tooltip(name: &str) -> String {
-    format!("Alterar o canal de {name}")
-}
-
-pub fn channel_archived_label(name: &str) -> String {
-    format!("{name} (arquivado)")
-}
 
 pub fn channel_member_label(mention: &str, session: &str) -> String {
     format!("@{mention} · {session}")
@@ -591,13 +581,19 @@ pub fn agent_graph_integration_consent(app: &str) -> String {
     format!("Adicionar o servidor MCP do GSH Desktop ao config do {app}")
 }
 pub fn agent_graph_restart_hint(app: &str) -> String {
-    format!("Reinicie o {app} se ele já estava aberto, para carregar o servidor MCP do GSH Desktop; depois peça a ele para chamar wait_messages.")
+    format!(
+        "Reinicie o {app} se ele já estava aberto, para carregar o servidor MCP do GSH Desktop; depois peça a ele para chamar wait_messages."
+    )
 }
 pub fn agent_graph_integration_invalid(path: &str) -> String {
-    format!("{path} não é um JSON/TOML simples que o GSH Desktop consiga editar com segurança (comentários ou outro formato). Nada foi alterado.")
+    format!(
+        "{path} não é um JSON/TOML simples que o GSH Desktop consiga editar com segurança (comentários ou outro formato). Nada foi alterado."
+    )
 }
 pub fn agent_graph_cli_missing(path: &str) -> String {
-    format!("A CLI do GSH Desktop ainda não foi instalada ({path}). Reinicie o GSH Desktop e tente de novo.")
+    format!(
+        "A CLI do GSH Desktop ainda não foi instalada ({path}). Reinicie o GSH Desktop e tente de novo."
+    )
 }
 pub fn agent_graph_write_failed(detail: &str) -> String {
     format!("Não foi possível atualizar o config: {detail}")
@@ -659,8 +655,7 @@ pub const AGENT_GRAPH_REMOVE_FROM_CANVAS: &str = "Remover do canvas";
 pub const AGENT_GRAPH_IMPORT_TEAM: &str = "Importar time (.md)…";
 pub const AGENT_GRAPH_EXPORT_TEAM: &str = "Exportar time (.md)…";
 pub const AGENT_GRAPH_IMPORT_REVIEW_TITLE: &str = "Revisar time importado (.md)";
-pub const AGENT_GRAPH_IMPORT_SECURITY_NOTICE: &str =
-    "Revisão de segurança: nenhum comando foi executado na leitura. Apenas harnesses oficiais e pastas dentro do workspace serão abertos se você confirmar.";
+pub const AGENT_GRAPH_IMPORT_SECURITY_NOTICE: &str = "Revisão de segurança: nenhum comando foi executado na leitura. Apenas harnesses oficiais e pastas dentro do workspace serão abertos se você confirmar.";
 pub const AGENT_GRAPH_IMPORT_CONFIRM: &str = "Criar time";
 pub fn agent_graph_maestro_replaces(name: &str) -> String {
     format!("{name} é o maestro atual e deixará de ser.")
@@ -723,8 +718,7 @@ pub const SETTINGS_AUTOMATION_HARNESS: &str = "Harness padrão";
 pub const SETTINGS_AUTOMATION_MODEL: &str = "Modelo padrão";
 pub const SETTINGS_AUTOMATION_DISABLED: &str = "Desativado";
 pub const SETTINGS_ROUTINES_TITLE: &str = "Rotinas agendadas";
-pub const SETTINGS_ROUTINES_DESC: &str =
-    "Escolha os dias da semana e o horário local. A rotina abre o agente no repositório e salva a saída no histórico. O agendamento funciona enquanto o GSH estiver aberto.";
+pub const SETTINGS_ROUTINES_DESC: &str = "Escolha os dias da semana e o horário local. A rotina abre o agente no repositório e salva a saída no histórico. O agendamento funciona enquanto o GSH estiver aberto.";
 pub const SETTINGS_ROUTINE_NAME_HINT: &str = "Nome (ex.: Revisão matinal)";
 pub const SETTINGS_ROUTINE_TIME_HINT: &str = "HH:MM (ex.: 09:00)";
 pub const SETTINGS_ROUTINE_WORKSPACE_HINT: &str = "Caminho do repositório";
@@ -976,13 +970,11 @@ pub const DB_DEFAULT_CONNECTION_NAME: &str = "new-connection";
 
 // Prompts de SSH (`sshPrompts`)
 pub const SSH_UNKNOWN_HOST_TITLE: &str = "Host SSH desconhecido";
-pub const SSH_TRUST_HINT: &str =
-    "Confie apenas se esta fingerprint corresponder ao servidor. Você pode verificar no servidor com:";
+pub const SSH_TRUST_HINT: &str = "Confie apenas se esta fingerprint corresponder ao servidor. Você pode verificar no servidor com:";
 pub const SSH_COMMAND_PREVIEW: &str = "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub";
 pub const SSH_TRUST: &str = "Confiar";
 pub const SSH_KEY_PASSPHRASE_TITLE: &str = "Senha da chave SSH";
-pub const SSH_KEPT_IN_MEMORY_HINT: &str =
-    "Mantida em memória até o GSH Desktop fechar. Para permitir que agentes usem esta conexão, ative \"Salvar senha da chave\" na conexão.";
+pub const SSH_KEPT_IN_MEMORY_HINT: &str = "Mantida em memória até o GSH Desktop fechar. Para permitir que agentes usem esta conexão, ative \"Salvar senha da chave\" na conexão.";
 pub const SSH_UNLOCK: &str = "Desbloquear";
 
 pub fn ssh_never_connected(endpoint: &str) -> String {
@@ -1182,8 +1174,7 @@ pub fn content_search_summary(total: usize, files: usize) -> String {
 }
 pub const GALLERY_SECTION_UPPER: &str = "GALERIA";
 pub const ICON_GALLERY: &str = "\u{e660}";
-pub const GALLERY_INTRO: &str =
-    "Documentos especiais do GSH Desktop para que você tenha o visual do que o agente de IA esteja fazendo.";
+pub const GALLERY_INTRO: &str = "Documentos especiais do GSH Desktop para que você tenha o visual do que o agente de IA esteja fazendo.";
 pub const GALLERY_CREATE_ERROR_TITLE: &str = "Não foi possível criar o arquivo";
 pub const GALLERY_ERR_NO_WORKSPACE: &str = "Nenhum workspace selecionado.";
 pub const GALLERY_ERR_WRITE_FAILED: &str = "Não foi possível gravar o arquivo.";
@@ -1205,15 +1196,33 @@ pub fn gallery_title(template: GalleryTemplate) -> &'static str {
 
 pub fn gallery_description(template: GalleryTemplate) -> &'static str {
     match template {
-        GalleryTemplate::DbQuery => "Editor SQL com grid de resultado, usando uma das conexões registradas.",
-        GalleryTemplate::Kanban => "Colunas e cards gravados como markdown puro. Arraste, edite e comente.",
-        GalleryTemplate::Notebook => "Uma pasta de notas curtas com tags. O agente escreve, você lê e edita. Abre no Obsidian também.",
-        GalleryTemplate::Html => "Uma página que o agente escreve e o GSH Desktop renderiza direto: mapa mental, diagrama, gráfico, o que precisar.",
-        GalleryTemplate::Panel => "Uma página HTML com ponte para o app: os botões rodam comandos da CLI do GSH Desktop e do shell nesta máquina. Um playground para dashboards rápidos.",
-        GalleryTemplate::HttpRequest => "Escreva requests num arquivo e execute com a resposta ao lado.",
-        GalleryTemplate::Tasks => "Comandos para rodar pelo painel de Tasks, como dev server, testes e build. Fica em .gsh/tasks.json.",
-        GalleryTemplate::Layout => "Terminais e splits para abrir de uma vez, estilo tmuxinator. Pode rodar sozinho em worktrees novas.",
-        GalleryTemplate::WorkspaceEnv => "Variáveis injetadas em todo terminal deste workspace. Coloque tokens ou logins de API aqui em vez de colar no prompt do agente. Fica fora do git.",
+        GalleryTemplate::DbQuery => {
+            "Editor SQL com grid de resultado, usando uma das conexões registradas."
+        }
+        GalleryTemplate::Kanban => {
+            "Colunas e cards gravados como markdown puro. Arraste, edite e comente."
+        }
+        GalleryTemplate::Notebook => {
+            "Uma pasta de notas curtas com tags. O agente escreve, você lê e edita. Abre no Obsidian também."
+        }
+        GalleryTemplate::Html => {
+            "Uma página que o agente escreve e o GSH Desktop renderiza direto: mapa mental, diagrama, gráfico, o que precisar."
+        }
+        GalleryTemplate::Panel => {
+            "Uma página HTML com ponte para o app: os botões rodam comandos da CLI do GSH Desktop e do shell nesta máquina. Um playground para dashboards rápidos."
+        }
+        GalleryTemplate::HttpRequest => {
+            "Escreva requests num arquivo e execute com a resposta ao lado."
+        }
+        GalleryTemplate::Tasks => {
+            "Comandos para rodar pelo painel de Tasks, como dev server, testes e build. Fica em .gsh/tasks.json."
+        }
+        GalleryTemplate::Layout => {
+            "Terminais e splits para abrir de uma vez, estilo tmuxinator. Pode rodar sozinho em worktrees novas."
+        }
+        GalleryTemplate::WorkspaceEnv => {
+            "Variáveis injetadas em todo terminal deste workspace. Coloque tokens ou logins de API aqui em vez de colar no prompt do agente. Fica fora do git."
+        }
     }
 }
 
@@ -1288,13 +1297,23 @@ pub fn harness_title(kind: Kind) -> &'static str {
 
 pub fn harness_description(kind: Kind) -> &'static str {
     match kind {
-        Kind::Memory => "CLAUDE.md lidos numa sessão aqui (da pasta para cima), o seu do usuário e o AGENTS.md (Codex).",
-        Kind::Skills => "Capacidades que o agente aciona sozinho quando a descrição bate com a tarefa.",
-        Kind::Agents => "Especialistas para quem o agente delega (com ferramentas e modelo próprios).",
+        Kind::Memory => {
+            "CLAUDE.md lidos numa sessão aqui (da pasta para cima), o seu do usuário e o AGENTS.md (Codex)."
+        }
+        Kind::Skills => {
+            "Capacidades que o agente aciona sozinho quando a descrição bate com a tarefa."
+        }
+        Kind::Agents => {
+            "Especialistas para quem o agente delega (com ferramentas e modelo próprios)."
+        }
         Kind::Commands => "Atalhos /nome que você digita na sessão.",
-        Kind::Hooks => "Comandos que rodam em eventos da sessão (antes de uma ferramenta, ao parar...).",
+        Kind::Hooks => {
+            "Comandos que rodam em eventos da sessão (antes de uma ferramenta, ao parar...)."
+        }
         Kind::Permissions => "Regras de ferramenta: liberar, perguntar ou bloquear.",
-        Kind::Mcp => "Servidores de ferramentas extras. Os do usuário e os locais vêm do ~/.claude.json (mude com claude mcp).",
+        Kind::Mcp => {
+            "Servidores de ferramentas extras. Os do usuário e os locais vêm do ~/.claude.json (mude com claude mcp)."
+        }
     }
 }
 
@@ -1474,8 +1493,7 @@ pub const SETTINGS_NAV_API_KEYS: &str = "Chaves de API";
 pub const SETTINGS_CLAUDE_REFRESH: &str = "Atualizar";
 pub const SETTINGS_CLAUDE_LOADING: &str = "Carregando…";
 pub const SETTINGS_CLAUDE_TERMINAL_TITLE: &str = "Abrir um terminal";
-pub const SETTINGS_CLAUDE_NO_WORKSPACE: &str =
-    "Abra um workspace local antes: isto roda a CLI `claude` num terminal dele, para você acompanhar.";
+pub const SETTINGS_CLAUDE_NO_WORKSPACE: &str = "Abra um workspace local antes: isto roda a CLI `claude` num terminal dele, para você acompanhar.";
 pub const SETTINGS_COMMON_OPEN: &str = "Abrir";
 pub const SETTINGS_COMMON_ADD: &str = "Adicionar";
 pub const ICON_ACCOUNT_CIRCLE: &str = "\u{f20b}";
@@ -1606,15 +1624,11 @@ pub fn ds_theme_imported(name: &str) -> String {
 }
 
 // Placeholders (`placeholder`)
-pub const SETTINGS_PH_COWORK_1: &str =
-    "O Cowork é um recurso do Claude Desktop (tarefas que rodam neste computador com arquivos locais, navegador e MCPs).";
-pub const SETTINGS_PH_COWORK_2: &str =
-    "No GSH, o equivalente é o chat com o Claude num workspace e a Fazenda, onde os loops de agente rodam em terminais.";
-pub const SETTINGS_PH_EXTENSIONS_DESC: &str =
-    "Permitir que o Claude interaja diretamente com aplicativos, dados e ferramentas no seu computador.";
+pub const SETTINGS_PH_COWORK_1: &str = "O Cowork é um recurso do Claude Desktop (tarefas que rodam neste computador com arquivos locais, navegador e MCPs).";
+pub const SETTINGS_PH_COWORK_2: &str = "No GSH, o equivalente é o chat com o Claude num workspace e a Fazenda, onde os loops de agente rodam em terminais.";
+pub const SETTINGS_PH_EXTENSIONS_DESC: &str = "Permitir que o Claude interaja diretamente com aplicativos, dados e ferramentas no seu computador.";
 pub const SETTINGS_PH_EXTENSIONS_EMPTY: &str = "Nenhuma extensão instalada";
-pub const SETTINGS_PH_EXTENSIONS: &str =
-    "Extensões .MCPB/.DXT são do Claude Desktop. No GSH, os servidores MCP ficam em Conectores e Desenvolvedor.";
+pub const SETTINGS_PH_EXTENSIONS: &str = "Extensões .MCPB/.DXT são do Claude Desktop. No GSH, os servidores MCP ficam em Conectores e Desenvolvedor.";
 
 // Aba Sistema + Armazenamento (`system` + `general.launchAtStartup*` + `storage`)
 pub const SETTINGS_SYSTEM_TITLE: &str = "Sistema";

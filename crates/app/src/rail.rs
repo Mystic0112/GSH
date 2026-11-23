@@ -9,6 +9,8 @@ use crate::theme;
 
 #[path = "channel_editor.rs"]
 mod channel_editor;
+#[path = "channel_footer.rs"]
+mod channel_footer;
 pub use channel_editor::{ChannelAction, ChannelActions, ChannelEditor, ChannelMemberOption};
 
 /// Estado visual do botão de manter acordado no rodapé do rail.
@@ -60,6 +62,9 @@ pub struct RailActions<'a, M> {
     pub update_version: Option<&'a str>,
     pub on_add_workspace: M,
     pub channels: ChannelActions<'a, M>,
+    pub channel_popup_open: bool,
+    pub on_toggle_channel_popup: M,
+    pub on_close_channel_popup: M,
     pub on_toggle_keep_awake: M,
     pub on_download_update: M,
     pub on_dismiss_update: M,
@@ -76,7 +81,10 @@ pub fn view<'a, M: Clone + 'a>(
         keep_awake,
         update_version,
         on_add_workspace,
-        channels: _,
+        channels,
+        channel_popup_open,
+        on_toggle_channel_popup,
+        on_close_channel_popup,
         on_toggle_keep_awake,
         on_download_update,
         on_dismiss_update,
@@ -140,12 +148,23 @@ pub fn view<'a, M: Clone + 'a>(
         tooltip::Position::Top,
     );
     let footer = container(
-        row![Space::new().width(Fill), keep_awake_btn, settings_btn]
-            .spacing(4)
-            .align_y(Alignment::Center),
+        row![
+            channel_footer::view(
+                workspaces,
+                channels,
+                channel_popup_open,
+                on_toggle_channel_popup,
+                on_close_channel_popup,
+            ),
+            keep_awake_btn,
+            settings_btn,
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center),
     )
     .width(Fill)
     .height(Length::Fixed(theme::FOOTER_HEIGHT))
+    .center_y(Length::Fixed(theme::FOOTER_HEIGHT))
     .padding([0, 12]);
 
     let content = column![list];

@@ -626,6 +626,8 @@ enum Msg {
     CloseTabList,
     ToggleAppMenu,
     CloseAppMenu,
+    ToggleChannelPopup,
+    CloseChannelPopup,
     AppMenuAction(Box<Msg>),
     AppMenuShortcut(iced::keyboard::Key, iced::keyboard::Modifiers),
     CycleWorkspace(i8),
@@ -928,6 +930,7 @@ struct Shell {
     pending_window_close: Option<iced::window::Id>,
     workspaces: WorkspaceList,
     channel_editor: Option<rail::ChannelEditor>,
+    channel_popup_open: bool,
     chat_contexts: BTreeMap<ChatId, SessionContext>,
     terminal_contexts: BTreeMap<TermId, SessionContext>,
     file_tree: FileTree,
@@ -1203,6 +1206,7 @@ impl Default for Shell {
             pending_window_close: None,
             workspaces,
             channel_editor: None,
+            channel_popup_open: false,
             chat_contexts: restored
                 .as_ref()
                 .map(|doc| doc.chat_contexts.clone())
@@ -4122,6 +4126,7 @@ impl Shell {
         match action {
             ChannelAction::Select(id) => {
                 self.channel_editor = None;
+                self.channel_popup_open = false;
                 if self.workspaces.select_context_channel(id.as_ref()).is_ok() {
                     self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
                     Task::batch([self.reload_db(), self.sync_telemetry_workspace()])
@@ -4131,6 +4136,7 @@ impl Shell {
             }
             ChannelAction::New => {
                 self.channel_editor = Some(rail::ChannelEditor::new(None));
+                self.channel_popup_open = true;
                 Task::none()
             }
             ChannelAction::Edit(id) => {
@@ -4139,10 +4145,12 @@ impl Shell {
                     .channel(&id)
                     .cloned()
                     .map(|channel| rail::ChannelEditor::new(Some(&channel)));
+                self.channel_popup_open = self.channel_editor.is_some();
                 Task::none()
             }
             ChannelAction::Close => {
                 self.channel_editor = None;
+                self.channel_popup_open = false;
                 Task::none()
             }
             ChannelAction::Name(name) => {
@@ -4214,6 +4222,7 @@ impl Shell {
                             let _ = self.workspaces.select_context_channel(Some(&id));
                         }
                         self.channel_editor = None;
+                        self.channel_popup_open = false;
                         self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
                     }
                     Err(error) => {
@@ -4232,6 +4241,8 @@ impl Shell {
             }
             ChannelAction::AssignWorkspace(id) => {
                 let index = self.workspaces.selected_index();
+                self.channel_popup_open = false;
+                self.channel_editor = None;
                 if self.workspaces.assign_workspace_channel(index, &id).is_ok() {
                     self.layout_save_due = Some(Instant::now() + Duration::from_millis(500));
                 }
@@ -6311,6 +6322,18 @@ impl Shell {
             }
             Msg::CloseAppMenu => {
                 self.app_menu_open = false;
+                Task::none()
+            }
+            Msg::ToggleChannelPopup => {
+                self.channel_popup_open = !self.channel_popup_open;
+                if !self.channel_popup_open {
+                    self.channel_editor = None;
+                }
+                Task::none()
+            }
+            Msg::CloseChannelPopup => {
+                self.channel_popup_open = false;
+                self.channel_editor = None;
                 Task::none()
             }
             Msg::AppMenuAction(message) => {
@@ -9365,6 +9388,9 @@ impl Shell {
                         members: self.channel_member_options(),
                         on_action: Msg::ChannelAction,
                     },
+                    channel_popup_open: self.channel_popup_open,
+                    on_toggle_channel_popup: Msg::ToggleChannelPopup,
+                    on_close_channel_popup: Msg::CloseChannelPopup,
                     on_toggle_keep_awake: Msg::Settings(settings::Message::Claude(
                         settings::claude::Message::KeepAwakeToggle(!keep_awake_active),
                     )),
@@ -9892,6 +9918,9 @@ mod tests {
 
     use crate::island::IslandAgentState;
 
+    #[path = "channel_popup_tests.rs"]
+    mod channel_popup_tests;
+
     struct TestLocalSendReceiver {
         decision: ReceiveDecision,
         progress_delay: Duration,
@@ -10087,6 +10116,7 @@ mod tests {
             pending_window_close: None,
             workspaces,
             channel_editor: None,
+            channel_popup_open: false,
             chat_contexts: BTreeMap::new(),
             terminal_contexts: BTreeMap::new(),
             file_tree: FileTree::new(),
