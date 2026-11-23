@@ -25,6 +25,10 @@ pub struct ChromeCallbacks<M, FSelect, FClose, FDrag, FIcon, FTitle, FPaneDrag> 
     pub on_pane_drag: FPaneDrag,
     pub pane_drop_zone: Option<PaneDropZone>,
     pub terminal_icon: FIcon,
+    /// Marca de agente de cada aba (mesma ordem de `model.tabs()`).
+    pub tab_indicators: Vec<Option<crate::pane_tab::TabIndicator>>,
+    /// Relógio (ms) do spinner e do pisca das marcas.
+    pub anim_ms: u64,
     pub terminal_title: FTitle,
     pub on_new_terminal: M,
     pub noop_msg: M,

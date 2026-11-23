@@ -632,6 +632,8 @@ enum Msg {
     TabRenameChanged(String),
     TabRenameSubmit,
     TabRenameCancel,
+    /// Quadro da animação das marcas de agente nas abas.
+    TabAnimTick,
     ConfirmCloseTabs,
     CancelCloseTabs,
     TabDrag(Pane, TabDragEvent),
@@ -931,6 +933,8 @@ struct Shell {
     tab_menu: Option<(Pane, usize)>,
     /// Aba de terminal com o nome em edição inline.
     tab_rename: Option<tab_menu::TabRename>,
+    /// Relógio (ms) do spinner e do pisca das marcas de agente nas abas.
+    tab_anim_ms: u64,
     /// "Fechar abas?" aguardando confirmação.
     pending_close_tabs: Option<tab_menu::PendingCloseTabs>,
     /// Último clique numa aba de terminal, para o duplo clique que renomeia.
@@ -1217,6 +1221,7 @@ impl Default for Shell {
             tab_list_open: None,
             tab_menu: None,
             tab_rename: None,
+            tab_anim_ms: 0,
             pending_close_tabs: None,
             last_tab_click: None,
             app_menu_open: false,
@@ -4590,6 +4595,41 @@ impl Shell {
         }
     }
 
+    /// Marca de agente da aba (`pane_view.dart`): terminal pelo status do hook, chat enquanto responde.
+    fn tab_indicator_for(&self, tab: &PaneTab) -> Option<pane_tab::TabIndicator> {
+        match tab {
+            PaneTab::Terminal(id) => {
+                let record = self
+                    .status_runtime
+                    .pane_record(&agent_status::pane_id_for_term(*id))?;
+                let status = record.status();
+                // o status do hook só vale com o id da sessão do agente
+                let agent = record.session_id().is_some().then_some(status);
+                pane_tab::tab_indicator(
+                    status == gsh_core::status::TurnStatus::Working,
+                    agent,
+                    record.unseen_finish(),
+                )
+            }
+            PaneTab::Chat(id) => self
+                .chats
+                .get(id)
+                .is_some_and(ChatPane::is_busy)
+                .then_some(pane_tab::TabIndicator::Spinner { agent: false }),
+            _ => None,
+        }
+    }
+
+    fn any_tab_animating(&self) -> bool {
+        self.panes.models().into_iter().any(|model| {
+            model
+                .tabs()
+                .iter()
+                .filter_map(|tab| self.tab_indicator_for(tab))
+                .any(pane_tab::TabIndicator::animates)
+        })
+    }
+
     fn terminal_harness_icon(&self, id: TermId) -> Option<(&'static [u8], bool)> {
         let kind = self.active_harnesses.get(&id).copied().or_else(|| {
             match self
@@ -6360,6 +6400,10 @@ impl Shell {
             }
             Msg::TabRenameSubmit => {
                 self.commit_tab_rename();
+                Task::none()
+            }
+            Msg::TabAnimTick => {
+                self.tab_anim_ms = self.tab_anim_ms.wrapping_add(SEARCH_SPIN_TICK_MS);
                 Task::none()
             }
             Msg::TabRenameCancel => {
@@ -9023,6 +9067,12 @@ impl Shell {
         } else {
             Subscription::none()
         };
+        // só corre enquanto alguma aba mostra spinner ou bolinha piscando
+        let tab_anim = if self.any_tab_animating() {
+            iced::time::every(Duration::from_millis(SEARCH_SPIN_TICK_MS)).map(|_| Msg::TabAnimTick)
+        } else {
+            Subscription::none()
+        };
         let search_spinner = if search_visible && self.search.searching {
             iced::time::every(Duration::from_millis(SEARCH_SPIN_TICK_MS))
                 .map(|_| Msg::Search(SearchMsg::Spin))
@@ -9126,6 +9176,7 @@ impl Shell {
                 tab_rename_events,
                 localsend_popup_escape,
                 search_clear,
+                tab_anim,
                 search_spinner,
             ]
             .into_iter()
@@ -9493,6 +9544,12 @@ impl Shell {
                     .pane_drag_target
                     .and_then(|(target_pane, zone)| (target_pane == pane).then_some(zone)),
                 terminal_icon: |term_id| self.terminal_harness_icon(term_id),
+                tab_indicators: model
+                    .tabs()
+                    .iter()
+                    .map(|tab| self.tab_indicator_for(tab))
+                    .collect(),
+                anim_ms: self.tab_anim_ms,
                 terminal_title: |term_id| {
                     self.terminals.get(&term_id).and_then(TerminalPane::title)
                 },
@@ -10344,6 +10401,8 @@ mod localsend_popup_tests;
 #[cfg(test)]
 mod tab_menu_shell_tests;
 #[cfg(test)]
+mod tab_status_shell_tests;
+#[cfg(test)]
 mod telemetry_interaction_tests;
 
 #[cfg(test)]
@@ -10533,6 +10592,7 @@ mod tests {
             tab_list_open: None,
             tab_menu: None,
             tab_rename: None,
+            tab_anim_ms: 0,
             pending_close_tabs: None,
             last_tab_click: None,
             app_menu_open: false,

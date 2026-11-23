@@ -1,7 +1,7 @@
 use crate::{db_engine_icon, labels, pane_model::PaneTab, pane_strip::hairline_v, theme};
 use gsh_db::Engine;
 use iced::widget::{button, column, container, mouse_area, row, svg, text, text_input, Space};
-use iced::{Alignment, Background, Border, Element, Fill, Length, Point, Theme};
+use iced::{Alignment, Background, Border, Color, Element, Fill, Length, Point, Theme};
 
 pub(crate) fn drag_feedback<'a, M: 'a>(
     tab: &'a PaneTab,
@@ -76,7 +76,115 @@ pub(crate) fn drag_feedback<'a, M: 'a>(
     .into()
 }
 
+/// Marca de agente à direita do título (`pane_view.dart`: spinner, bolinha amarela, "não visto" e vazada).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabIndicator {
+    /// Turno em andamento; verde se um hook trouxe o id da sessão do agente, `accent` senão.
+    Spinner { agent: bool },
+    /// Agente esperando alguém (permissão): bolinha amarela que pisca.
+    Waiting,
+    /// Terminou e a aba ainda não foi vista: bolinha `accent`.
+    Unseen,
+    /// Agente parado e já visto: círculo vazado azul.
+    Seen,
+}
+
+/// Qual marca a aba mostra. `agent` é o status do hook e só vale com o id da sessão do agente
+/// (`claudeSessionId != null` no Flutter); a ordem de prioridade é a de `pane_view.dart`.
+pub(crate) fn tab_indicator(
+    working: bool,
+    agent: Option<gsh_core::status::TurnStatus>,
+    unseen_finish: bool,
+) -> Option<TabIndicator> {
+    use gsh_core::status::TurnStatus;
+    if working {
+        Some(TabIndicator::Spinner {
+            agent: agent.is_some(),
+        })
+    } else if agent == Some(TurnStatus::Waiting) {
+        Some(TabIndicator::Waiting)
+    } else if unseen_finish {
+        Some(TabIndicator::Unseen)
+    } else if agent == Some(TurnStatus::Idle) {
+        Some(TabIndicator::Seen)
+    } else {
+        None
+    }
+}
+
+impl TabIndicator {
+    /// Anima enquanto houver spinner ou pisca.
+    pub(crate) fn animates(self) -> bool {
+        matches!(self, Self::Spinner { .. } | Self::Waiting)
+    }
+}
+
+/// Meio ciclo do pisca do status (`_Pulse._every`): todas as bolinhas amarelas piscam juntas.
+const PULSE_HALF_MS: u64 = 700;
+
+fn pulse_bright(anim_ms: u64) -> bool {
+    (anim_ms / PULSE_HALF_MS).is_multiple_of(2)
+}
+
+const INDICATOR_SPINNER_SIZE: f32 = 10.0;
+const INDICATOR_SPINNER_STROKE: f32 = 1.5;
+const INDICATOR_DOT_SIZE: f32 = 7.0;
+const INDICATOR_HOLLOW_STROKE: f32 = 1.4;
+/// Espaço entre a marca e o X (`SizedBox(width: 7)`).
+const INDICATOR_GAP: f32 = 7.0;
+
+fn indicator_view<'a, M: 'a>(
+    indicator: TabIndicator,
+    anim_ms: u64,
+    drag_alpha: f32,
+) -> Element<'a, M> {
+    let palette = theme::palette();
+    let dot = |fill: Option<Color>, outline: Option<Color>| -> Element<'a, M> {
+        container(
+            Space::new()
+                .width(INDICATOR_DOT_SIZE)
+                .height(INDICATOR_DOT_SIZE),
+        )
+        .style(move |_: &Theme| container::Style {
+            background: fill.map(|color| Background::Color(color.scale_alpha(drag_alpha))),
+            border: Border {
+                color: outline.map_or(Color::TRANSPARENT, |color| color.scale_alpha(drag_alpha)),
+                width: if outline.is_some() {
+                    INDICATOR_HOLLOW_STROKE
+                } else {
+                    0.0
+                },
+                radius: (INDICATOR_DOT_SIZE / 2.0).into(),
+            },
+            ..Default::default()
+        })
+        .into()
+    };
+    match indicator {
+        TabIndicator::Spinner { agent } => crate::content_search_panel::spinner_colored(
+            INDICATOR_SPINNER_SIZE,
+            INDICATOR_SPINNER_STROKE,
+            (if agent {
+                palette.online
+            } else {
+                palette.accent
+            })
+            .scale_alpha(drag_alpha),
+            anim_ms,
+        ),
+        TabIndicator::Waiting => {
+            let alpha = if pulse_bright(anim_ms) { 1.0 } else { 0.3 };
+            dot(Some(palette.warn.scale_alpha(alpha)), None)
+        }
+        TabIndicator::Unseen => dot(Some(palette.accent), None),
+        TabIndicator::Seen => dot(None, Some(palette.git_untracked)),
+    }
+}
+
 pub(crate) struct TabPresentation {
+    pub indicator: Option<TabIndicator>,
+    /// Relógio da animação (ms) do spinner e do pisca.
+    pub anim_ms: u64,
     pub title: String,
     pub active: bool,
     pub focused: bool,
@@ -130,6 +238,8 @@ where
         rename,
     } = actions;
     let TabPresentation {
+        indicator,
+        anim_ms,
         title,
         active: is_active,
         focused,
@@ -211,11 +321,21 @@ where
         .clip(true)
         .into(),
     };
-    let tab_label = row![
+    let mut tab_label = row![
         leading_icon,
         Space::new().width(theme::PANE_TAB_ICON_GAP),
         title_element,
     ];
+    // título, 10, marca, 7, X: a marca fica dentro do botão de seleção (clicar nela seleciona a aba)
+    let close_gap = match indicator {
+        Some(indicator) if !editing => {
+            tab_label = tab_label
+                .push(Space::new().width(theme::PANE_TAB_CLOSE_GAP))
+                .push(indicator_view(indicator, anim_ms, drag_alpha));
+            INDICATOR_GAP
+        }
+        _ => theme::PANE_TAB_CLOSE_GAP,
+    };
     // o button não centra o conteúdo: a linha ocupa a altura toda e centra ícone e título
     let tab_label = tab_label.height(Fill).align_y(Alignment::Center);
     // renomeando, o título é um campo: sem botão de seleção por baixo (nem arraste)
@@ -314,7 +434,7 @@ where
     let top_area = container(
         row![
             select_area,
-            Space::new().width(theme::PANE_TAB_CLOSE_GAP),
+            Space::new().width(close_gap),
             mouse_area(close_btn)
                 .on_enter(hover_messages.0)
                 .on_exit(hover_messages.1)
@@ -428,7 +548,54 @@ fn show_dirty_dot(dirty: bool, hovered: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_focused_active, show_dirty_dot};
+    use super::{is_focused_active, pulse_bright, show_dirty_dot, tab_indicator, TabIndicator};
+    use gsh_core::status::TurnStatus;
+
+    #[test]
+    fn indicator_priority_matches_pane_view() {
+        use TabIndicator::*;
+        // trabalhando: spinner verde com agente, accent sem
+        assert_eq!(
+            tab_indicator(true, Some(TurnStatus::Working), true),
+            Some(Spinner { agent: true })
+        );
+        assert_eq!(
+            tab_indicator(true, None, false),
+            Some(Spinner { agent: false })
+        );
+        assert_eq!(
+            tab_indicator(false, Some(TurnStatus::Waiting), true),
+            Some(Waiting)
+        );
+        assert_eq!(tab_indicator(false, None, true), Some(Unseen));
+        assert_eq!(
+            tab_indicator(false, Some(TurnStatus::Idle), true),
+            Some(Unseen)
+        );
+        assert_eq!(
+            tab_indicator(false, Some(TurnStatus::Idle), false),
+            Some(Seen)
+        );
+        // sem agente (sem id de sessão) e sem nada novo: nada
+        assert_eq!(tab_indicator(false, None, false), None);
+    }
+
+    #[test]
+    fn only_spinner_and_waiting_animate() {
+        assert!(TabIndicator::Spinner { agent: true }.animates());
+        assert!(TabIndicator::Waiting.animates());
+        assert!(!TabIndicator::Unseen.animates());
+        assert!(!TabIndicator::Seen.animates());
+    }
+
+    #[test]
+    fn pulse_flips_every_700ms() {
+        assert!(pulse_bright(0));
+        assert!(pulse_bright(699));
+        assert!(!pulse_bright(700));
+        assert!(!pulse_bright(1399));
+        assert!(pulse_bright(1400));
+    }
 
     #[test]
     fn active_indicator_only_belongs_to_the_focused_pane() {
