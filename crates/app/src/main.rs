@@ -121,6 +121,9 @@ mod terminal_ipc;
 pub mod terminal_pane;
 pub mod theme;
 pub mod topbar;
+pub mod workspace_settings_dialog;
+#[cfg(test)]
+mod workspace_snapshots;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io::Write;
@@ -711,6 +714,12 @@ enum Msg {
     DismissWorkspaceSwitchNotice,
     PickWorkspaceFolder,
     WorkspaceFolderPicked(Option<PathBuf>),
+    WorkspaceSettings(workspace_settings_dialog::Message),
+    ConfigureWorkspace(usize),
+    WorkspaceMenu(usize, rail::WorkspaceMenuAction),
+    ConfirmCloseWorkspace,
+    CancelCloseWorkspace,
+    WorkspacePhotoPicked(Option<PathBuf>),
     CheckForUpdates {
         force: bool,
     },
@@ -956,6 +965,9 @@ struct Shell {
     layout_path: Option<PathBuf>,
     imported_layouts: BTreeMap<PathBuf, layout_store::LayoutDoc>,
     workspace_switch_notice: Option<&'static str>,
+    workspace_settings: Option<workspace_settings_dialog::Draft>,
+    workspace_menu_open: Option<usize>,
+    pending_workspace_close: Option<usize>,
     layout_save_due: Option<Instant>,
     layout_restore_browsers_pending: bool,
     update_state: app_update::UpdateState,
@@ -1235,6 +1247,9 @@ impl Default for Shell {
                 .map(|doc| doc.imported_layouts.clone())
                 .unwrap_or_default(),
             workspace_switch_notice: None,
+            workspace_settings: None,
+            workspace_menu_open: None,
+            pending_workspace_close: None,
             layout_save_due: None,
             layout_restore_browsers_pending,
             update_state: app_update::UpdateState::load_default(),
@@ -1279,6 +1294,18 @@ async fn pick_workspace_folder() -> Option<PathBuf> {
         .pick_folder()
         .await
         .map(|handle| handle.path().to_path_buf())
+}
+
+async fn pick_workspace_photo(initial: Option<PathBuf>) -> Option<PathBuf> {
+    let mut picker =
+        rfd::AsyncFileDialog::new().add_filter("Imagens", &["png", "jpg", "jpeg", "webp"]);
+    if let Some(dir) = initial.filter(|path| path.is_dir()) {
+        picker = picker.set_directory(dir);
+    }
+    picker
+        .pick_file()
+        .await
+        .map(|file| file.path().to_path_buf())
 }
 
 async fn pick_channel_folder(initial: Option<PathBuf>) -> Option<PathBuf> {
@@ -8530,12 +8557,189 @@ impl Shell {
                 Task::perform(pick_workspace_folder(), Msg::WorkspaceFolderPicked)
             }
             Msg::WorkspaceFolderPicked(Some(folder)) => {
-                let _ = self.workspaces.open_folder(folder.clone());
-                self.files_open = true;
-                self.activate_workspace_path(Some(folder));
-                Task::batch([self.reload_db(), self.sync_telemetry_workspace()])
+                let name = folder.file_name().map_or_else(
+                    || folder.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                );
+                let color = workspace_settings_dialog::PALETTE
+                    .get(self.workspaces.items().len() % workspace_settings_dialog::PALETTE.len())
+                    .copied()
+                    .unwrap_or(0xFF6E56CF);
+                self.workspace_settings = Some(workspace_settings_dialog::Draft {
+                    id: None,
+                    name,
+                    path: folder,
+                    color,
+                    image: None,
+                });
+                Task::none()
             }
             Msg::WorkspaceFolderPicked(None) => Task::none(),
+            Msg::ConfigureWorkspace(index) => {
+                if let Some(workspace) = self
+                    .workspaces
+                    .items()
+                    .get(index)
+                    .filter(|workspace| workspace.path.is_some())
+                {
+                    let path = workspace.path.clone().unwrap_or_default();
+                    let color = workspace
+                        .color
+                        .or_else(|| {
+                            workspace_settings_dialog::PALETTE
+                                .get(index % workspace_settings_dialog::PALETTE.len())
+                                .copied()
+                        })
+                        .unwrap_or(0xFF6E56CF);
+                    self.workspace_settings = Some(workspace_settings_dialog::Draft {
+                        id: Some(workspace.id.clone()),
+                        name: workspace.name.clone(),
+                        path,
+                        color,
+                        image: workspace.image_path.clone(),
+                    });
+                }
+                Task::none()
+            }
+            Msg::WorkspaceMenu(index, action) => match action {
+                rail::WorkspaceMenuAction::Toggle => {
+                    self.workspace_menu_open =
+                        (self.workspace_menu_open != Some(index)).then_some(index);
+                    Task::none()
+                }
+                rail::WorkspaceMenuAction::Dismiss => {
+                    self.workspace_menu_open = None;
+                    Task::none()
+                }
+                rail::WorkspaceMenuAction::Configure => {
+                    self.workspace_menu_open = None;
+                    self.update_inner(Msg::ConfigureWorkspace(index))
+                }
+                rail::WorkspaceMenuAction::CopyId => {
+                    self.workspace_menu_open = None;
+                    self.workspaces
+                        .items()
+                        .get(index)
+                        .map_or_else(Task::none, |workspace| {
+                            iced::clipboard::write(workspace.id.clone())
+                        })
+                }
+                rail::WorkspaceMenuAction::MoveTo(channel) => {
+                    self.workspace_menu_open = None;
+                    if self.workspaces.set_workspace_realm(index, channel) {
+                        self.layout_save_due = Some(Instant::now() + Duration::from_millis(100));
+                    }
+                    Task::none()
+                }
+                rail::WorkspaceMenuAction::Close => {
+                    self.workspace_menu_open = None;
+                    if self.workspaces.items().get(index).is_some_and(|workspace| {
+                        workspace.kind == gsh_core::workspace::WorkspaceKind::Project
+                    }) {
+                        self.pending_workspace_close = Some(index);
+                    }
+                    Task::none()
+                }
+            },
+            Msg::CancelCloseWorkspace => {
+                self.pending_workspace_close = None;
+                Task::none()
+            }
+            Msg::ConfirmCloseWorkspace => {
+                let Some(index) = self.pending_workspace_close.take() else {
+                    return Task::none();
+                };
+                let was_active = index == self.workspaces.selected_index();
+                self.workspaces.remove(index);
+                self.layout_save_due = Some(Instant::now() + Duration::from_millis(100));
+                if was_active {
+                    let next = self
+                        .workspaces
+                        .active()
+                        .and_then(|workspace| workspace.path.clone());
+                    self.activate_workspace_path(next);
+                    return Task::batch([self.reload_db(), self.sync_telemetry_workspace()]);
+                }
+                Task::none()
+            }
+            Msg::WorkspacePhotoPicked(path) => {
+                if let Some(draft) = self.workspace_settings.as_mut() {
+                    draft.image = path;
+                }
+                Task::none()
+            }
+            Msg::WorkspaceSettings(message) => match message {
+                workspace_settings_dialog::Message::NameChanged(name) => {
+                    if let Some(draft) = self.workspace_settings.as_mut() {
+                        draft.name = name;
+                    }
+                    Task::none()
+                }
+                workspace_settings_dialog::Message::SelectColor(color) => {
+                    if let Some(draft) = self.workspace_settings.as_mut() {
+                        draft.color = color;
+                    }
+                    Task::none()
+                }
+                workspace_settings_dialog::Message::RemovePhoto => {
+                    if let Some(draft) = self.workspace_settings.as_mut() {
+                        draft.image = None;
+                    }
+                    Task::none()
+                }
+                workspace_settings_dialog::Message::PickPhoto => {
+                    let initial = self.workspace_settings.as_ref().and_then(|draft| {
+                        draft
+                            .image
+                            .as_ref()
+                            .and_then(|path| path.parent().map(Path::to_path_buf))
+                            .or_else(|| Some(draft.path.clone()))
+                    });
+                    Task::perform(pick_workspace_photo(initial), Msg::WorkspacePhotoPicked)
+                }
+                workspace_settings_dialog::Message::Cancel => {
+                    self.workspace_settings = None;
+                    Task::none()
+                }
+                workspace_settings_dialog::Message::Save => {
+                    let Some(draft) = self.workspace_settings.take() else {
+                        return Task::none();
+                    };
+                    if !draft.valid() {
+                        self.workspace_settings = Some(draft);
+                        return Task::none();
+                    }
+                    let index = if let Some(id) = draft.id.as_deref() {
+                        self.workspaces
+                            .items()
+                            .iter()
+                            .position(|workspace| workspace.id == id)
+                    } else {
+                        Some(self.workspaces.open_folder(draft.path.clone()))
+                    };
+                    if let Some(index) = index {
+                        let _ = self.workspaces.rename(index, &draft.name);
+                        let _ = self
+                            .workspaces
+                            .set_avatar(index, Some(draft.color), draft.image);
+                        self.layout_save_due = Some(Instant::now() + Duration::from_millis(100));
+                        if let Some(path) = self
+                            .workspaces
+                            .items()
+                            .get(index)
+                            .and_then(|workspace| workspace.path.clone())
+                        {
+                            self.files_open = true;
+                            self.activate_workspace_path(Some(path));
+                            return Task::batch([
+                                self.reload_db(),
+                                self.sync_telemetry_workspace(),
+                            ]);
+                        }
+                    }
+                    Task::none()
+                }
+            },
             Msg::CheckForUpdates { force } => self.check_for_updates(force),
             Msg::UpdateChecked(info) => {
                 self.update_state
@@ -9398,6 +9602,8 @@ impl Shell {
                     on_download_update: Msg::OpenUpdateDownload,
                     on_dismiss_update: Msg::DismissUpdate,
                     on_settings: Msg::OpenSettings,
+                    workspace_menu_open: self.workspace_menu_open,
+                    on_workspace_menu: Msg::WorkspaceMenu,
                 },
             ));
         }
@@ -9790,6 +9996,34 @@ impl Shell {
             .into(),
             None => layered,
         };
+        let layered: Element<'_, Msg> = match self.workspace_settings.as_ref() {
+            Some(draft) => stack![
+                layered,
+                pane_close_dialog::modal(
+                    workspace_settings_dialog::view(draft).map(Msg::WorkspaceSettings),
+                    Msg::WorkspaceSettings(workspace_settings_dialog::Message::Cancel),
+                    Msg::Noop,
+                )
+            ]
+            .into(),
+            None => layered,
+        };
+        let layered: Element<'_, Msg> = if self.pending_workspace_close.is_some() {
+            stack![
+                layered,
+                pane_close_dialog::confirm(
+                    labels::WORKSPACE_CLOSE_TITLE.to_owned(),
+                    labels::WORKSPACE_CLOSE_MESSAGE.to_owned(),
+                    labels::WORKSPACE_CLOSE_CONFIRM,
+                    Msg::CancelCloseWorkspace,
+                    Msg::ConfirmCloseWorkspace,
+                    Msg::Noop,
+                )
+            ]
+            .into()
+        } else {
+            layered
+        };
         let drag_feedback: Option<Element<'_, Msg>> = if self.tab_drag_active {
             self.tab_drag_source
                 .zip(self.tab_drag_cursor)
@@ -10136,6 +10370,9 @@ mod tests {
             layout_path: None,
             imported_layouts: BTreeMap::new(),
             workspace_switch_notice: None,
+            workspace_settings: None,
+            workspace_menu_open: None,
+            pending_workspace_close: None,
             layout_save_due: None,
             layout_restore_browsers_pending: false,
             update_state: app_update::UpdateState::in_memory(),
@@ -11988,6 +12225,11 @@ mod tests {
         std::fs::write(&target_file, b"# GSH\nLinha 2\n").expect("write test readme");
 
         let _ = shell.update(Msg::WorkspaceFolderPicked(Some(picked.clone())));
+        assert!(shell.workspace_settings.is_some());
+        assert_eq!(shell.workspaces.items().len(), 2);
+        let _ = shell.update(Msg::WorkspaceSettings(
+            workspace_settings_dialog::Message::Save,
+        ));
         assert_eq!(shell.workspaces.selected_index(), 2);
         assert_eq!(shell.file_tree.root(), Some(picked.as_path()));
 
@@ -12044,6 +12286,99 @@ mod tests {
         assert!(!shell.files_open);
 
         let _ = std::fs::remove_dir_all(&picked);
+    }
+
+    #[test]
+    fn workspace_creation_cancel_and_empty_name_do_not_create_a_workspace() {
+        let mut shell = test_shell();
+        let folder = std::env::temp_dir().join(format!("gsh-ws-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("create test folder");
+        let _ = shell.update(Msg::WorkspaceFolderPicked(Some(folder.clone())));
+        assert_eq!(shell.workspaces.items().len(), 2);
+        let draft = shell
+            .workspace_settings
+            .as_ref()
+            .expect("creation settings opened");
+        assert_eq!(
+            draft.name,
+            folder
+                .file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+        );
+        assert_eq!(
+            draft.color,
+            workspace_settings_dialog::PALETTE
+                .get(2)
+                .copied()
+                .unwrap_or_default()
+        );
+        if let Some(draft) = shell.workspace_settings.as_mut() {
+            draft.name.clear();
+        }
+        let _ = shell.update(Msg::WorkspaceSettings(
+            workspace_settings_dialog::Message::Save,
+        ));
+        assert_eq!(shell.workspaces.items().len(), 2);
+        let _ = shell.update(Msg::WorkspaceSettings(
+            workspace_settings_dialog::Message::Cancel,
+        ));
+        assert_eq!(shell.workspaces.items().len(), 2);
+    }
+
+    #[test]
+    fn workspace_settings_update_metadata_and_layout_roundtrip() {
+        let mut shell = test_shell();
+        let folder = std::env::temp_dir().join(format!("gsh-ws-edit-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("create test folder");
+        let index = shell.workspaces.open_folder(folder.clone());
+        let _ = shell.update(Msg::WorkspaceMenu(
+            index,
+            rail::WorkspaceMenuAction::Configure,
+        ));
+        if let Some(draft) = shell.workspace_settings.as_mut() {
+            draft.name = "Projeto editado".into();
+            draft.color = 0xFF2F6FF0;
+            draft.image = Some(folder.join("avatar.webp"));
+        }
+        let _ = shell.update(Msg::WorkspaceSettings(
+            workspace_settings_dialog::Message::Save,
+        ));
+        let item = shell
+            .workspaces
+            .items()
+            .get(index)
+            .expect("workspace remains");
+        assert_eq!(item.name, "Projeto editado");
+        assert_eq!(item.color, Some(0xFF2F6FF0));
+        assert_eq!(
+            item.image_path.as_deref(),
+            Some(folder.join("avatar.webp").as_path())
+        );
+        let mut doc = shell.panes.snapshot();
+        doc.save_workspaces(&shell.workspaces);
+        let restored = doc.restore_workspaces();
+        let item = restored.items().get(index).expect("workspace restored");
+        assert_eq!(item.name, "Projeto editado");
+        assert_eq!(item.color, Some(0xFF2F6FF0));
+        assert_eq!(item.image_path, Some(folder.join("avatar.webp")));
+    }
+
+    #[test]
+    fn close_workspace_requires_confirmation_and_keeps_its_folder() {
+        let mut shell = test_shell();
+        let folder = std::env::temp_dir().join(format!("gsh-ws-close-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("create test folder");
+        let index = shell.workspaces.open_folder(folder.clone());
+        let _ = shell.update(Msg::WorkspaceMenu(index, rail::WorkspaceMenuAction::Close));
+        assert_eq!(shell.workspaces.items().len(), 3);
+        assert_eq!(shell.pending_workspace_close, Some(index));
+        let _ = shell.update(Msg::CancelCloseWorkspace);
+        assert_eq!(shell.workspaces.items().len(), 3);
+        let _ = shell.update(Msg::WorkspaceMenu(index, rail::WorkspaceMenuAction::Close));
+        let _ = shell.update(Msg::ConfirmCloseWorkspace);
+        assert_eq!(shell.workspaces.items().len(), 2);
+        assert!(folder.is_dir());
+        let _ = std::fs::remove_dir_all(folder);
     }
 
     #[test]

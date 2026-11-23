@@ -13,6 +13,22 @@ pub const APP_TITLE: &str = "GSH Desktop";
 
 // Shell (colunas laterais, topbar, abas e rodapés)
 pub const WORKSPACES_HEADER: &str = "Workspaces";
+pub const WORKSPACE_SETTINGS_TITLE: &str = "Configurações do workspace";
+pub const WORKSPACE_NAME: &str = "Nome";
+pub const WORKSPACE_ADD_PHOTO: &str = "Adicionar foto";
+pub const WORKSPACE_CHANGE_PHOTO: &str = "Trocar foto";
+pub const WORKSPACE_REMOVE_PHOTO: &str = "Remover";
+pub const WORKSPACE_COLOR: &str = "Cor";
+pub const WORKSPACE_FOLDER: &str = "Pasta";
+pub const WORKSPACE_SAVE: &str = "Salvar";
+pub const WORKSPACE_CANCEL: &str = "Cancelar";
+pub const WORKSPACE_CLOSE_TITLE: &str = "Fechar workspace?";
+pub const WORKSPACE_CLOSE_MESSAGE: &str =
+    "O workspace será removido da lista do GSH. A pasta e os arquivos no disco não serão apagados.";
+pub const WORKSPACE_CLOSE_CONFIRM: &str = "Fechar";
+pub const WORKSPACE_MENU_CONFIGURE: &str = "Configurações";
+pub const WORKSPACE_MENU_COPY_ID: &str = "Copiar ID do workspace";
+pub const WORKSPACE_MENU_MOVE_TO: &str = "Mover para";
 pub const WORKSPACE_GSH: &str = "GSH";
 pub const WORKSPACE_GSH_INITIAL: &str = "G";
 pub const WORKSPACE_GSH_BRANCH: &str = "main";

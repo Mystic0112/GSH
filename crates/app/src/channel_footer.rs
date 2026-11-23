@@ -234,6 +234,8 @@ fn capture_channel_footer_snapshots() {
                 on_download_update: (),
                 on_dismiss_update: (),
                 on_settings: (),
+                workspace_menu_open: None,
+                on_workspace_menu: |_, _| (),
             },
         );
         let mut simulator = Simulator::with_size(settings.clone(), Size::new(252.0, 620.0), view);

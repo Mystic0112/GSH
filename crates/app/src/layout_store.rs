@@ -44,6 +44,10 @@ pub struct LayoutDoc {
     pub workspace_names: BTreeMap<PathBuf, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub workspace_realms: BTreeMap<PathBuf, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workspace_colors: BTreeMap<PathBuf, u32>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workspace_images: BTreeMap<PathBuf, PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     system_workspaces: Vec<SystemWorkspace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -190,6 +194,8 @@ impl crate::pane_tree::PaneTree {
             query_connections: Vec::new(),
             workspace_names: BTreeMap::new(),
             workspace_realms: BTreeMap::new(),
+            workspace_colors: BTreeMap::new(),
+            workspace_images: BTreeMap::new(),
             system_workspaces: Vec::new(),
             active_channel: None,
             channel_state: None,
