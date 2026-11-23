@@ -98,6 +98,16 @@ impl Response {
         }
     }
 
+    /// Error payload for machine-readable commands.
+    pub fn error_value(&self) -> Value {
+        self.0.get("error").cloned().unwrap_or_else(|| {
+            json!({
+                "kind": "connection_failed",
+                "message": "failed",
+            })
+        })
+    }
+
     /// `data` da resposta, ou `{}` quando ausente.
     pub fn data(&self) -> Value {
         self.0.get("data").cloned().unwrap_or_else(|| json!({}))

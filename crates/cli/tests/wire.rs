@@ -971,6 +971,158 @@ fn hook_evento_sem_status_nao_conecta() {
     assert_eq!((r.stdout.as_str(), r.stderr.as_str(), r.code), ("", "", 0));
 }
 
+#[test]
+fn db_list_envia_comando_e_workspace_e_imprime_uma_linha_json() {
+    let r = Setup::new(&["db", "list", "--workspace", "ws-1"])
+        .reply(r#"{"ok":true,"data":[{"name":"local","access":"read"}]}"#)
+        .run();
+    assert_eq!(
+        r.line(),
+        "{\"args\":{\"workspace\":\"ws-1\"},\"cmd\":\"db-list\",\"tabId\":\"t7\",\"type\":\"cmd\"}\n"
+    );
+    assert_eq!(
+        r.stdout,
+        "{\"ok\":[{\"access\":\"read\",\"name\":\"local\"}]}\n"
+    );
+    assert_eq!((r.stderr.as_str(), r.code), ("", 0));
+}
+
+#[test]
+fn db_list_preserva_kind_de_erro_e_exit_1() {
+    let r = Setup::new(&["db", "list"])
+        .reply(r#"{"ok":false,"error":{"kind":"connection_failed","message":"offline"}}"#)
+        .run();
+    assert_eq!(
+        r.stdout,
+        "{\"error\":{\"kind\":\"connection_failed\",\"message\":\"offline\"}}\n"
+    );
+    assert_eq!((r.stderr.as_str(), r.code), ("", 1));
+}
+
+#[test]
+fn db_schema_envia_tabela_e_emite_json_uma_linha() {
+    let r = Setup::new(&["db", "schema", "--db", "local", "users", "--workspace", "ws"])
+        .reply(r#"{"ok":true,"data":{"columns":[{"name":"name","type":"TEXT"}],"rows":[],"rowCount":0,"truncated":false,"elapsedMs":1}}"#)
+        .run();
+    assert_eq!(
+        r.line(),
+        "{\"args\":{\"db\":\"local\",\"table\":\"users\",\"workspace\":\"ws\"},\"cmd\":\"db-schema\",\"tabId\":\"t7\",\"type\":\"cmd\"}\n"
+    );
+    assert_eq!(
+        r.stdout,
+        "{\"ok\":{\"columns\":[{\"name\":\"name\",\"type\":\"TEXT\"}],\"elapsedMs\":1,\"rowCount\":0,\"rows\":[],\"truncated\":false}}\n"
+    );
+    assert_eq!((r.stderr.as_str(), r.code), ("", 0));
+}
+
+#[test]
+fn db_query_manda_sql_limite_e_imprime_json_normalizado() {
+    let r = Setup::new(&[
+        "db", "query", "--db", "local", "--sql", "SELECT 1", "--limit", "5",
+    ])
+    .reply(r#"{"ok":true,"data":{"columns":[{"name":"n","type":"INTEGER"}],"rows":[[1]],"rowCount":1,"truncated":false,"elapsedMs":2}}"#)
+    .run();
+    assert_eq!(
+        r.line(),
+        "{\"args\":{\"db\":\"local\",\"limit\":5,\"sql\":\"SELECT 1\"},\"cmd\":\"db-query\",\"tabId\":\"t7\",\"type\":\"cmd\"}\n"
+    );
+    assert_eq!(
+        r.stdout,
+        "{\"ok\":{\"columns\":[{\"name\":\"n\",\"type\":\"INTEGER\"}],\"elapsedMs\":2,\"rowCount\":1,\"rows\":[[1]],\"truncated\":false}}\n"
+    );
+    assert_eq!((r.stderr.as_str(), r.code), ("", 0));
+}
+
+#[test]
+fn db_execute_envia_sql_e_preserva_erro_read_only_com_exit_1() {
+    let r = Setup::new(&[
+        "db",
+        "execute",
+        "--db",
+        "local",
+        "--sql",
+        "DELETE FROM users",
+    ])
+    .reply(r#"{"ok":false,"error":{"kind":"read_only_connection","message":"read only"}}"#)
+    .run();
+    assert_eq!(
+        r.line(),
+        "{\"args\":{\"db\":\"local\",\"sql\":\"DELETE FROM users\"},\"cmd\":\"db-execute\",\"tabId\":\"t7\",\"type\":\"cmd\"}\n"
+    );
+    assert_eq!(
+        r.stdout,
+        "{\"error\":{\"kind\":\"read_only_connection\",\"message\":\"read only\"}}\n"
+    );
+    assert_eq!((r.stderr.as_str(), r.code), ("", 1));
+}
+
+#[test]
+fn db_run_envia_caminho_dbq_absoluto_e_workspace() {
+    let r = Setup::new(&["db", "run", "/tmp/report.dbq", "--workspace", "ws-1"])
+        .reply(r#"{"ok":true,"data":{"columns":[],"rows":[],"rowCount":0,"truncated":false,"elapsedMs":0}}"#)
+        .run();
+    assert_eq!(
+        r.line(),
+        "{\"args\":{\"path\":\"/tmp/report.dbq\",\"workspace\":\"ws-1\"},\"cmd\":\"db-run\",\"tabId\":\"t7\",\"type\":\"cmd\"}\n"
+    );
+    assert_eq!(
+        r.stdout,
+        "{\"ok\":{\"columns\":[],\"elapsedMs\":0,\"rowCount\":0,\"rows\":[],\"truncated\":false}}\n"
+    );
+    assert_eq!((r.stderr.as_str(), r.code), ("", 0));
+}
+
+#[test]
+fn redis_envia_comando_e_argumentos_em_json() {
+    let r = Setup::new(&[
+        "redis",
+        "--db",
+        "cache",
+        "GET",
+        "user:1",
+        "--workspace",
+        "ws-1",
+    ])
+    .reply(r#"{"ok":true,"data":"value"}"#)
+    .run();
+    assert_eq!(
+        r.line(),
+        "{\"args\":{\"db\":\"cache\",\"parts\":[\"GET\",\"user:1\"],\"workspace\":\"ws-1\"},\"cmd\":\"redis-cmd\",\"tabId\":\"t7\",\"type\":\"cmd\"}\n"
+    );
+    assert_eq!(r.stdout, "{\"ok\":\"value\"}\n");
+    assert_eq!((r.stderr.as_str(), r.code), ("", 0));
+}
+
+#[test]
+fn mongo_envia_documento_e_database_sem_alterar_conexao() {
+    let r = Setup::new(&[
+        "mongo",
+        "--db",
+        "docs",
+        "--database",
+        "app",
+        "--command",
+        "{\"find\":\"users\"}",
+    ])
+    .reply(r#"{"ok":true,"data":{"ok":1,"cursor":{"firstBatch":[]}}}"#)
+    .run();
+    let request: serde_json::Value = serde_json::from_str(r.line()).unwrap();
+    assert_eq!(request.get("cmd"), Some(&serde_json::json!("mongo-cmd")));
+    assert_eq!(
+        request.get("args").and_then(|args| args.get("command")),
+        Some(&serde_json::json!("{\"find\":\"users\"}"))
+    );
+    assert_eq!(
+        request.get("args").and_then(|args| args.get("database")),
+        Some(&serde_json::json!("app"))
+    );
+    assert_eq!(
+        r.stdout,
+        "{\"ok\":{\"cursor\":{\"firstBatch\":[]},\"ok\":1}}\n"
+    );
+    assert_eq!((r.stderr.as_str(), r.code), ("", 0));
+}
+
 /// `gsh hook` sem env de GSH, com stdin.
 fn run_offline_stdin(input: &str) -> (String, String, i32, PathBuf) {
     let home = unique_dir("gsh-hook-offline");

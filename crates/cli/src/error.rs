@@ -1,5 +1,6 @@
 //! Erros da CLI e o código de saída de cada um (mesmos da CLI original).
 
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::transport::TransportError;
@@ -21,13 +22,16 @@ pub enum CliError {
     /// O verbo exec preserva o código retornado pelo processo filho sem imprimir erro.
     #[error("")]
     CommandExit(i32),
+    /// Database errors keep their stable JSON contract on stdout.
+    #[error("database command failed")]
+    JsonFailure(Value),
 }
 
 impl CliError {
     pub fn exit_code(&self) -> u8 {
         match self {
             CliError::Usage(_) | CliError::Blocked(_) => 2,
-            CliError::App(_) => 1,
+            CliError::App(_) | CliError::JsonFailure(_) => 1,
             CliError::Transport(_) => 3,
             CliError::CommandExit(code) => u8::try_from(*code).unwrap_or(1),
         }

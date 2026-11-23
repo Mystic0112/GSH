@@ -11,6 +11,7 @@
     )
 )]
 
+pub mod access;
 pub mod connection;
 pub mod dbq;
 pub mod driver;

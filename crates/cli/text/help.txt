@@ -36,6 +36,9 @@ USAGE:
                                                rename a workspace in the rail
   gsh exec [--cwd <dir>] [--timeout <s>] [--json] [--] <command...>
                                                run a shell line through the app
+  gsh db <list|schema|query|execute|run>        query registered SQL databases
+  gsh redis --db <conn> <COMMAND> [args...]    run a Redis command
+  gsh mongo --db <conn> --command '<json>'     run a MongoDB command
   gsh new-tab [--cwd <dir>] [--title <name>] [--split h|v|right|down] [--tab-id <id>] [--json]
                                                open a new terminal tab (prints its id)
   gsh close-tab [<label|tab-id>] [--json]  close a tab (default: the current
@@ -82,6 +85,17 @@ READ (read-tab):
   Output is always chronological (top→bottom); flags only pick the window.
   read-tab without a target reads the CURRENT tab; a target may be a stable
   tab label or a tab-id.
+
+DATABASES:
+  gsh db list [--workspace <id|path>]
+  gsh db schema --db <conn> [<table>] [--workspace <id|path>]
+  gsh db query --db <conn> --sql <SQL> [--limit N] [--workspace <id|path>]
+  gsh db execute --db <conn> --sql <SQL> [--workspace <id|path>]
+  gsh db run <file.dbq> [--workspace <id|path>]
+  gsh redis --db <conn> <COMMAND> [args...] [--workspace <id|path>]
+  gsh mongo --db <conn> [--database <name>] --command '<json>' [--workspace <id|path>]
+  Every database command prints one JSON line. Connections are read-only for
+  agents unless the human enables Allow writes (agents) in the Database panel.
 
 BROWSER:
   install, start, stop, status, open, close, pages, goto, back, forward,
