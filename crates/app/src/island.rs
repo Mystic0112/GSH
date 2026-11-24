@@ -481,6 +481,12 @@ impl AgentIsland {
         IslandCounts::from_agents(&self.agents)
     }
 
+    /// Largura visível atual da pílula, usada pela topbar para esconder a ilha
+    /// quando centrada na janela invadiria os grupos laterais.
+    pub fn pill_width(&self) -> f32 {
+        target_pill_width(self.counts())
+    }
+
     pub fn mood(&self) -> GorillaMood {
         choose_gorilla_mood(&self.agents, self.is_expanded(), self.cheering)
     }

@@ -10335,19 +10335,24 @@ impl Shell {
             .active()
             .map(|ws| ws.name.as_str())
             .unwrap_or(labels::WORKSPACE_GSH);
+        let show_island = self
+            .settings
+            .current
+            .shows_feature(gsh_config::schema::AppFeature::AgentIsland);
         let top = topbar::view(
             TopbarProps {
                 workspace_title,
                 rail_open: self.rail_open,
                 files_open: self.files_open,
                 counts: self.farm.counts(),
+                island_width: if show_island {
+                    self.island.pill_width()
+                } else {
+                    0.0
+                },
             },
-            || {
-                if self
-                    .settings
-                    .current
-                    .shows_feature(gsh_config::schema::AppFeature::AgentIsland)
-                {
+            move || {
+                if show_island {
                     self.island.view_pill().map(Msg::Island)
                 } else {
                     Space::new().into()

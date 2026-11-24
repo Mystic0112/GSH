@@ -736,8 +736,9 @@ pub const WINDOW_CONTROL_BUTTON_SIZE: f32 = 46.0;
 pub const WINDOW_CONTROLS_WIDTH: f32 = WINDOW_CONTROL_BUTTON_SIZE * 3.0;
 /// Cor de fundo ao passar o mouse no botão Fechar da janela (`#E81123` em `window_controls.dart`).
 pub const WINDOW_CLOSE_HOVER: Color = Color::from_rgb8(0xE8, 0x11, 0x23);
-/// Largura livre mínima do centro da barra (`LayoutBuilder` no Flutter).
-pub const TOPBAR_CENTER_MIN_WIDTH: f32 = 160.0;
+/// Folga horizontal mínima de cada lado da pílula da ilha centrada na janela,
+/// para escondê-la antes de invadir os grupos esquerdo ou direito da barra.
+pub const TOPBAR_ISLAND_GAP: f32 = 6.0;
 /// Ícone e espaço da pílula `_GitBadge` do Flutter.
 pub const GIT_BADGE_ICON_SIZE: f32 = 9.0;
 pub const GIT_BADGE_ICON_GAP: f32 = 3.0;

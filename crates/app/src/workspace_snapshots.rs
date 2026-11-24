@@ -229,6 +229,7 @@ mod tests {
                     waiting: 1,
                     idle: 2,
                 },
+                island_width: 0.0,
             },
             || Space::new().into(),
             topbar::TopbarActions {

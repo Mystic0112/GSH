@@ -4,8 +4,16 @@
 //! botão de recolher o rail à esquerda + título do workspace ativo, pílula da
 //! `AgentIsland` centralizada e botão do painel de arquivos à direita.
 
-use iced::widget::{button, container, responsive, row, stack, text, tooltip, Space};
-use iced::{Alignment, Background, Border, Color, Element, Fill, Length, Theme};
+use iced::advanced::layout::{self, Layout};
+use iced::advanced::overlay;
+use iced::advanced::renderer;
+use iced::advanced::widget::{Operation, Tree};
+use iced::advanced::{Clipboard, Shell, Widget};
+use iced::widget::{button, container, row, stack, text, tooltip, Space};
+use iced::{
+    mouse, Alignment, Background, Border, Color, Element, Event, Fill, Length, Point, Rectangle,
+    Size, Theme, Vector,
+};
 
 use crate::labels;
 use crate::theme;
@@ -18,6 +26,8 @@ pub struct TopbarProps<'a> {
     pub rail_open: bool,
     pub files_open: bool,
     pub counts: crate::farm::FarmCounts,
+    /// Largura visível da pílula da ilha; `0.0` quando a ilha está oculta/desativada.
+    pub island_width: f32,
 }
 
 /// Ações dos botões da topbar (mensagens do shell).
@@ -152,25 +162,12 @@ pub fn view<'a, M: Clone + 'a>(
         .spacing(4)
         .align_y(Alignment::Center);
 
-    let center_island = responsive(move |size| {
-        if island_fits(size.width) {
-            container(island_pill())
-                .center_x(Fill)
-                .center_y(Fill)
-                .into()
-        } else {
-            Space::new().into()
-        }
-    });
-
-    let bar = container(
-        row![left, center_island, right]
-            .width(Fill)
-            .height(Fill)
-            .align_y(Alignment::Center),
-    )
-    .width(Fill)
-    .height(Fill);
+    let bar: Element<'a, M> = TopbarLayout {
+        children: [left.into(), right.into(), island_pill()],
+        trailing_width: theme::WINDOW_CONTROLS_WIDTH,
+        pill_width: props.island_width,
+    }
+    .into();
 
     let bottom_hairline = container(Space::new().width(Fill).height(1.0))
         .width(Fill)
@@ -302,8 +299,360 @@ fn window_control_button<'a, M: Clone + 'a>(
     .into()
 }
 
-fn island_fits(width: f32) -> bool {
-    width >= theme::TOPBAR_CENTER_MIN_WIDTH
+/// Verifica se a pílula da ilha, centrada horizontalmente na janela inteira,
+/// cabe entre o grupo da esquerda e o grupo da direita (incluindo os controles
+/// da janela) sem invadir nenhum dos dois lados.
+fn island_fits(
+    window_width: f32,
+    left_width: f32,
+    right_total_width: f32,
+    pill_width: f32,
+) -> bool {
+    if pill_width <= 0.0 {
+        return false;
+    }
+    let window_center = window_width / 2.0;
+    let half_needed = pill_width / 2.0 + theme::TOPBAR_ISLAND_GAP;
+    window_center - half_needed >= left_width
+        && window_center + half_needed <= window_width - right_total_width
+}
+
+/// Layout da topbar com três filhos fixos (`[left, right, center]`):
+/// - `left` fica colado à esquerda e centrado verticalmente;
+/// - `right` fica colado à direita (antes dos controles de janela) e centrado verticalmente;
+/// - `center` (pílula da ilha) é posicionado no centro horizontal da janela inteira
+///   (`bar_width + trailing_width`), e só é desenhado/interativo quando [`island_fits`]
+///   garante que não invade nem `left` nem `right`.
+struct TopbarLayout<'a, Message> {
+    children: [Element<'a, Message>; 3],
+    trailing_width: f32,
+    pill_width: f32,
+}
+
+impl<Message> Widget<Message, Theme, iced::Renderer> for TopbarLayout<'_, Message> {
+    fn children(&self) -> Vec<Tree> {
+        self.children.iter().map(Tree::new).collect()
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        tree.diff_children(&self.children);
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let bar_size = limits.resolve(Length::Fill, Length::Fill, Size::ZERO);
+        let child_limits = layout::Limits::new(Size::ZERO, bar_size);
+
+        let [left, right, center] = &mut self.children;
+        let mut trees = tree.children.iter_mut();
+        let (Some(left_tree), Some(right_tree), Some(center_tree)) =
+            (trees.next(), trees.next(), trees.next())
+        else {
+            return layout::Node::new(bar_size);
+        };
+
+        let mut left_node = left
+            .as_widget_mut()
+            .layout(left_tree, renderer, &child_limits);
+        let left_size = left_node.size();
+        left_node.move_to_mut(Point::new(
+            0.0,
+            ((bar_size.height - left_size.height) / 2.0).max(0.0),
+        ));
+
+        let mut right_node = right
+            .as_widget_mut()
+            .layout(right_tree, renderer, &child_limits);
+        let right_size = right_node.size();
+        let right_x = (bar_size.width - right_size.width).max(left_size.width);
+        right_node.move_to_mut(Point::new(
+            right_x,
+            ((bar_size.height - right_size.height) / 2.0).max(0.0),
+        ));
+
+        let window_width = bar_size.width + self.trailing_width;
+        let right_total_width = right_size.width + self.trailing_width;
+        let center_node = if island_fits(
+            window_width,
+            left_size.width,
+            right_total_width,
+            self.pill_width,
+        ) {
+            let mut node = center
+                .as_widget_mut()
+                .layout(center_tree, renderer, &child_limits);
+            let center_size = node.size();
+            let center_x = window_width / 2.0 - center_size.width / 2.0;
+            let center_y = ((bar_size.height - center_size.height) / 2.0).max(0.0);
+            node.move_to_mut(Point::new(center_x, center_y));
+            node
+        } else {
+            layout::Node::new(Size::ZERO)
+        };
+
+        layout::Node::with_children(bar_size, vec![left_node, right_node, center_node])
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        operation.container(None, layout.bounds());
+        operation.traverse(&mut |operation| {
+            for ((child, state), child_layout) in self
+                .children
+                .iter_mut()
+                .zip(&mut tree.children)
+                .zip(layout.children())
+            {
+                if child_layout.bounds().width > 0.0 {
+                    child
+                        .as_widget_mut()
+                        .operate(state, child_layout, renderer, operation);
+                }
+            }
+        });
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        mut cursor: mouse::Cursor,
+        renderer: &iced::Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        let [left, right, center] = &mut self.children;
+        let mut trees = tree.children.iter_mut();
+        let mut layouts = layout.children();
+        let (
+            Some(left_tree),
+            Some(right_tree),
+            Some(center_tree),
+            Some(left_layout),
+            Some(right_layout),
+            Some(center_layout),
+        ) = (
+            trees.next(),
+            trees.next(),
+            trees.next(),
+            layouts.next(),
+            layouts.next(),
+            layouts.next(),
+        )
+        else {
+            return;
+        };
+
+        if center_layout.bounds().width > 0.0 {
+            center.as_widget_mut().update(
+                center_tree,
+                event,
+                center_layout,
+                cursor,
+                renderer,
+                clipboard,
+                shell,
+                viewport,
+            );
+            if shell.is_event_captured() {
+                return;
+            }
+            if cursor.is_over(layout.bounds())
+                && !cursor.is_levitating()
+                && center.as_widget().mouse_interaction(
+                    center_tree,
+                    center_layout,
+                    cursor,
+                    viewport,
+                    renderer,
+                ) != mouse::Interaction::None
+            {
+                cursor = cursor.levitate();
+            }
+        }
+
+        left.as_widget_mut().update(
+            left_tree,
+            event,
+            left_layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+        if shell.is_event_captured() {
+            return;
+        }
+
+        right.as_widget_mut().update(
+            right_tree,
+            event,
+            right_layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        let [left, right, center] = &self.children;
+        let mut trees = tree.children.iter();
+        let mut layouts = layout.children();
+        let (
+            Some(left_tree),
+            Some(right_tree),
+            Some(center_tree),
+            Some(left_layout),
+            Some(right_layout),
+            Some(center_layout),
+        ) = (
+            trees.next(),
+            trees.next(),
+            trees.next(),
+            layouts.next(),
+            layouts.next(),
+            layouts.next(),
+        )
+        else {
+            return mouse::Interaction::None;
+        };
+
+        if center_layout.bounds().width > 0.0 {
+            let interaction = center.as_widget().mouse_interaction(
+                center_tree,
+                center_layout,
+                cursor,
+                viewport,
+                renderer,
+            );
+            if interaction != mouse::Interaction::None {
+                return interaction;
+            }
+        }
+
+        let left_interaction =
+            left.as_widget()
+                .mouse_interaction(left_tree, left_layout, cursor, viewport, renderer);
+        if left_interaction != mouse::Interaction::None {
+            return left_interaction;
+        }
+
+        right
+            .as_widget()
+            .mouse_interaction(right_tree, right_layout, cursor, viewport, renderer)
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut iced::Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        let [left, right, center] = &self.children;
+        let mut trees = tree.children.iter();
+        let mut layouts = layout.children();
+        let (
+            Some(left_tree),
+            Some(right_tree),
+            Some(center_tree),
+            Some(left_layout),
+            Some(right_layout),
+            Some(center_layout),
+        ) = (
+            trees.next(),
+            trees.next(),
+            trees.next(),
+            layouts.next(),
+            layouts.next(),
+            layouts.next(),
+        )
+        else {
+            return;
+        };
+
+        left.as_widget().draw(
+            left_tree,
+            renderer,
+            theme,
+            style,
+            left_layout,
+            cursor,
+            viewport,
+        );
+        right.as_widget().draw(
+            right_tree,
+            renderer,
+            theme,
+            style,
+            right_layout,
+            cursor,
+            viewport,
+        );
+        if center_layout.bounds().width > 0.0 {
+            center.as_widget().draw(
+                center_tree,
+                renderer,
+                theme,
+                style,
+                center_layout,
+                cursor,
+                viewport,
+            );
+        }
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'b>,
+        renderer: &iced::Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, iced::Renderer>> {
+        overlay::from_children(
+            &mut self.children,
+            tree,
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+}
+
+impl<'a, Message: 'a> From<TopbarLayout<'a, Message>> for Element<'a, Message> {
+    fn from(layout: TopbarLayout<'a, Message>) -> Self {
+        Self::new(layout)
+    }
 }
 
 fn icon_toggle_button<'a, M: Clone + 'a>(
@@ -481,10 +830,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn island_requires_160_pixels_of_free_width() {
-        assert!(!super::island_fits(159.99));
-        assert!(super::island_fits(160.0));
-        assert!(super::island_fits(161.0));
+    fn island_fits_checks_both_groups_around_window_center() {
+        let gap = theme::TOPBAR_ISLAND_GAP;
+        let pill = 50.0;
+        let half = pill / 2.0 + gap; // 31.0
+
+        // Janela 1025 (centro 512.5), esquerda 109.5, direita total 466.0 (início em 559.0): cabe com folga.
+        assert!(super::island_fits(1025.0, 109.5, 466.0, pill));
+        // Limite exato à direita: 512.5 + half == 1025.0 - right_total
+        assert!(super::island_fits(1025.0, 109.5, 512.5 - half, pill));
+        assert!(!super::island_fits(
+            1025.0,
+            109.5,
+            512.5 - half + 0.01,
+            pill
+        ));
+        // Limite exato à esquerda: 512.5 - half == left
+        assert!(super::island_fits(1025.0, 512.5 - half, 466.0, pill));
+        assert!(!super::island_fits(
+            1025.0,
+            512.5 - half + 0.01,
+            466.0,
+            pill
+        ));
+        // Largura estreita (700) onde o grupo direito cruza o centro: não cabe.
+        assert!(!super::island_fits(700.0, 109.5, 466.0, pill));
+        // Pílula vazia/desativada: não cabe.
+        assert!(!super::island_fits(1920.0, 109.5, 466.0, 0.0));
+        // Pílula larga (3 contadores = 129.5) em 1025 com navegador (466): esconde para não cobrir.
+        assert!(!super::island_fits(1025.0, 109.5, 466.0, 129.5));
+        assert!(super::island_fits(1400.0, 109.5, 466.0, 129.5));
     }
 
     #[test]
@@ -517,6 +892,7 @@ mod tests {
                 rail_open: true,
                 files_open: true,
                 counts: crate::farm::FarmCounts::default(),
+                island_width: 0.0,
             },
             || Space::new().into(),
             TopbarActions {
@@ -579,6 +955,7 @@ mod tests {
                     waiting: 0,
                     idle: 0,
                 },
+                island_width: island.pill_width(),
             },
             || island.view_pill().map(|_| ()),
             TopbarActions {
@@ -748,5 +1125,293 @@ mod tests {
             "elementos fora do eixo vertical central (tolerância 1.0px):\n{}",
             failures.join("\n")
         );
+    }
+
+    #[test]
+    fn topbar_island_horizontal_window_centering() {
+        use std::path::Path;
+
+        use iced::{Settings, Size};
+        use iced_test::simulator::Simulator;
+
+        theme::set_active(theme::ThemeVariant::Dark);
+        std::env::set_var("ICED_TEST_BACKEND", "tiny-skia");
+
+        let measure = |window_w: f32, file_name: &str| -> (Vec<(f32, f32)>, f32) {
+            let island = crate::island::AgentIsland::new(Vec::new());
+            let bar = view(
+                TopbarProps {
+                    workspace_title: "style",
+                    rail_open: true,
+                    files_open: true,
+                    counts: crate::farm::FarmCounts {
+                        working: 0,
+                        waiting: 0,
+                        idle: 0,
+                    },
+                    island_width: island.pill_width(),
+                },
+                || island.view_pill().map(|_| ()),
+                TopbarActions {
+                    on_toggle_rail: (),
+                    on_toggle_files: (),
+                    on_chat: Some(()),
+                    on_farm: Some(()),
+                    on_browser: Some(()),
+                    on_harness: Some(()),
+                    on_agent_graph: Some(()),
+                    on_localsend: Some(()),
+                    app_menus: Vec::new(),
+                    app_menu_open: false,
+                    on_toggle_app_menu: (),
+                    on_close_app_menu: (),
+                },
+            );
+            let full_topbar: Element<'_, ()> =
+                row![container(bar).width(Fill), window_controls((), (), ()),]
+                    .align_y(Alignment::Center)
+                    .into();
+
+            let settings = Settings {
+                fonts: theme::EMBEDDED_FONTS
+                    .iter()
+                    .map(|font| (*font).into())
+                    .collect(),
+                default_font: theme::FONT_BODY,
+                ..Default::default()
+            };
+            let mut simulator =
+                Simulator::with_size(settings, Size::new(window_w, 120.0), full_topbar);
+            let target = Path::new("/home/heliodev/projetos/GSH-wt/shots").join(file_name);
+            let stem = target
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .expect("file stem");
+            let generated = target.with_file_name(format!("{stem}-tiny-skia.png"));
+            std::fs::create_dir_all(target.parent().expect("shots dir")).expect("create shots dir");
+            let _ = std::fs::remove_file(&target);
+            let _ = std::fs::remove_file(&generated);
+            simulator
+                .snapshot(&iced::Theme::Dark)
+                .expect("snapshot render")
+                .matches_image(&target)
+                .expect("snapshot write");
+            std::fs::rename(&generated, &target).expect("snapshot rename");
+
+            let img = image::open(&target).expect("open topbar png").to_rgba8();
+            let scale = img.width() as f32 / window_w;
+            let [bg_r, bg_g, bg_b, _] = img.get_pixel(0, 0).0;
+            let bar_h_px = (theme::TOPBAR_HEIGHT * scale).round() as u32;
+            let hairline_px = scale.round().max(1.0) as u32;
+            let scan_h = bar_h_px - hairline_px;
+
+            let differs = |p: &image::Rgba<u8>| -> bool {
+                let [r, g, b, _] = p.0;
+                r.abs_diff(bg_r).max(g.abs_diff(bg_g)).max(b.abs_diff(bg_b)) > 4
+            };
+            let active_cols: Vec<bool> = (0..img.width())
+                .map(|x| (0..scan_h).any(|y| differs(img.get_pixel(x, y))))
+                .collect();
+            let is_active =
+                |x: u32| -> bool { active_cols.get(x as usize).copied().unwrap_or(false) };
+            let max_gap = (7.0 * scale).round() as u32;
+
+            let mut spans = Vec::new();
+            let mut x = 0;
+            while x < img.width() {
+                if !is_active(x) {
+                    x += 1;
+                    continue;
+                }
+                let start = x;
+                let mut end = x;
+                while x < img.width() {
+                    if is_active(x) {
+                        end = x;
+                        x += 1;
+                    } else {
+                        let gap_start = x;
+                        while x < img.width() && !is_active(x) {
+                            x += 1;
+                        }
+                        if x < img.width() && x - gap_start <= max_gap {
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                spans.push((start as f32 / scale, (end + 1) as f32 / scale));
+            }
+            (spans, scale)
+        };
+
+        let mut failures = Vec::new();
+        for (window_w, file_name) in [
+            (1025.0_f32, "gsh-topbar-janela-1025.png"),
+            (1400.0_f32, "gsh-topbar-janela-1400.png"),
+            (1920.0_f32, "gsh-topbar-janela-1920.png"),
+        ] {
+            let (spans, _scale) = measure(window_w, file_name);
+            let window_center = window_w / 2.0;
+            // 0: menu, 1: rail, 2: título, 3: ilha, 4..=16: contadores + 7 ícones + 3 controles janela
+            assert_eq!(
+                spans.len(),
+                17,
+                "largura {window_w}: esperava 17 spans (com ilha visível), encontrou {}: {:?}",
+                spans.len(),
+                spans
+            );
+            let left_end = spans.get(2).expect("title span").1;
+            let (pill_left, pill_right) = *spans.get(3).expect("island pill span");
+            let right_start = spans.get(4).expect("right group span").0;
+            let pill_center = (pill_left + pill_right) / 2.0;
+            let delta = pill_center - window_center;
+            eprintln!(
+                "  W={window_w:6.1} | left_end={left_end:5.1} | pill={pill_left:6.1}..{pill_right:6.1} (center={pill_center:6.2}, target={window_center:6.2}, delta={delta:+6.2}px) | right_start={right_start:6.1}"
+            );
+            if delta.abs() > 1.0 {
+                failures.push(format!(
+                    "W={window_w}: centro da pílula={pill_center:.2} vs centro da janela={window_center:.2} (delta={delta:+.2}px)"
+                ));
+            }
+            assert!(
+                pill_left > left_end,
+                "W={window_w}: pílula ({pill_left}) invadiu grupo esquerdo ({left_end})"
+            );
+            assert!(
+                pill_right < right_start,
+                "W={window_w}: pílula ({pill_right}) invadiu grupo direito ({right_start})"
+            );
+        }
+
+        // Largura estreita: ilha deve sumir sem sobrepor nada.
+        let (narrow_spans, _scale) = measure(700.0, "gsh-topbar-janela-700.png");
+        let narrow_left_end = narrow_spans.get(2).expect("narrow title span").1;
+        let narrow_right_start = narrow_spans.get(3).expect("narrow right group span").0;
+        eprintln!(
+            "  W= 700.0 | spans={} (esperado 16, ilha oculta) | left_end={narrow_left_end:5.1} | right_start={narrow_right_start:5.1}",
+            narrow_spans.len(),
+        );
+        assert_eq!(
+            narrow_spans.len(),
+            16,
+            "W=700: ilha deveria estar oculta (16 spans), encontrou {}: {:?}",
+            narrow_spans.len(),
+            narrow_spans
+        );
+        assert!(
+            narrow_left_end < narrow_right_start,
+            "W=700: grupo esquerdo ({narrow_left_end}) sobrepôs grupo direito ({narrow_right_start})"
+        );
+
+        assert!(
+            failures.is_empty(),
+            "pílula fora do centro da janela (tolerância 1.0px):\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[test]
+    fn topbar_window_drag_and_island_click_through() {
+        use iced::widget::mouse_area;
+        use iced::{Settings, Size};
+        use iced_test::simulator::Simulator;
+
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        enum TestMsg {
+            Drag,
+            ToggleMaximize,
+            Minimize,
+            Close,
+            ToggleRail,
+            ToggleFiles,
+            Chat,
+            Farm,
+            Browser,
+            Harness,
+            Graph,
+            LocalSend,
+            ToggleMenu,
+            CloseMenu,
+            Island(crate::island::IslandMsg),
+        }
+
+        theme::set_active(theme::ThemeVariant::Dark);
+        let island = crate::island::AgentIsland::new(Vec::new());
+        let build_bar = || -> Element<'_, TestMsg> {
+            let bar = view(
+                TopbarProps {
+                    workspace_title: "style",
+                    rail_open: true,
+                    files_open: true,
+                    counts: crate::farm::FarmCounts::default(),
+                    island_width: island.pill_width(),
+                },
+                || island.view_pill().map(TestMsg::Island),
+                TopbarActions {
+                    on_toggle_rail: TestMsg::ToggleRail,
+                    on_toggle_files: TestMsg::ToggleFiles,
+                    on_chat: Some(TestMsg::Chat),
+                    on_farm: Some(TestMsg::Farm),
+                    on_browser: Some(TestMsg::Browser),
+                    on_harness: Some(TestMsg::Harness),
+                    on_agent_graph: Some(TestMsg::Graph),
+                    on_localsend: Some(TestMsg::LocalSend),
+                    app_menus: Vec::new(),
+                    app_menu_open: false,
+                    on_toggle_app_menu: TestMsg::ToggleMenu,
+                    on_close_app_menu: TestMsg::CloseMenu,
+                },
+            );
+            row![
+                mouse_area(container(bar).width(Fill))
+                    .on_press(TestMsg::Drag)
+                    .on_double_click(TestMsg::ToggleMaximize),
+                window_controls(TestMsg::Minimize, TestMsg::ToggleMaximize, TestMsg::Close),
+            ]
+            .align_y(Alignment::Center)
+            .into()
+        };
+
+        let settings = Settings {
+            fonts: theme::EMBEDDED_FONTS
+                .iter()
+                .map(|font| (*font).into())
+                .collect(),
+            default_font: theme::FONT_BODY,
+            ..Default::default()
+        };
+
+        // 1. Clique em área vazia da barra inicia arraste da janela.
+        let mut ui = Simulator::with_size(settings.clone(), Size::new(1025.0, 120.0), build_bar());
+        ui.point_at(Point::new(300.0, 23.0));
+        let _ = ui.simulate(iced_test::simulator::click());
+        let msgs: Vec<TestMsg> = ui.into_messages().collect();
+        assert_eq!(msgs, vec![TestMsg::Drag]);
+
+        // 2. Clique no centro da janela (512.5, 23.0) acerta a pílula e não arrasta a janela.
+        let mut ui = Simulator::with_size(settings.clone(), Size::new(1025.0, 120.0), build_bar());
+        ui.point_at(Point::new(512.5, 23.0));
+        let _ = ui.simulate(iced_test::simulator::click());
+        let msgs: Vec<TestMsg> = ui.into_messages().collect();
+        assert_eq!(
+            msgs,
+            vec![TestMsg::Island(crate::island::IslandMsg::TogglePanel)]
+        );
+
+        // 3. Clique no farm_strip (x=575, dentro da margem transparente do canvas da pílula)
+        // atravessa até o botão da fazenda sem abrir a ilha nem arrastar a janela.
+        let mut ui = Simulator::with_size(settings.clone(), Size::new(1025.0, 120.0), build_bar());
+        ui.point_at(Point::new(575.0, 23.0));
+        let _ = ui.simulate(iced_test::simulator::click());
+        let msgs: Vec<TestMsg> = ui.into_messages().collect();
+        assert_eq!(msgs, vec![TestMsg::Farm]);
+
+        // 4. Clique no botão do rail à esquerda aciona ToggleRail sem arrastar a janela.
+        let mut ui = Simulator::with_size(settings, Size::new(1025.0, 120.0), build_bar());
+        ui.point_at(Point::new(54.0, 23.0));
+        let _ = ui.simulate(iced_test::simulator::click());
+        let msgs: Vec<TestMsg> = ui.into_messages().collect();
+        assert_eq!(msgs, vec![TestMsg::ToggleRail]);
     }
 }
