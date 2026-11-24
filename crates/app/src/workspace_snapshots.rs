@@ -2,10 +2,14 @@
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use iced::{Element, Settings, Size};
+    use iced::widget::{container, row, Space};
+    use iced::{Alignment, Element, Fill, Settings, Size};
     use iced_test::simulator::Simulator;
 
-    use crate::{labels, pane_close_dialog, rail, theme, workspace_settings_dialog as dialog};
+    use crate::{
+        farm::FarmCounts, labels, pane_close_dialog, rail, theme, topbar,
+        workspace_settings_dialog as dialog,
+    };
     use gsh_core::workspace::{Workspace, WorkspaceList};
 
     fn capture<'a, M: Clone + 'a>(name: &str, view: Element<'a, M>) {
@@ -157,5 +161,72 @@ mod tests {
             },
         );
         capture("gsh-plus-menu.png", plus);
+    }
+
+    #[test]
+    fn capture_empty_rail_and_topbar_snapshots() {
+        theme::set_active(theme::ThemeVariant::Dark);
+
+        let empty_workspaces = rail::default_workspace_list();
+        let empty_rail = rail::view(
+            &empty_workspaces,
+            |_| (),
+            rail::RailActions {
+                keep_awake: rail::KeepAwakeStatus::default(),
+                update_version: None,
+                new_workspace_menu_open: false,
+                on_new_workspace_menu: |_| (),
+                channels: rail::ChannelActions {
+                    editor: None,
+                    members: Vec::new(),
+                    on_action: |_| (),
+                },
+                channel_popup_open: false,
+                on_toggle_channel_popup: (),
+                on_close_channel_popup: (),
+                on_toggle_keep_awake: (),
+                on_download_update: (),
+                on_dismiss_update: (),
+                on_settings: (),
+                workspace_menu_open: None,
+                on_workspace_menu: no_op,
+            },
+        );
+        capture("gsh-rail-vazio.png", empty_rail);
+
+        let bar = topbar::view(
+            topbar::TopbarProps {
+                workspace_title: labels::WORKSPACE_GSH,
+                rail_open: true,
+                files_open: true,
+                counts: FarmCounts {
+                    working: 1,
+                    waiting: 1,
+                    idle: 2,
+                },
+            },
+            || Space::new().into(),
+            topbar::TopbarActions {
+                on_toggle_rail: (),
+                on_toggle_files: (),
+                on_chat: Some(()),
+                on_farm: Some(()),
+                on_browser: None,
+                on_harness: Some(()),
+                on_agent_graph: Some(()),
+                on_localsend: Some(()),
+                app_menus: Vec::new(),
+                app_menu_open: false,
+                on_toggle_app_menu: (),
+                on_close_app_menu: (),
+            },
+        );
+        let full_topbar: Element<'_, ()> = row![
+            container(bar).width(Fill),
+            topbar::window_controls((), (), ()),
+        ]
+        .align_y(Alignment::Center)
+        .into();
+        capture("gsh-topbar.png", full_topbar);
     }
 }
