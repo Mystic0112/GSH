@@ -72,6 +72,41 @@ mod reveal_tests {
     }
 }
 
+#[cfg(test)]
+mod find_tests {
+    use super::*;
+    use iced::widget::text_editor::Motion;
+
+    #[test]
+    fn find_navigates_with_wrap_and_closes_cleanly() {
+        let mut pane = EditorPane::new("f.rs".into(), "needle\nother needle".into());
+        let _ = pane.update(EditorMsg::FindOpen);
+        let _ = pane.update(EditorMsg::FindQuery("needle".into()));
+        assert_eq!(pane.find_matches.len(), 2);
+        assert_eq!(pane.find_index, Some(0));
+        let _ = pane.update(EditorMsg::FindNext);
+        assert_eq!(pane.find_index, Some(1));
+        let _ = pane.update(EditorMsg::FindNext);
+        assert_eq!(pane.find_index, Some(0));
+        let _ = pane.update(EditorMsg::FindPrevious);
+        assert_eq!(pane.find_index, Some(1));
+        let _ = pane.update(EditorMsg::FindClose);
+        assert!(!pane.find_open);
+        assert!(pane.find_matches.is_empty());
+        assert_eq!(pane.state.buffer.text(), "needle\nother needle");
+    }
+
+    #[test]
+    fn find_uses_a_single_line_selection_as_its_initial_query() {
+        let mut pane = EditorPane::new("f.rs".into(), "needle other".into());
+        let _ = pane.update(EditorMsg::Action(Action::Move(Motion::DocumentStart)));
+        let _ = pane.update(EditorMsg::Action(Action::Select(Motion::WordRight)));
+        let _ = pane.update(EditorMsg::FindOpen);
+        assert_eq!(pane.find_query, "needle");
+        assert_eq!(pane.find_matches.len(), 1);
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn pending_formatter_cannot_overwrite_edit_undo_and_format_is_one_undo_step() {

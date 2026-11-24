@@ -51,14 +51,17 @@ pub mod db_redis_view;
 pub mod db_state;
 pub mod desktop_agent_apps;
 pub mod drag_handle;
+pub mod editor_find;
 pub mod editor_gutter;
 pub mod editor_highlight;
 pub mod editor_keys;
+pub mod editor_overview_ruler;
 pub mod editor_pane;
 pub mod editor_scroll;
 pub mod editor_state;
 pub mod editor_view;
 pub mod farm;
+pub mod file_finder_palette;
 mod file_icons;
 pub mod file_ops;
 pub mod file_tree;
@@ -616,6 +619,8 @@ enum Msg {
     GitResult(git_state::ResultMsg),
     Editor(PathBuf, editor_pane::EditorMsg),
     FileViewer(file_viewer::FileViewerMsg),
+    QuickOpen(file_finder_palette::Action),
+    QuickOpenLoaded(PathBuf, Vec<String>),
     WindowCloseRequested(iced::window::Id),
     /// Resposta do diálogo de arquivo com alteração não salva (fechar aba ou janela).
     CloseFile(CloseChoice),
@@ -1010,6 +1015,8 @@ struct Shell {
     file_viewers: BTreeMap<PathBuf, FileViewerState>,
     editors: BTreeMap<PathBuf, editor_pane::EditorPane>,
     file_previews: BTreeSet<PathBuf>,
+    file_finder: Option<file_finder_palette::State>,
+    file_finder_cache: Option<(PathBuf, Instant, Vec<String>)>,
     file_preview_markdown: BTreeMap<PathBuf, iced::widget::markdown::Content>,
     #[cfg(target_os = "linux")]
     lsp: lsp_runtime::Pool,
@@ -1304,6 +1311,8 @@ impl Default for Shell {
             file_viewers: BTreeMap::new(),
             editors: BTreeMap::new(),
             file_previews: BTreeSet::new(),
+            file_finder: None,
+            file_finder_cache: None,
             file_preview_markdown: BTreeMap::new(),
             #[cfg(target_os = "linux")]
             lsp: lsp_runtime::Pool::default(),
@@ -1369,7 +1378,8 @@ impl Default for Shell {
         for path in files.into_iter().collect::<std::collections::BTreeSet<_>>() {
             match FileViewerState::load(&path) {
                 FileViewerState::Loaded(doc) => {
-                    shell.insert_file_editor(path, doc.into_source());
+                    let (source, encoding) = doc.into_parts();
+                    shell.insert_file_editor_with_encoding(path, source, encoding);
                 }
                 state => {
                     shell.file_viewers.insert(path, state);
@@ -4015,7 +4025,16 @@ impl Shell {
     }
 
     fn insert_file_editor(&mut self, path: PathBuf, text: String) {
-        let editor = editor_pane::EditorPane::new(path.clone(), text)
+        self.insert_file_editor_with_encoding(path, text, editor_state::TextEncoding::Utf8);
+    }
+
+    fn insert_file_editor_with_encoding(
+        &mut self,
+        path: PathBuf,
+        text: String,
+        encoding: editor_state::TextEncoding,
+    ) {
+        let editor = editor_pane::EditorPane::with_encoding(path.clone(), text, encoding)
             .with_config(self.settings.current.editor.clone());
         self.editors.insert(path.clone(), editor);
         #[cfg(target_os = "linux")]
@@ -4033,7 +4052,9 @@ impl Shell {
                     .map(|editor| editor.state.buffer.text().to_owned());
                 if let Some(source) = source {
                     if path.extension().is_some_and(|ext| {
-                        ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+                        ext.eq_ignore_ascii_case("md")
+                            || ext.eq_ignore_ascii_case("mdx")
+                            || ext.eq_ignore_ascii_case("markdown")
                     }) {
                         let body = crate::file_viewer_assets::split_frontmatter(&source)
                             .map_or_else(|| source.clone(), |frontmatter| frontmatter.body);
@@ -4071,7 +4092,8 @@ impl Shell {
         if !self.editors.contains_key(&target) && !self.file_viewers.contains_key(&target) {
             match FileViewerState::load(&target) {
                 FileViewerState::Loaded(doc) => {
-                    self.insert_file_editor(target.clone(), doc.into_source());
+                    let (source, encoding) = doc.into_parts();
+                    self.insert_file_editor_with_encoding(target.clone(), source, encoding);
                 }
                 fallback => {
                     self.file_viewers.insert(target.clone(), fallback);
@@ -7523,7 +7545,9 @@ impl Shell {
                     if show_file_preview {
                         let source = editor.state.buffer.text().to_owned();
                         if path.extension().is_some_and(|ext| {
-                            ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+                            ext.eq_ignore_ascii_case("md")
+                                || ext.eq_ignore_ascii_case("mdx")
+                                || ext.eq_ignore_ascii_case("markdown")
                         }) {
                             let body = crate::file_viewer_assets::split_frontmatter(&source)
                                 .map_or_else(|| source.clone(), |frontmatter| frontmatter.body);
@@ -7573,6 +7597,74 @@ impl Shell {
                 Task::none()
             }
             Msg::FileViewer(file_viewer::FileViewerMsg::Ignore) => Task::none(),
+            Msg::QuickOpen(file_finder_palette::Action::Open) => {
+                let Some(root) = self.file_tree.root().map(Path::to_path_buf) else {
+                    return Task::none();
+                };
+                let cached_files =
+                    self.file_finder_cache
+                        .as_ref()
+                        .and_then(|(cached_root, built_at, files)| {
+                            (cached_root == &root && built_at.elapsed() < Duration::from_secs(15))
+                                .then(|| files.clone())
+                        });
+                if let Some(files) = cached_files {
+                    self.file_finder = Some(file_finder_palette::State::from_files(root, files));
+                    return iced::widget::operation::focus(file_finder_palette::INPUT_ID);
+                }
+                let scan_root = root.clone();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            file_finder_palette::list_files(&scan_root)
+                        })
+                        .await
+                        .unwrap_or_default()
+                    },
+                    move |files| Msg::QuickOpenLoaded(root.clone(), files),
+                )
+            }
+            Msg::QuickOpenLoaded(root, files) => {
+                if self.file_tree.root() == Some(root.as_path()) {
+                    self.file_finder_cache = Some((root.clone(), Instant::now(), files.clone()));
+                    self.file_finder = Some(file_finder_palette::State::from_files(root, files));
+                    return iced::widget::operation::focus(file_finder_palette::INPUT_ID);
+                }
+                Task::none()
+            }
+            Msg::QuickOpen(file_finder_palette::Action::Query(query)) => {
+                let Some(state) = self.file_finder.as_mut() else {
+                    return Task::none();
+                };
+                let _ = state.apply(file_finder_palette::Action::Query(query.clone()));
+                let generation = state.generation;
+                Task::perform(
+                    async move {
+                        tokio::time::sleep(Duration::from_millis(120)).await;
+                        (query, generation)
+                    },
+                    |(query, generation)| {
+                        Msg::QuickOpen(file_finder_palette::Action::DebouncedQuery(
+                            query, generation,
+                        ))
+                    },
+                )
+            }
+            Msg::QuickOpen(action) => {
+                if action == file_finder_palette::Action::Close {
+                    self.file_finder = None;
+                    return Task::none();
+                }
+                let picked = self
+                    .file_finder
+                    .as_mut()
+                    .and_then(|state| state.apply(action));
+                if let Some(path) = picked {
+                    self.file_finder = None;
+                    self.open_in_editor(path);
+                }
+                Task::none()
+            }
             Msg::Files(files_msg) => self.update_files(files_msg),
             Msg::SelectRightTab(tab) => {
                 if self.right_tab() == RightTab::Search && tab != RightTab::Search {
@@ -9624,6 +9716,39 @@ impl Shell {
                 }) if modifiers.control() => Some(Msg::AppMenuShortcut(key, modifiers)),
                 _ => None,
             });
+        let quick_open_keys = iced::event::listen_with(|event, _status, _| {
+            let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) = event else { return None; };
+            if modifiers.command() && matches!(key.as_ref(), iced::keyboard::Key::Character(value) if value.eq_ignore_ascii_case("p")) {
+                return Some(file_finder_palette::Action::Open);
+            }
+            match key.as_ref() {
+                iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape) => Some(file_finder_palette::Action::Close),
+                iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowUp) => Some(file_finder_palette::Action::Up),
+                iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowDown) => Some(file_finder_palette::Action::Down),
+                iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter) => Some(file_finder_palette::Action::Pick),
+                _ => None,
+            }
+        }).map(Msg::QuickOpen);
+        let editor_find_shortcuts = self.panes.focused_model().active_tab()
+            .and_then(|tab| if let PaneTab::File(path) = tab { Some(path.clone()) } else { None })
+            .filter(|path| self.editors.contains_key(path))
+            .map(|path| {
+                iced::event::listen_with(|event, status, _| {
+                    let _ = status;
+                    let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) = event else { return None; };
+                    if matches!(key.as_ref(), iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)) {
+                        return Some(editor_pane::EditorMsg::FindClose);
+                    }
+                    if modifiers.shift() && matches!(key.as_ref(), iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter)) {
+                        return Some(editor_pane::EditorMsg::FindPrevious);
+                    }
+                    if modifiers.command() && matches!(key.as_ref(), iced::keyboard::Key::Character(value) if value.eq_ignore_ascii_case("f")) {
+                        return Some(editor_pane::EditorMsg::FindOpen);
+                    }
+                    None
+                }).map(move |message| Msg::Editor(path.clone(), message))
+            })
+            .unwrap_or_else(Subscription::none);
         let localsend_popup_escape = if self.settings.localsend.popup_open {
             iced::event::listen_with(|event, status, _| match event {
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
@@ -9760,6 +9885,8 @@ impl Shell {
                 cancel_rename,
                 file_tree_shortcuts,
                 menu_shortcuts,
+                editor_find_shortcuts,
+                quick_open_keys,
                 tab_rename_events,
                 localsend_popup_escape,
                 search_clear,
@@ -10951,6 +11078,32 @@ impl Shell {
         } else {
             layered
         };
+        let layered: Element<'_, Msg> = if let Some(finder) = self.file_finder.as_ref() {
+            let backdrop = mouse_area(
+                container(Space::new().width(Fill).height(Fill))
+                    .width(Fill)
+                    .height(Fill)
+                    .style(|_: &Theme| container::Style {
+                        background: Some(Background::Color(theme::palette().scrim)),
+                        ..Default::default()
+                    }),
+            )
+            .on_press(Msg::QuickOpen(file_finder_palette::Action::Close));
+            let palette = container(file_finder_palette::view(finder).map(Msg::QuickOpen))
+                .width(Fill)
+                .height(Fill)
+                .align_x(iced::alignment::Horizontal::Center)
+                .align_y(iced::alignment::Vertical::Top)
+                .padding(Padding {
+                    top: 80.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                });
+            stack![layered, backdrop, palette].into()
+        } else {
+            layered
+        };
         let drag_feedback: Option<Element<'_, Msg>> = if self.tab_drag_active {
             self.tab_drag_source
                 .zip(self.tab_drag_cursor)
@@ -11307,6 +11460,8 @@ mod tests {
             file_viewers: BTreeMap::new(),
             editors: BTreeMap::new(),
             file_previews: BTreeSet::new(),
+            file_finder: None,
+            file_finder_cache: None,
             file_preview_markdown: BTreeMap::new(),
             #[cfg(target_os = "linux")]
             lsp: lsp_runtime::Pool::default(),

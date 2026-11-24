@@ -81,6 +81,7 @@ pub struct TextDocument {
     gutter_text: String,
     body_text: String,
     source: String,
+    encoding: crate::editor_state::TextEncoding,
 }
 
 impl TextDocument {
@@ -89,6 +90,13 @@ impl TextDocument {
         Self::from_owned_text(path, content.to_owned())
     }
     pub fn from_owned_text(path: PathBuf, content: String) -> Self {
+        Self::from_encoded_text(path, content, crate::editor_state::TextEncoding::Utf8)
+    }
+    pub fn from_encoded_text(
+        path: PathBuf,
+        content: String,
+        encoding: crate::editor_state::TextEncoding,
+    ) -> Self {
         let mut lines: Vec<String> = content.lines().map(ToOwned::to_owned).collect();
         if lines.is_empty() {
             lines.push(String::new());
@@ -105,6 +113,7 @@ impl TextDocument {
             gutter_text,
             body_text,
             source: content,
+            encoding,
         }
     }
 
@@ -133,6 +142,9 @@ impl TextDocument {
     }
     pub fn into_source(self) -> String {
         self.source
+    }
+    pub fn into_parts(self) -> (String, crate::editor_state::TextEncoding) {
+        (self.source, self.encoding)
     }
 }
 
@@ -202,22 +214,23 @@ impl FileViewerState {
                 Err(error) => Self::Error(path.to_path_buf(), ViewerReadError::Io(error)),
             };
         }
-        if bytes.contains(&0) {
-            return Self::Binary(path.to_path_buf(), BinaryKind::NullBytes);
-        }
-        match String::from_utf8(bytes) {
-            Ok(content) if assets::is_svg(path) => Self::Svg(path.to_path_buf(), content),
-            Ok(content) if assets::is_markdown(path) => {
+        let (content, encoding) = assets::decode_text(bytes);
+        match content {
+            content if assets::is_svg(path) => Self::Svg(path.to_path_buf(), content),
+            content if assets::is_markdown(path) => {
                 let body = assets::split_frontmatter(&content)
                     .map_or_else(|| content.clone(), |frontmatter| frontmatter.body);
                 let markdown = iced::widget::markdown::Content::parse(&body);
                 Self::Markdown(
-                    TextDocument::from_owned_text(path.to_path_buf(), content),
+                    TextDocument::from_encoded_text(path.to_path_buf(), content, encoding),
                     markdown,
                 )
             }
-            Ok(content) => Self::Loaded(TextDocument::from_owned_text(path.to_path_buf(), content)),
-            Err(_) => Self::Binary(path.to_path_buf(), BinaryKind::InvalidUtf8),
+            content => Self::Loaded(TextDocument::from_encoded_text(
+                path.to_path_buf(),
+                content,
+                encoding,
+            )),
         }
     }
 
@@ -366,19 +379,28 @@ mod tests {
     }
 
     #[test]
-    fn rejeita_arquivo_binario_com_bytes_nulos_ou_utf8_invalido() {
+    fn decodifica_arquivo_latin1_e_preserva_o_encoding_ao_salvar() {
         let tmp = TempFile::new();
         let null_file = tmp.write("bin.dat", b"abc\0def");
         assert!(matches!(
             FileViewerState::load(&null_file),
-            FileViewerState::Binary(_, BinaryKind::NullBytes)
+            FileViewerState::Loaded(_)
         ));
 
         let bad_utf8 = tmp.write("latin.bin", &[0xFF, 0xFE, 0xFD]);
-        assert!(matches!(
-            FileViewerState::load(&bad_utf8),
-            FileViewerState::Binary(_, BinaryKind::InvalidUtf8)
-        ));
+        let FileViewerState::Loaded(document) = FileViewerState::load(&bad_utf8) else {
+            panic!("Latin-1 should load as text");
+        };
+        assert_eq!(document.source(), "ÿþý");
+        let (source, encoding) = document.into_parts();
+        let mut editor =
+            crate::editor_state::EditorState::with_encoding(bad_utf8.clone(), source, encoding);
+        editor.replace_text("café").unwrap();
+        editor.save();
+        assert_eq!(
+            std::fs::read(&bad_utf8).unwrap(),
+            vec![b'c', b'a', b'f', 0xe9]
+        );
     }
 
     #[test]

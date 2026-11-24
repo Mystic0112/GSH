@@ -1,5 +1,15 @@
 use std::path::Path;
 
+pub fn decode_text(bytes: Vec<u8>) -> (String, crate::editor_state::TextEncoding) {
+    match String::from_utf8(bytes) {
+        Ok(text) => (text, crate::editor_state::TextEncoding::Utf8),
+        Err(error) => (
+            error.into_bytes().into_iter().map(char::from).collect(),
+            crate::editor_state::TextEncoding::Latin1,
+        ),
+    }
+}
+
 pub fn is_media(path: &Path) -> bool {
     matches!(
         path.extension()
@@ -19,6 +29,9 @@ pub fn is_media(path: &Path) -> bool {
                 | "mov"
                 | "avi"
                 | "m4v"
+                | "wmv"
+                | "flv"
+                | "opus"
         )
     )
 }
@@ -29,7 +42,7 @@ pub fn is_image(path: &Path) -> bool {
             .and_then(|ext| ext.to_str())
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("png" | "jpg" | "jpeg")
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico")
     )
 }
 
@@ -39,8 +52,11 @@ pub fn is_svg(path: &Path) -> bool {
 }
 
 pub fn is_markdown(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+    path.extension().is_some_and(|ext| {
+        ext.eq_ignore_ascii_case("md")
+            || ext.eq_ignore_ascii_case("mdx")
+            || ext.eq_ignore_ascii_case("markdown")
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +195,25 @@ mod tests {
     #[test]
     fn recognizes_linux_media_extensions_case_insensitively() {
         assert!(is_media(Path::new("clip.MP4")));
+        assert!(is_media(Path::new("clip.WMV")));
+        assert!(is_media(Path::new("clip.flv")));
+        assert!(is_media(Path::new("audio.opus")));
         assert!(!is_media(Path::new("notes.mp4.txt")));
+    }
+
+    #[test]
+    fn recognizes_flutter_image_and_markdown_extensions() {
+        for path in ["a.gif", "a.webp", "a.bmp", "a.ico"] {
+            assert!(is_image(Path::new(path)));
+        }
+        assert!(is_markdown(Path::new("doc.mdx")));
+    }
+
+    #[test]
+    fn invalid_utf8_decodes_as_latin1_without_losing_bytes() {
+        let (text, encoding) = decode_text(vec![0x63, 0x61, 0x66, 0xe9]);
+        assert_eq!(text, "café");
+        assert_eq!(encoding, crate::editor_state::TextEncoding::Latin1);
+        assert_eq!(encoding, crate::editor_state::TextEncoding::Latin1);
     }
 }

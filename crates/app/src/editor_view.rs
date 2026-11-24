@@ -7,6 +7,8 @@ use crate::{
 use iced::widget::text_editor;
 use iced::{Element, Fill, Theme};
 
+pub(crate) const FIND_INPUT_ID: &str = "editor-find-input";
+
 impl EditorPane {
     fn body(&self, height: f32, width: f32) -> Element<'_, EditorMsg> {
         use iced::widget::{container, row, scrollable};
@@ -90,13 +92,15 @@ impl EditorPane {
                 selection: theme::TERM_SELECTION_BG,
             })
             .highlight_with::<editor_highlight::SyntaxHighlighter>(
-                editor_highlight::Settings::new(
+                editor_highlight::Settings::new_with_search(
                     if self.config.syntax_highlight {
                         ext
                     } else {
                         String::new()
                     },
                     self.highlight_text.clone(),
+                    &self.find_matches,
+                    self.find_index,
                 ),
                 editor_highlight::format,
             );
@@ -123,6 +127,125 @@ impl EditorPane {
     pub fn view_with_root(&self, root: Option<&std::path::Path>) -> Element<'_, EditorMsg> {
         use iced::widget::{column, container, responsive, text};
         let body = responsive(move |size| self.body(size.height, size.width));
+        let marks = self.overview_marks();
+        let body: Element<'_, EditorMsg> = if marks.is_empty() {
+            body.into()
+        } else {
+            use iced::widget::{canvas, stack};
+            let ruler = container(
+                canvas(crate::editor_overview_ruler::Ruler {
+                    line_count: self.content.line_count(),
+                    marks,
+                    on_jump: EditorMsg::RevealLine,
+                })
+                .width(8)
+                .height(Fill),
+            )
+            .width(Fill)
+            .height(Fill)
+            .align_x(iced::alignment::Horizontal::Right)
+            .padding(iced::Padding {
+                top: 0.0,
+                right: 12.0,
+                bottom: 0.0,
+                left: 0.0,
+            });
+            stack![body, ruler].into()
+        };
+        let body: Element<'_, EditorMsg> = if self.find_open {
+            use iced::widget::{button, row, stack, text_input};
+            let count = if self.find_invalid {
+                labels::EDITOR_FIND_BAD_PATTERN.to_owned()
+            } else if self.find_query.is_empty() {
+                String::new()
+            } else if self.find_matches.is_empty() {
+                labels::EDITOR_FIND_NO_RESULTS.to_owned()
+            } else {
+                format!(
+                    "{} of {}",
+                    self.find_index.unwrap_or(0) + 1,
+                    self.find_matches.len()
+                )
+            };
+            let toggle = |label: &'static str, active: bool, message, tip: &'static str| {
+                iced::widget::tooltip(
+                    button(text(label).size(theme::SIZE_LABEL))
+                        .style(move |theme, status| {
+                            if active {
+                                iced::widget::button::secondary(theme, status)
+                            } else {
+                                iced::widget::button::text(theme, status)
+                            }
+                        })
+                        .on_press(message),
+                    crate::pane_chrome::tip_bubble(tip),
+                    iced::widget::tooltip::Position::Top,
+                )
+            };
+            let bar = row![
+                text_input(labels::EDITOR_FIND_PLACEHOLDER, &self.find_query)
+                    .id(FIND_INPUT_ID)
+                    .on_input(EditorMsg::FindQuery)
+                    .on_submit(EditorMsg::FindNext)
+                    .width(200.0),
+                toggle(
+                    "Aa",
+                    self.find_case,
+                    EditorMsg::FindToggleCase,
+                    labels::EDITOR_FIND_CASE
+                ),
+                toggle(
+                    "ab",
+                    self.find_word,
+                    EditorMsg::FindToggleWord,
+                    labels::EDITOR_FIND_WORD
+                ),
+                toggle(
+                    ".*",
+                    self.find_regex,
+                    EditorMsg::FindToggleRegex,
+                    labels::EDITOR_FIND_REGEX
+                ),
+                text(count).size(theme::SIZE_LABEL),
+                iced::widget::tooltip(
+                    button("↑")
+                        .style(iced::widget::button::text)
+                        .on_press(EditorMsg::FindPrevious),
+                    crate::pane_chrome::tip_bubble(labels::EDITOR_FIND_PREVIOUS),
+                    iced::widget::tooltip::Position::Top
+                ),
+                iced::widget::tooltip(
+                    button("↓")
+                        .style(iced::widget::button::text)
+                        .on_press(EditorMsg::FindNext),
+                    crate::pane_chrome::tip_bubble(labels::EDITOR_FIND_NEXT),
+                    iced::widget::tooltip::Position::Top
+                ),
+                iced::widget::tooltip(
+                    button("×")
+                        .style(iced::widget::button::text)
+                        .on_press(EditorMsg::FindClose),
+                    crate::pane_chrome::tip_bubble(labels::EDITOR_FIND_CLOSE),
+                    iced::widget::tooltip::Position::Top
+                ),
+            ]
+            .spacing(4)
+            .padding(6);
+            let overlay = container(bar)
+                .width(Fill)
+                .height(Fill)
+                .align_x(iced::alignment::Horizontal::Right)
+                .align_y(iced::alignment::Vertical::Top)
+                .padding(iced::Padding {
+                    top: 8.0,
+                    right: 16.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                });
+            stack![body, overlay].into()
+        } else {
+            body
+        };
         let mut content = column![body].height(Fill);
         let is_ckp = self
             .state
@@ -217,6 +340,7 @@ impl EditorPane {
         }
         if self.state.path.extension().is_some_and(|ext| {
             ext.eq_ignore_ascii_case("md")
+                || ext.eq_ignore_ascii_case("mdx")
                 || ext.eq_ignore_ascii_case("markdown")
                 || ext.eq_ignore_ascii_case("svg")
         }) {

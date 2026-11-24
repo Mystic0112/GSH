@@ -175,6 +175,11 @@ impl Buffer {
         }
     }
     pub fn save(&mut self, path: &Path) -> Result<(), EditorError> {
+        let bytes = self.text.as_bytes().to_vec();
+        self.save_bytes(path, &bytes)
+    }
+    /// Salva uma representação codificada preservando a gravação atômica e o estado do buffer.
+    pub fn save_bytes(&mut self, path: &Path, bytes: &[u8]) -> Result<(), EditorError> {
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -185,7 +190,7 @@ impl Buffer {
         }
         let mut temp = tempfile::NamedTempFile::new_in(parent)?;
         temp.as_file().set_permissions(metadata.permissions())?;
-        temp.write_all(self.text.as_bytes())?;
+        temp.write_all(bytes)?;
         temp.as_file().sync_all()?;
         temp.persist(path).map_err(|e| e.error)?;
         std::fs::File::open(parent)?.sync_all()?;
