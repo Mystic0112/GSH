@@ -9746,7 +9746,7 @@ impl Shell {
                         return Some(editor_pane::EditorMsg::FindOpen);
                     }
                     None
-                }).map(move |message| Msg::Editor(path.clone(), message))
+                }).with(path).map(|(path, message)| Msg::Editor(path, message))
             })
             .unwrap_or_else(Subscription::none);
         let localsend_popup_escape = if self.settings.localsend.popup_open {
