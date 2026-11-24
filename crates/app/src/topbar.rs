@@ -4,8 +4,8 @@
 //! botão de recolher o rail à esquerda + título do workspace ativo, pílula da
 //! `AgentIsland` centralizada e botão do painel de arquivos à direita.
 
-use iced::widget::{button, column, container, responsive, row, text, tooltip, Space};
-use iced::{Alignment, Background, Border, Element, Fill, Length, Theme};
+use iced::widget::{button, column, container, responsive, row, stack, text, tooltip, Space};
+use iced::{Alignment, Background, Border, Color, Element, Fill, Length, Theme};
 
 use crate::labels;
 use crate::theme;
@@ -73,10 +73,14 @@ pub fn view<'a, M: Clone + 'a>(
         tooltip::Position::Bottom,
     );
     let left = row![Space::new().width(12.0), menu]
-        .push(icon_toggle_button(
-            labels::ICON_SIDEBAR_LEFT,
-            !props.rail_open,
-            actions.on_toggle_rail,
+        .push(tooltip(
+            icon_toggle_button(
+                labels::ICON_SIDEBAR_LEFT,
+                !props.rail_open,
+                actions.on_toggle_rail,
+            ),
+            crate::pane_chrome::tip_bubble(labels::TOPBAR_COLLAPSE_SIDEBAR),
+            tooltip::Position::Bottom,
         ))
         .push(Space::new().width(8.0))
         .push(
@@ -89,11 +93,21 @@ pub fn view<'a, M: Clone + 'a>(
 
     let mut right = row![];
     if let Some(on_farm) = actions.on_farm.clone() {
-        right = right.push(farm_strip(props.counts, on_farm.clone()));
-        right = right.push(icon_toggle_button(labels::ICON_FARM, false, on_farm));
+        right = right.push(farm_strip(props.counts, on_farm));
     }
     if let Some(on_chat) = actions.on_chat {
-        right = right.push(icon_toggle_button(labels::ICON_CHAT, false, on_chat));
+        right = right.push(tooltip(
+            icon_toggle_button(labels::ICON_CHAT, false, on_chat),
+            crate::pane_chrome::tip_bubble(labels::TOPBAR_OPEN_CHAT),
+            tooltip::Position::Bottom,
+        ));
+    }
+    if let Some(on_farm) = actions.on_farm {
+        right = right.push(tooltip(
+            icon_toggle_button(labels::ICON_FARM, false, on_farm),
+            crate::pane_chrome::tip_bubble(labels::TOPBAR_OPEN_FARM),
+            tooltip::Position::Bottom,
+        ));
     }
     if let Some(on_browser) = actions.on_browser {
         right = right.push(tooltip(
@@ -125,12 +139,16 @@ pub fn view<'a, M: Clone + 'a>(
     }
     // ponytail: o grafo de agentes entra com o painel dele
     let right = right
-        .push(icon_toggle_button(
-            labels::ICON_SIDEBAR_RIGHT,
-            !props.files_open,
-            actions.on_toggle_files,
+        .push(tooltip(
+            icon_toggle_button(
+                labels::ICON_SIDEBAR_RIGHT,
+                !props.files_open,
+                actions.on_toggle_files,
+            ),
+            crate::pane_chrome::tip_bubble(labels::TOPBAR_TOGGLE_FILES),
+            tooltip::Position::Bottom,
         ))
-        .push(Space::new().width(12.0))
+        .push(Space::new().width(4.0))
         .spacing(4)
         .align_y(Alignment::Center);
 
@@ -170,6 +188,107 @@ pub fn view<'a, M: Clone + 'a>(
             ..Default::default()
         })
         .into()
+}
+
+/// Controles de janela à direita (`WindowControlsTrailing` / `_WinButton` em `window_controls.dart`):
+/// 3 botões quadrados 46×46 sem raio (Minimizar, Maximizar, Fechar), ícone 16px `text2`,
+/// hover `panel3` e hover vermelho `#E81123` com ícone branco no Fechar.
+pub fn window_controls<'a, M: Clone + 'a>(
+    on_minimize: M,
+    on_toggle_maximize: M,
+    on_close: M,
+) -> Element<'a, M> {
+    let buttons = row![
+        window_control_button(
+            labels::ICON_WINDOW_MINIMIZE,
+            labels::WINDOW_CONTROL_MINIMIZE,
+            false,
+            on_minimize,
+        ),
+        window_control_button(
+            labels::ICON_WINDOW_MAXIMIZE,
+            labels::WINDOW_CONTROL_MAXIMIZE,
+            false,
+            on_toggle_maximize,
+        ),
+        window_control_button(
+            labels::ICON_CLOSE,
+            labels::WINDOW_CONTROL_CLOSE,
+            true,
+            on_close,
+        ),
+    ];
+    let bottom_hairline = container(Space::new().width(Fill).height(1.0))
+        .width(Fill)
+        .height(Length::Fixed(1.0))
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(theme::palette().border)),
+            ..Default::default()
+        });
+    container(stack![
+        buttons,
+        container(bottom_hairline)
+            .width(Fill)
+            .height(Fill)
+            .align_y(Alignment::End),
+    ])
+    .width(Length::Fixed(theme::WINDOW_CONTROLS_WIDTH))
+    .height(Length::Fixed(theme::TOPBAR_HEIGHT))
+    .style(|_: &Theme| container::Style {
+        background: Some(Background::Color(theme::palette().bg)),
+        ..Default::default()
+    })
+    .into()
+}
+
+fn window_control_style(danger: bool, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    let background = if hovered {
+        Some(Background::Color(if danger {
+            theme::WINDOW_CLOSE_HOVER
+        } else {
+            theme::palette().panel3
+        }))
+    } else {
+        None
+    };
+    let text_color = if hovered && danger {
+        Color::WHITE
+    } else {
+        theme::palette().text2
+    };
+    button::Style {
+        background,
+        text_color,
+        border: Border::default(),
+        ..Default::default()
+    }
+}
+
+fn window_control_button<'a, M: Clone + 'a>(
+    glyph: &'static str,
+    tip: &'static str,
+    danger: bool,
+    on_press: M,
+) -> Element<'a, M> {
+    let btn = button(
+        container(text(glyph).font(theme::FONT_ICON).size(theme::SIZE_ICON))
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill),
+    )
+    .width(Length::Fixed(theme::WINDOW_CONTROL_BUTTON_SIZE))
+    .height(Length::Fixed(theme::WINDOW_CONTROL_BUTTON_SIZE))
+    .padding(0)
+    .on_press(on_press)
+    .style(move |_: &Theme, status| window_control_style(danger, status));
+    tooltip(
+        btn,
+        crate::pane_chrome::tip_bubble(tip),
+        tooltip::Position::Bottom,
+    )
+    .into()
 }
 
 fn island_fits(width: f32) -> bool {
@@ -339,10 +458,78 @@ fn counter_dot<'a, M: 'a>(color: iced::Color) -> Element<'a, M> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn island_requires_160_pixels_of_free_width() {
         assert!(!super::island_fits(159.99));
         assert!(super::island_fits(160.0));
         assert!(super::island_fits(161.0));
+    }
+
+    #[test]
+    fn window_close_button_hover_uses_flutter_red_and_white_icon() {
+        theme::set_active(theme::ThemeVariant::Dark);
+        let close_hover = window_control_style(true, button::Status::Hovered);
+        assert_eq!(
+            close_hover.background,
+            Some(Background::Color(theme::WINDOW_CLOSE_HOVER))
+        );
+        assert_eq!(close_hover.text_color, Color::WHITE);
+        assert_eq!(close_hover.border.radius, 0.0.into());
+
+        let normal_hover = window_control_style(false, button::Status::Hovered);
+        assert_eq!(
+            normal_hover.background,
+            Some(Background::Color(theme::palette().panel3))
+        );
+        assert_eq!(normal_hover.text_color, theme::palette().text2);
+    }
+
+    #[test]
+    fn chat_button_precedes_farm_button_and_window_controls_fit_flutter_metrics() {
+        assert_eq!(theme::WINDOW_CONTROL_BUTTON_SIZE, 46.0);
+        assert_eq!(theme::WINDOW_CONTROLS_WIDTH, 138.0);
+
+        let bar = view(
+            TopbarProps {
+                workspace_title: labels::WORKSPACE_GSH,
+                rail_open: true,
+                files_open: true,
+                counts: crate::farm::FarmCounts::default(),
+            },
+            || Space::new().into(),
+            TopbarActions {
+                on_toggle_rail: (),
+                on_toggle_files: (),
+                on_chat: Some(()),
+                on_farm: Some(()),
+                on_browser: None,
+                on_harness: Some(()),
+                on_agent_graph: Some(()),
+                on_localsend: None,
+                app_menus: Vec::new(),
+                app_menu_open: false,
+                on_toggle_app_menu: (),
+                on_close_app_menu: (),
+            },
+        );
+        let mut ui = iced_test::simulator(bar);
+        let chat_bounds = ui
+            .find(labels::ICON_CHAT)
+            .expect("chat icon present")
+            .visible_bounds()
+            .expect("chat bounds");
+        let farm_bounds = ui
+            .find(labels::ICON_FARM)
+            .expect("farm icon present")
+            .visible_bounds()
+            .expect("farm bounds");
+        assert!(
+            chat_bounds.x < farm_bounds.x,
+            "Chat ({}) deve vir antes de Fazenda ({})",
+            chat_bounds.x,
+            farm_bounds.x
+        );
     }
 }

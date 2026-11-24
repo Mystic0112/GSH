@@ -9844,24 +9844,15 @@ impl Shell {
             },
         );
 
-        let window_controls = row![
-            window_button(labels::ICON_WINDOW_MINIMIZE, Msg::WindowMinimize),
-            window_button(labels::ICON_WINDOW_MAXIMIZE, Msg::WindowToggleMaximize),
-            window_button(labels::ICON_CLOSE, Msg::WindowCloseButton),
-        ]
-        .spacing(2);
-        // Mesma divisória inferior da topbar, para a linha seguir até a borda da janela.
-        let window_controls = column![
-            container(window_controls).center_y(theme::TOPBAR_HEIGHT - 1.0),
-            container(Space::new().width(Fill).height(1.0))
-                .width(theme::WINDOW_CONTROLS_WIDTH)
-                .style(|_: &Theme| container::Style {
-                    background: Some(Background::Color(theme::palette().border)),
-                    ..Default::default()
-                }),
-        ];
+        let window_controls = topbar::window_controls(
+            Msg::WindowMinimize,
+            Msg::WindowToggleMaximize,
+            Msg::WindowCloseButton,
+        );
         let top = row![
-            mouse_area(container(top).width(Fill)).on_press(Msg::WindowDrag),
+            mouse_area(container(top).width(Fill))
+                .on_press(Msg::WindowDrag)
+                .on_double_click(Msg::WindowToggleMaximize),
             window_controls,
         ]
         .align_y(iced::Alignment::Center);
@@ -10433,11 +10424,6 @@ fn close_dirty_dialog(
         on_choice(CloseChoice::Cancel),
         Msg::Noop,
     )
-}
-
-/// Botão de controle de janela (minimizar, maximizar, fechar) da barra própria.
-fn window_button<'a>(glyph: &'static str, msg: Msg) -> Element<'a, Msg> {
-    crate::panel_widgets::ghost(glyph, Some(msg), false)
 }
 
 fn main() -> iced::Result {
