@@ -725,7 +725,6 @@ enum Msg {
     Harness(harness_pane::Msg),
     Telemetry(TelemetryMsg),
     SelectWorkspace(usize),
-    DismissWorkspaceSwitchNotice,
     PickWorkspaceFolder,
     WorkspaceFolderPicked(Option<PathBuf>),
     WorkspaceSettings(workspace_settings_dialog::Message),
@@ -1036,7 +1035,6 @@ struct Shell {
     window_focused: bool,
     layout_path: Option<PathBuf>,
     imported_layouts: BTreeMap<PathBuf, layout_store::LayoutDoc>,
-    workspace_switch_notice: Option<&'static str>,
     workspace_settings: Option<workspace_settings_dialog::Draft>,
     workspace_menu_open: Option<usize>,
     new_workspace_menu_open: bool,
@@ -1325,7 +1323,6 @@ impl Default for Shell {
                 .as_ref()
                 .map(|doc| doc.imported_layouts.clone())
                 .unwrap_or_default(),
-            workspace_switch_notice: None,
             workspace_settings: None,
             workspace_menu_open: None,
             new_workspace_menu_open: false,
@@ -1769,37 +1766,6 @@ impl Shell {
         self.restore_layout_chats(doc);
         self.restore_layout_queries(doc);
         self.layout_restore_browsers_pending = true;
-    }
-
-    fn layout_switch_blocker(&self) -> Option<&'static str> {
-        if self
-            .editors
-            .values()
-            .any(|editor| editor.state.buffer.is_dirty())
-            || self.queries.values().any(DbQuery::dirty)
-        {
-            return Some(
-                "Salve ou feche os documentos com alterações antes de trocar de workspace.",
-            );
-        }
-        if self.chats.values().any(|chat| {
-            !chat.input().is_empty() || !chat.attachments().is_empty() || chat.is_busy()
-        }) {
-            return Some("Conclua as conversas em andamento e limpe os rascunhos antes de trocar de workspace.");
-        }
-        if self.terminals.iter().any(|(id, terminal)| {
-            terminal.is_remote()
-                || self
-                    .status_runtime
-                    .pane_record(&pane_id_for_term(*id))
-                    .is_some_and(|record| {
-                        record.status() != gsh_core::status::TurnStatus::Idle
-                            || record.pending_ask().is_some()
-                    })
-        }) {
-            return Some("Conclua os turnos dos agentes e feche os terminais remotos antes de trocar de workspace.");
-        }
-        None
     }
 
     fn apply_ckp_editor(&mut self, path: &Path) -> Task<Msg> {
@@ -8794,17 +8760,6 @@ impl Shell {
             }
             Msg::SelectWorkspace(idx) => {
                 if idx != self.workspaces.selected_index() {
-                    let will_restore = self
-                        .workspaces
-                        .items()
-                        .get(idx)
-                        .and_then(|workspace| workspace.path.as_ref())
-                        .is_some_and(|path| self.imported_layouts.contains_key(path));
-                    self.workspace_switch_notice =
-                        will_restore.then(|| self.layout_switch_blocker()).flatten();
-                    if self.workspace_switch_notice.is_some() {
-                        return Task::none();
-                    }
                     self.channel_editor = None;
                     let previous_path = self.active_workspace_dir().map(Path::to_path_buf);
                     if let Some(ws) = self.workspaces.select(idx).cloned() {
@@ -8832,10 +8787,6 @@ impl Shell {
                         ]);
                     }
                 }
-                Task::none()
-            }
-            Msg::DismissWorkspaceSwitchNotice => {
-                self.workspace_switch_notice = None;
                 Task::none()
             }
             Msg::PickWorkspaceFolder => {
@@ -10239,19 +10190,6 @@ impl Shell {
             .into(),
             None => layered,
         };
-        let layered: Element<'_, Msg> = match self.workspace_switch_notice {
-            Some(notice) => stack![
-                layered,
-                pane_close_dialog::notice(
-                    "Trocar de workspace",
-                    notice.to_owned(),
-                    Msg::DismissWorkspaceSwitchNotice,
-                    Msg::Noop,
-                )
-            ]
-            .into(),
-            None => layered,
-        };
         let layered: Element<'_, Msg> = match &self.gallery_error {
             Some(error) => stack![
                 layered,
@@ -10791,7 +10729,6 @@ mod tests {
             window_focused: true,
             layout_path: None,
             imported_layouts: BTreeMap::new(),
-            workspace_switch_notice: None,
             workspace_settings: None,
             workspace_menu_open: None,
             new_workspace_menu_open: false,
@@ -13497,14 +13434,16 @@ mod tests {
     }
 
     #[test]
-    fn imported_workspace_switch_preserves_dirty_documents_until_saved() {
+    fn workspace_switch_never_blocks_even_with_dirty_documents() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("notes.txt");
+        let ws_a = dir.path().join("first");
+        let other = dir.path().join("other");
+        std::fs::create_dir(&ws_a).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        let file = ws_a.join("notes.txt");
         std::fs::write(&file, "saved").unwrap();
         let mut shell = test_shell();
-        let current = shell.workspaces.selected_index();
-        let other = dir.path().join("other");
-        std::fs::create_dir(&other).unwrap();
+        let current = shell.workspaces.open_folder(&ws_a);
         let next = shell.workspaces.open_folder(&other);
         shell.workspaces.select(current);
         shell
@@ -13513,17 +13452,11 @@ mod tests {
         let path = shell.open_in_editor(file);
         let editor = shell.editors.get_mut(&path).unwrap();
         assert!(editor.state.buffer.insert("draft"));
-        let dirty_text = editor.state.buffer.text().to_owned();
 
         let _ = shell.update(Msg::SelectWorkspace(next));
 
-        assert_eq!(shell.workspaces.selected_index(), current);
-        assert!(shell.workspace_switch_notice.is_some());
-        assert!(shell.imported_layouts.contains_key(&other));
-        assert_eq!(
-            shell.editors.get(&path).unwrap().state.buffer.text(),
-            &dirty_text
-        );
+        assert_eq!(shell.workspaces.selected_index(), next);
+        assert!(shell.imported_layouts.contains_key(&ws_a));
     }
 
     #[test]
