@@ -31,8 +31,12 @@ fn capture(name: &str, view: Element<'_, super::ChatMsg>) {
         .expect("snapshot directory");
     let _ = std::fs::remove_file(&target);
     let _ = std::fs::remove_file(&generated);
+    let iced_theme = match theme::active() {
+        theme::ThemeVariant::Light => iced::Theme::Light,
+        theme::ThemeVariant::Dark => iced::Theme::Dark,
+    };
     simulator
-        .snapshot(&iced::Theme::Dark)
+        .snapshot(&iced_theme)
         .expect("snapshot render")
         .matches_image(&target)
         .expect("snapshot write");
@@ -80,6 +84,97 @@ fn captures_gsh_chat_message_snapshot() {
     });
     capture(
         "gsh-chat-message.png",
+        view_transcript(&pane, TRANSCRIPT_MAX_WIDTH),
+    );
+}
+
+#[test]
+fn captures_gsh_chat_markdown_light_snapshot() {
+    theme::set_active(theme::ThemeVariant::Light);
+    let mut pane = ChatPane::default();
+    pane.apply_event(ChatEvent::Text {
+        text: "# Título\n\nTexto com `código inline` e [link](https://example.com).\n\n- primeiro item\n- segundo item\n\n```rust\nfn resposta() -> bool {\n    true\n}\n```".to_owned(),
+        at_ms: Some(1_795_500_000_000),
+    });
+    capture(
+        "gsh-chat-markdown-claro.png",
+        view_transcript(&pane, TRANSCRIPT_MAX_WIDTH),
+    );
+}
+
+#[test]
+fn captures_gsh_chat_attachments_snapshot() {
+    theme::set_active(theme::ThemeVariant::Dark);
+    let directory = tempfile::tempdir().expect("diretório temporário");
+    let image_path = directory.path().join("imagem.png");
+    let document_path = directory.path().join("notas.pdf");
+    image::RgbaImage::from_pixel(600, 400, image::Rgba([40, 160, 210, 255]))
+        .save(&image_path)
+        .expect("imagem de teste");
+    std::fs::write(&document_path, b"PDF de teste").expect("documento de teste");
+
+    let mut pane = ChatPane::default().with_static_test_mode(true);
+    let _ = pane.update(crate::chat_pane::ChatMsg::PickFiles(Some(vec![
+        image_path.clone()
+    ])));
+    let _ = pane.update(crate::chat_pane::ChatMsg::InputChanged(
+        "Confira esta imagem".to_owned(),
+    ));
+    let _ = pane.update(crate::chat_pane::ChatMsg::Send);
+    let _ = pane.update(crate::chat_pane::ChatMsg::Cancel);
+    let _ = pane.update(crate::chat_pane::ChatMsg::RemoveAttachment(0));
+    let _ = pane.update(crate::chat_pane::ChatMsg::PickFiles(Some(vec![
+        document_path,
+    ])));
+    assert!(matches!(
+        pane.items().first(),
+        Some(crate::chat_pane::ChatItem::User { attachments, .. })
+            if attachments.len() == 1 && attachments[0].name == "imagem.png"
+    ));
+    capture(
+        "gsh-chat-anexos.png",
+        pane.view(TRANSCRIPT_MAX_WIDTH, false),
+    );
+}
+
+#[test]
+fn captures_gsh_chat_permission_snapshot() {
+    theme::set_active(theme::ThemeVariant::Dark);
+    let mut pane = ChatPane::default();
+    pane.apply_event(ChatEvent::PermissionAsk {
+        request_id: "permission-1".to_owned(),
+        tool_name: "Bash".to_owned(),
+        description: Some("cargo test -p gsh-app".to_owned()),
+        always_rule: Some("Bash(cargo test *)".to_owned()),
+        input: serde_json::json!({"command":"cargo test -p gsh-app"})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    });
+    capture(
+        "gsh-chat-permissao.png",
+        view_transcript(&pane, TRANSCRIPT_MAX_WIDTH),
+    );
+}
+
+#[test]
+fn captures_gsh_chat_plan_snapshot() {
+    theme::set_active(theme::ThemeVariant::Dark);
+    let mut pane = ChatPane::default();
+    pane.apply_event(ChatEvent::PermissionAsk {
+        request_id: "plan-1".to_owned(),
+        tool_name: "ExitPlanMode".to_owned(),
+        description: None,
+        always_rule: None,
+        input: serde_json::json!({
+            "plan":"# Plano do agente\n\n1. Criar o módulo.\n2. Rodar os testes."
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    });
+    capture(
+        "gsh-chat-plano.png",
         view_transcript(&pane, TRANSCRIPT_MAX_WIDTH),
     );
 }

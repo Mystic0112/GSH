@@ -48,6 +48,7 @@ pub enum ChatItem {
     /// Mensagem enviada pelo usuário.
     User {
         text: String,
+        attachments: Vec<Attachment>,
         at_ms: u64,
     },
     /// Mensagem do assistente (em streaming ou concluída).
@@ -71,6 +72,8 @@ pub enum ChatItem {
         tool: String,
         description: String,
         always_rule: Option<String>,
+        allowed: Option<bool>,
+        always_allowed: bool,
         input: serde_json::Map<String, serde_json::Value>,
         question: Option<String>,
         options: Vec<(String, String)>,
@@ -86,6 +89,8 @@ pub enum ChatItem {
         plan: String,
         input: serde_json::Map<String, serde_json::Value>,
         feedback: String,
+        refining: bool,
+        decision: Option<PlanDecision>,
     },
     ResumePrompt {
         session_id: String,
@@ -98,6 +103,12 @@ pub enum ChatItem {
         from: String,
         text: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanDecision {
+    Approved,
+    Refined,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +165,8 @@ pub enum ChatMsg {
     Attach,
     PickFiles(Option<Vec<PathBuf>>),
     RemoveAttachment(usize),
+    FileDragEntered,
+    FileDragExited,
     ToggleHistory,
     TogglePeerPicker,
     ToggleUsage,
@@ -187,6 +200,14 @@ pub enum ChatMsg {
     PlanFeedback {
         request_id: String,
         value: String,
+    },
+    PlanFeedbackAction {
+        request_id: String,
+        action: iced::widget::text_editor::Action,
+    },
+    PlanRefining {
+        request_id: String,
+        refining: bool,
     },
     PlanDecision {
         request_id: String,
@@ -292,6 +313,7 @@ pub struct ChatPane {
     agent_workspace: Option<PathBuf>,
     static_test_mode: bool,
     attachments: Vec<Attachment>,
+    file_drag_over: bool,
     models: Vec<ModelOption>,
     commands: Vec<CommandOption>,
     mode: String,
@@ -320,6 +342,7 @@ pub struct ChatPane {
     hovered_message: Option<usize>,
     copied_message: Option<usize>,
     message_editors: HashMap<usize, iced::widget::text_editor::Content>,
+    plan_feedback_editors: HashMap<String, iced::widget::text_editor::Content>,
 }
 
 impl Default for ChatPane {
@@ -351,6 +374,7 @@ impl ChatPane {
             agent_workspace: None,
             static_test_mode: false,
             attachments: Vec::new(),
+            file_drag_over: false,
             models: Vec::new(),
             commands: Vec::new(),
             mode: "default".to_string(),
@@ -379,6 +403,7 @@ impl ChatPane {
             hovered_message: None,
             copied_message: None,
             message_editors: HashMap::new(),
+            plan_feedback_editors: HashMap::new(),
         }
     }
 
@@ -509,6 +534,7 @@ impl ChatPane {
             .map_err(|error| error.to_string())?;
         self.items.push(ChatItem::User {
             text,
+            attachments: Vec::new(),
             at_ms: now_ms(),
         });
         self.rebuild_message_editors();
@@ -572,6 +598,9 @@ impl ChatPane {
     }
     pub fn attachments(&self) -> &[Attachment] {
         &self.attachments
+    }
+    pub fn file_drag_over(&self) -> bool {
+        self.file_drag_over
     }
     pub fn usage(&self) -> Option<&PlanUsage> {
         self.usage.as_ref()
@@ -721,6 +750,12 @@ impl ChatPane {
     pub fn message_editor(&self, index: usize) -> Option<&iced::widget::text_editor::Content> {
         self.message_editors.get(&index)
     }
+    pub fn plan_feedback_editor(
+        &self,
+        request_id: &str,
+    ) -> Option<&iced::widget::text_editor::Content> {
+        self.plan_feedback_editors.get(request_id)
+    }
 
     pub fn session_state(&self) -> Option<(SessionState, &str)> {
         self.session_state
@@ -766,9 +801,11 @@ impl ChatPane {
                 if (text.is_empty() && self.attachments.is_empty()) || self.busy {
                     return Task::none();
                 }
+                let attachments = self.attachments.clone();
                 self.set_input(String::new());
                 self.items.push(ChatItem::User {
                     text: text.clone(),
+                    attachments,
                     at_ms: now_ms(),
                 });
                 self.rebuild_message_editors();
@@ -876,16 +913,32 @@ impl ChatPane {
                 if let Some(engine) = &self.engine {
                     engine.answer_permission(&request_id, allow, always, None, None);
                 }
-                self.items.retain(|item| !matches!(item, ChatItem::Permission { request_id: id, .. } if id == &request_id));
-                self.rebuild_message_editors();
+                if let Some(ChatItem::Permission {
+                    allowed,
+                    always_allowed,
+                    ..
+                }) = self.items.iter_mut().find(|item| {
+                    matches!(item, ChatItem::Permission { request_id: id, .. } if id == &request_id)
+                }) {
+                    *allowed = Some(allow);
+                    *always_allowed = allow && always;
+                }
                 Task::none()
             }
             ChatMsg::AnswerQuestion { request_id, input } => {
                 if let Some(engine) = &self.engine {
                     engine.answer_permission(&request_id, true, false, Some(input), None);
                 }
-                self.items.retain(|item| !matches!(item, ChatItem::Permission { request_id: id, .. } if id == &request_id));
-                self.rebuild_message_editors();
+                if let Some(ChatItem::Permission {
+                    allowed,
+                    always_allowed,
+                    ..
+                }) = self.items.iter_mut().find(|item| {
+                    matches!(item, ChatItem::Permission { request_id: id, .. } if id == &request_id)
+                }) {
+                    *allowed = Some(true);
+                    *always_allowed = false;
+                }
                 Task::none()
             }
             ChatMsg::SetMode(mode) => {
@@ -949,15 +1002,28 @@ impl ChatPane {
             ),
             ChatMsg::PickFiles(paths) => {
                 if let Some(paths) = paths {
-                    self.attachments
-                        .extend(paths.iter().map(|p| Attachment::file(p)));
+                    self.attachments.extend(
+                        paths
+                            .iter()
+                            .filter(|path| path.is_file())
+                            .map(|path| Attachment::file(path)),
+                    );
                 }
+                self.file_drag_over = false;
                 Task::none()
             }
             ChatMsg::RemoveAttachment(index) => {
                 if index < self.attachments.len() {
                     self.attachments.remove(index);
                 }
+                Task::none()
+            }
+            ChatMsg::FileDragEntered => {
+                self.file_drag_over = true;
+                Task::none()
+            }
+            ChatMsg::FileDragExited => {
+                self.file_drag_over = false;
                 Task::none()
             }
             ChatMsg::ToggleHistory => {
@@ -1273,6 +1339,43 @@ impl ChatPane {
                 }
                 Task::none()
             }
+            ChatMsg::PlanFeedbackAction { request_id, action } => {
+                if let Some(editor) = self.plan_feedback_editors.get_mut(&request_id) {
+                    editor.perform(action);
+                    let feedback = editor.text();
+                    if let Some(ChatItem::Plan { feedback: current, .. }) =
+                        self.items.iter_mut().find(|item| {
+                            matches!(item, ChatItem::Plan { request_id: id, .. } if id == &request_id)
+                        })
+                    {
+                        *current = feedback;
+                    }
+                }
+                Task::none()
+            }
+            ChatMsg::PlanRefining {
+                request_id,
+                refining,
+            } => {
+                if let Some(ChatItem::Plan {
+                    refining: current,
+                    decision: None,
+                    ..
+                }) = self.items.iter_mut().find(|item| {
+                    matches!(item, ChatItem::Plan { request_id: id, .. } if id == &request_id)
+                }) {
+                    *current = refining;
+                }
+                if let Some(ChatItem::Plan { feedback, .. }) = self.items.iter().find(|item| {
+                    matches!(item, ChatItem::Plan { request_id: id, .. } if id == &request_id)
+                }) {
+                    self.plan_feedback_editors.insert(
+                        request_id.clone(),
+                        iced::widget::text_editor::Content::with_text(feedback),
+                    );
+                }
+                Task::none()
+            }
             ChatMsg::PlanDecision {
                 request_id,
                 approve,
@@ -1303,8 +1406,20 @@ impl ChatPane {
                         (!approve).then_some(feedback.as_str()),
                     );
                 }
-                self.items
-                    .retain(|i| !matches!(i,ChatItem::Plan{request_id:id,..} if id==&request_id));
+                if let Some(ChatItem::Plan {
+                    refining,
+                    decision,
+                    ..
+                }) = self.items.iter_mut().find(|item| {
+                    matches!(item, ChatItem::Plan { request_id: id, .. } if id == &request_id)
+                }) {
+                    *refining = false;
+                    *decision = Some(if approve {
+                        PlanDecision::Approved
+                    } else {
+                        PlanDecision::Refined
+                    });
+                }
                 Task::none()
             }
             ChatMsg::OpenLink(url) => {
@@ -1411,6 +1526,7 @@ impl ChatPane {
             ChatEvent::UserText { text, at_ms } => {
                 self.items.push(ChatItem::User {
                     text,
+                    attachments: Vec::new(),
                     at_ms: at_ms.unwrap_or_else(now_ms),
                 });
                 self.rebuild_message_editors();
@@ -1534,11 +1650,15 @@ impl ChatPane {
                         .unwrap_or("")
                         .to_string();
                     self.items.push(ChatItem::Plan {
-                        request_id,
+                        request_id: request_id.clone(),
                         plan,
                         input,
                         feedback: String::new(),
+                        refining: false,
+                        decision: None,
                     });
+                    self.plan_feedback_editors
+                        .insert(request_id, iced::widget::text_editor::Content::new());
                     return;
                 }
                 let first_question = input
@@ -1574,6 +1694,8 @@ impl ChatPane {
                     tool: tool_name,
                     description: description.unwrap_or_default(),
                     always_rule,
+                    allowed: None,
+                    always_allowed: false,
                     input,
                     question,
                     options,
@@ -1711,6 +1833,7 @@ impl ChatPane {
         }
         self.items.push(ChatItem::User {
             text: text.to_string(),
+            attachments: Vec::new(),
             at_ms: now_ms(),
         });
         self.rebuild_message_editors();
@@ -1980,9 +2103,9 @@ pub(crate) fn open_terminal_url(url: &str) -> Result<(), String> {
 }
 
 fn is_supported_external_url(url: &str) -> bool {
-    ["https://", "http://", "mailto:"]
-        .iter()
-        .any(|scheme| url.starts_with(scheme))
+    reqwest::Url::parse(url).is_ok_and(|parsed| {
+        matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some()
+    })
 }
 
 pub(crate) fn read_clipboard_png() -> Result<Option<Vec<u8>>, String> {
@@ -2017,9 +2140,11 @@ fn file_drop(
     _window: iced::window::Id,
 ) -> Option<ChatMsg> {
     match event {
+        iced::Event::Window(iced::window::Event::FileHovered(_)) => Some(ChatMsg::FileDragEntered),
         iced::Event::Window(iced::window::Event::FileDropped(path)) => {
             Some(ChatMsg::PickFiles(Some(vec![path])))
         }
+        iced::Event::Window(iced::window::Event::FilesHoveredLeft) => Some(ChatMsg::FileDragExited),
         _ => None,
     }
 }
@@ -2036,6 +2161,128 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn markdown_links_only_allow_http_and_https() {
+        assert!(is_supported_external_url("https://example.com/path?q=1"));
+        assert!(is_supported_external_url("http://example.com"));
+        assert!(is_supported_external_url("HTTPS://example.com"));
+        assert!(!is_supported_external_url("mailto:user@example.com"));
+        assert!(!is_supported_external_url("javascript:alert(1)"));
+        assert!(!is_supported_external_url("https://"));
+        assert!(!is_supported_external_url("//example.com"));
+    }
+
+    #[test]
+    fn attachment_alone_is_sendable_and_stays_on_the_user_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("notas.txt");
+        std::fs::write(&file, "anexo").unwrap();
+        let mut pane = ChatPane::default().with_static_test_mode(true);
+        let _ = pane.update(ChatMsg::PickFiles(Some(vec![file])));
+        let _ = pane.update(ChatMsg::Send);
+
+        assert!(matches!(
+            pane.items().first(),
+            Some(ChatItem::User { text, attachments, .. })
+                if text.is_empty() && attachments.len() == 1 && attachments[0].name == "notas.txt"
+        ));
+    }
+
+    #[test]
+    fn file_drag_events_toggle_chat_drop_feedback_state() {
+        let mut pane = ChatPane::default();
+        let _ = pane.update(ChatMsg::FileDragEntered);
+        assert!(pane.file_drag_over());
+        let _ = pane.update(ChatMsg::FileDragExited);
+        assert!(!pane.file_drag_over());
+    }
+
+    #[test]
+    fn permission_card_stays_visible_with_the_decision_result() {
+        let mut pane = ChatPane::default();
+        pane.apply_event(ChatEvent::PermissionAsk {
+            request_id: "permission-1".to_owned(),
+            tool_name: "Bash".to_owned(),
+            description: Some("cargo test".to_owned()),
+            always_rule: Some("Bash(cargo test *)".to_owned()),
+            input: serde_json::Map::new(),
+        });
+        let _ = pane.update(ChatMsg::PermissionAnswer {
+            request_id: "permission-1".to_owned(),
+            allow: true,
+            always: true,
+        });
+        assert!(matches!(
+            pane.items().first(),
+            Some(ChatItem::Permission {
+                allowed: Some(true),
+                always_allowed: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn plan_decision_stays_visible_with_the_refinement_result() {
+        let mut pane = ChatPane::default();
+        pane.apply_event(ChatEvent::PermissionAsk {
+            request_id: "plan-1".to_owned(),
+            tool_name: "ExitPlanMode".to_owned(),
+            description: None,
+            always_rule: None,
+            input: serde_json::json!({"plan":"Plano"})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        });
+        let _ = pane.update(ChatMsg::PlanFeedback {
+            request_id: "plan-1".to_owned(),
+            value: "Separar os testes".to_owned(),
+        });
+        let _ = pane.update(ChatMsg::PlanDecision {
+            request_id: "plan-1".to_owned(),
+            approve: false,
+        });
+        assert!(matches!(
+            pane.items().first(),
+            Some(ChatItem::Plan {
+                decision: Some(PlanDecision::Refined), feedback, ..
+            }) if feedback == "Separar os testes"
+        ));
+    }
+
+    #[test]
+    fn question_card_cannot_submit_until_each_question_has_an_answer() {
+        let mut pane = ChatPane::default();
+        pane.apply_event(ChatEvent::PermissionAsk {
+            request_id: "question-1".to_owned(),
+            tool_name: "AskUserQuestion".to_owned(),
+            description: None,
+            always_rule: None,
+            input: serde_json::json!({
+                "questions": [
+                    {"question":"Qual módulo?", "options":[{"label":"Chat","description":""}]},
+                    {"question":"Qual prazo?", "options":[{"label":"Hoje","description":""}]}
+                ]
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        });
+        let _ = pane.update(ChatMsg::QuestionToggle {
+            request_id: "question-1".to_owned(),
+            question: "Qual módulo?".to_owned(),
+            option: "Chat".to_owned(),
+        });
+        let _ = pane.update(ChatMsg::SubmitQuestions {
+            request_id: "question-1".to_owned(),
+        });
+        assert!(matches!(
+            pane.items().first(),
+            Some(ChatItem::Questions { answered: None, .. })
+        ));
+    }
 
     #[test]
     fn estado_classificado_fica_no_cabecalho_em_pt_br_e_nao_na_transcricao() {
@@ -2093,6 +2340,7 @@ mod tests {
             pane.items().first(),
             Some(&ChatItem::User {
                 text: "mensagem".to_owned(),
+                attachments: Vec::new(),
                 at_ms: 120_000
             })
         );
@@ -2114,7 +2362,7 @@ mod tests {
     fn links_open_only_in_the_system_browser_for_supported_schemes() {
         assert!(is_supported_external_url("https://example.com"));
         assert!(is_supported_external_url("http://localhost:3000"));
-        assert!(is_supported_external_url("mailto:dev@example.com"));
+        assert!(!is_supported_external_url("mailto:dev@example.com"));
         assert!(!is_supported_external_url("javascript:alert(1)"));
         assert!(!is_supported_external_url("file:///etc/passwd"));
     }
@@ -2176,12 +2424,13 @@ mod tests {
 
     #[test]
     fn entrega_de_canal_nao_toca_no_rascunho_nem_nos_anexos() {
+        let dir = tempfile::tempdir().unwrap();
+        let attachment = dir.path().join("segredo.txt");
+        std::fs::write(&attachment, "conteúdo").unwrap();
         let mut pane =
             ChatPane::new(Some(PathBuf::from("/home/dev/GSH")), None).with_static_test_mode(true);
         let _ = pane.update(ChatMsg::InputChanged("rascunho meu".to_string()));
-        let _ = pane.update(ChatMsg::PickFiles(Some(vec![PathBuf::from(
-            "/tmp/segredo.txt",
-        )])));
+        let _ = pane.update(ChatMsg::PickFiles(Some(vec![attachment])));
         assert_eq!(pane.attachments().len(), 1);
 
         assert!(pane.deliver_text("  oi do canal  "));

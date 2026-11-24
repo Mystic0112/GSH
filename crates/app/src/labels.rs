@@ -110,6 +110,9 @@ pub const CHAT_TURN_FAILED_PREFIX: &str = "O turno terminou com erro: ";
 pub const CHAT_COST_PREFIX: &str = "custo US$ ";
 pub const CHAT_ALLOW: &str = "Permitir";
 pub const CHAT_ALWAYS: &str = "Sempre permitir";
+pub const CHAT_ALLOWED: &str = "Permitido";
+pub const CHAT_DENIED: &str = "Negado";
+pub const CHAT_ALLOWED_ALWAYS_PREFIX: &str = "Sempre permitido: ";
 pub const CHAT_DENY: &str = "Negar";
 pub const CHAT_ATTACH: &str = "Anexar arquivos";
 pub const CHAT_MODE_PLAN: &str = "Planejar";
@@ -184,16 +187,38 @@ pub const CHAT_SEND_TO_SESSION_PREFIX: &str = "Mande esta mensagem para a sessã
 pub const CHAT_SEND_TO_SESSION_SUFFIX: &str = "\" com SendMessage e espere a resposta: ";
 pub const CHAT_LIST_ALL_SESSIONS: &str = "Listar todas as sessões (pergunta ao agente)…";
 pub const CHAT_RENAME: &str = "Renomear conversa";
-pub const CHAT_PLAN_APPROVE: &str = "Aprovar plano";
-pub const CHAT_PLAN_REFINE: &str = "Refinar plano";
-pub const CHAT_QUESTION_SEND: &str = "Enviar resposta";
+pub const CHAT_PLAN_APPROVE: &str = "Aprovar e executar";
+pub const CHAT_PLAN_REFINE: &str = "Continuar planejando";
+pub const CHAT_PLAN_SEND_REFINE: &str = "Enviar ajuste";
+pub const CHAT_PLAN_APPROVED: &str = "Plano aprovado";
+pub const CHAT_PLAN_REFINED: &str = "Pediu para continuar planejando";
+pub const CHAT_PLAN_REFINED_PREFIX: &str = "Ajuste: ";
+pub const CHAT_QUESTION_SEND: &str = "Responder";
 pub const CHAT_RESUME_LIVE_TITLE: &str = "Esta sessão ainda pode estar ativa. Retomar mesmo assim?";
 pub const CHAT_RESUME_CONFIRM: &str = "Retomar mesmo assim";
 pub const CHAT_RESUME_CANCEL: &str = "Cancelar";
-pub const CHAT_QUESTION_TITLE: &str = "O Claude precisa de algumas respostas";
-pub const CHAT_QUESTION_FREE_TEXT: &str = "Outra resposta…";
-pub const CHAT_PLAN_TITLE: &str = "Plano proposto";
-pub const CHAT_PLAN_FEEDBACK: &str = "O que você gostaria de ajustar?";
+pub const CHAT_QUESTION_TITLE: &str = "O agente está perguntando";
+pub const CHAT_QUESTION_FREE_TEXT: &str = "Outro…";
+pub const CHAT_PLAN_TITLE: &str = "Plano do agente";
+pub const CHAT_PLAN_FEEDBACK: &str = "O que mudar no plano?";
+pub const CHAT_PROMPT_ASK_PREFIX: &str = "Permitir ";
+pub const CHAT_PROMPT_ASK_SUFFIX: &str = "?";
+
+pub fn chat_allow_always(rule: &str) -> String {
+    format!("{CHAT_ALWAYS} {rule}")
+}
+
+pub fn chat_allowed_always(rule: &str) -> String {
+    format!("{CHAT_ALLOWED_ALWAYS_PREFIX}{rule}")
+}
+
+pub fn chat_plan_refined(feedback: &str) -> String {
+    if feedback.is_empty() {
+        CHAT_PLAN_REFINED.to_owned()
+    } else {
+        format!("{CHAT_PLAN_REFINED_PREFIX}{feedback}")
+    }
+}
 pub const CHAT_CMD_PREFIX: &str = "$ ";
 pub const CHAT_TOOL_NAME_PAD: &str = "  ";
 
@@ -1372,6 +1397,11 @@ pub const HARNESS_ELLIPSIS: &str = "…";
 pub const ICON_TUNE: &str = "\u{e429}";
 pub const ICON_WARNING_AMBER: &str = "\u{f083}";
 pub const ICON_DESCRIPTION: &str = "\u{e873}";
+pub const ICON_PICTURE_AS_PDF: &str = "\u{e415}";
+pub const ICON_CHECK_BOX: &str = "\u{e834}";
+pub const ICON_CHECK_BOX_OUTLINE_BLANK: &str = "\u{e835}";
+pub const ICON_RADIO_BUTTON_UNCHECKED: &str = "\u{e836}";
+pub const ICON_RADIO_BUTTON_CHECKED: &str = "\u{e837}";
 pub const ICON_AUTO_AWESOME: &str = "\u{e65f}";
 pub const ICON_SMART_TOY: &str = "\u{f06c}";
 pub const ICON_BOLT: &str = "\u{ea0b}";
