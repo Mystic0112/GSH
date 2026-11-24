@@ -129,25 +129,27 @@ fn view_input_box(pane: &ChatPane) -> Element<'_, ChatMsg> {
     let action_btn = if pane.is_busy() {
         view_stop_button()
     } else {
-        view_send_button(!pane.input().trim().is_empty())
+        view_send_button(!pane.input().trim().is_empty() || !pane.attachments().is_empty())
     };
 
     let mut controls = row![input, Space::new().width(4.0), action_btn]
         .width(Fill)
         .align_y(Alignment::End);
     if !pane.attachments().is_empty() {
-        let names =
-            pane.attachments()
-                .iter()
-                .enumerate()
-                .fold(row![], |row, (index, attachment)| {
-                    row.push(
-                        button(text(format!("{} ×", attachment.name)).size(theme::SIZE_TAB))
-                            .on_press(ChatMsg::RemoveAttachment(index))
-                            .style(theme::ghost_button),
-                    )
-                });
-        controls = row![column![names, controls].spacing(3)];
+        let previews = pane
+            .attachments()
+            .iter()
+            .enumerate()
+            .map(|(index, attachment)| {
+                crate::chat_attachments::view_pending_attachment(attachment, index)
+            })
+            .collect::<Vec<_>>();
+        let attachments = iced::widget::scrollable(row(previews).spacing(8))
+            .direction(iced::widget::scrollable::Direction::Horizontal(
+                iced::widget::scrollable::Scrollbar::hidden(),
+            ))
+            .height(Length::Fixed(72.0));
+        controls = row![column![attachments, controls].spacing(6)];
     }
     container(controls)
         .width(Fill)

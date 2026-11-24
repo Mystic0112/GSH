@@ -27,8 +27,10 @@ pub mod app_update;
 pub mod bag_mode;
 pub mod browser_pane;
 mod channel_routing;
+pub mod chat_attachments;
 pub mod chat_composer;
 pub mod chat_pane;
+pub mod chat_prompt_cards;
 pub mod chat_view;
 pub mod claude_desktop_scanner;
 pub mod claude_hook_installer;
@@ -13550,6 +13552,8 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("claude-test");
+        let attachment = dir.path().join("rascunho.txt");
+        std::fs::write(&attachment, "anexo de teste").unwrap();
         std::fs::write(&script, "#!/bin/sh\nwhile IFS= read -r line; do :; done\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut shell = test_shell();
@@ -13559,9 +13563,7 @@ mod tests {
         shell.panes.focused_model_mut().open_chat(chat_id);
         let mut chat = ChatPane::new(Some(dir.path().to_path_buf()), None).with_binary(script);
         let _ = chat.update(ChatMsg::InputChanged("rascunho separado".to_owned()));
-        let _ = chat.update(ChatMsg::PickFiles(Some(vec![dir
-            .path()
-            .join("rascunho.txt")])));
+        let _ = chat.update(ChatMsg::PickFiles(Some(vec![attachment])));
         shell.chats.insert(chat_id, chat);
         shell.git.diff = Some(gsh_git::FileDiff {
             path: "src/main.rs".into(),

@@ -10,6 +10,9 @@ use iced::{Alignment, Background, Border, Element, Fill, Length, Padding, Theme}
 
 use crate::chat_composer;
 use crate::chat_pane::{ChatItem, ChatMsg, ChatPane, ChatToolEntry};
+use crate::chat_prompt_cards::{
+    outline_prompt_button, primary_prompt_button, prompt_frame, prompt_outcome,
+};
 use crate::labels;
 use crate::theme;
 
@@ -49,6 +52,68 @@ impl<'a> iced::widget::markdown::Viewer<'a, ChatMsg> for ChatMarkdownViewer<'a> 
         .padding(4)
         .into()
     }
+
+    fn code_block(
+        &self,
+        settings: iced::widget::markdown::Settings,
+        _language: Option<&'a str>,
+        _code: &'a str,
+        lines: &'a [iced::widget::markdown::Text],
+    ) -> Element<'a, ChatMsg> {
+        let lines = column(lines.iter().map(|line| {
+            iced::widget::rich_text(line.spans(settings.style))
+                .font(settings.style.code_block_font)
+                .size(settings.code_size)
+                .into()
+        }));
+        let code = scrollable(container(lines).padding(settings.code_size)).direction(
+            scrollable::Direction::Horizontal(
+                scrollable::Scrollbar::default()
+                    .width(settings.code_size / 2)
+                    .scroller_width(settings.code_size / 2),
+            ),
+        );
+
+        container(code)
+            .width(Fill)
+            .padding(settings.code_size / 4)
+            .style(|_: &Theme| container::Style {
+                background: Some(Background::Color(theme::palette().bg)),
+                border: Border {
+                    color: theme::palette().border,
+                    width: 1.0,
+                    radius: 7.0.into(),
+                },
+                ..Default::default()
+            })
+            .into()
+    }
+}
+
+fn chat_markdown_settings() -> iced::widget::markdown::Settings {
+    let active_theme = match theme::active() {
+        theme::ThemeVariant::Light => iced::Theme::Light,
+        theme::ThemeVariant::Dark => iced::Theme::Dark,
+    };
+    let palette = theme::palette();
+    let mut settings = iced::widget::markdown::Settings::with_text_size(
+        theme::SIZE_BODY,
+        iced::widget::markdown::Style::from(active_theme),
+    );
+    settings.h1_size = 22.0.into();
+    settings.h2_size = 18.0.into();
+    settings.h3_size = 16.0.into();
+    settings.h4_size = 14.5.into();
+    settings.h5_size = 13.5.into();
+    settings.h6_size = 12.5.into();
+    settings.code_size = 12.0.into();
+    settings.style.font = theme::FONT_BODY;
+    settings.style.inline_code_font = theme::FONT_MONO;
+    settings.style.code_block_font = theme::FONT_MONO;
+    settings.style.inline_code_color = palette.text;
+    settings.style.inline_code_highlight.background = palette.panel3.into();
+    settings.style.link_color = palette.accent_text;
+    settings
 }
 
 /// Largura máxima da coluna central da transcrição (`columnWidth = 760` em `chat_pane.dart`).
@@ -86,7 +151,7 @@ pub fn view(
         left: 24.0,
     });
 
-    container(
+    let chat = container(
         column![header, view_history(pane), center, composer_wrap]
             .width(Fill)
             .height(Fill),
@@ -96,8 +161,31 @@ pub fn view(
     .style(|_: &Theme| container::Style {
         background: Some(Background::Color(theme::palette().panel)),
         ..Default::default()
-    })
-    .into()
+    });
+
+    if pane.file_drag_over() {
+        iced::widget::stack(vec![
+            chat.into(),
+            container(Space::new())
+                .width(Fill)
+                .height(Fill)
+                .style(|_: &Theme| container::Style {
+                    background: Some(Background::Color(theme::palette().accent_soft)),
+                    border: Border {
+                        color: theme::palette().accent,
+                        width: 2.0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .into(),
+        ])
+        .width(Fill)
+        .height(Fill)
+        .into()
+    } else {
+        chat.into()
+    }
 }
 
 fn view_header(pane: &ChatPane, show_session_state: bool) -> Element<'_, ChatMsg> {
@@ -740,7 +828,11 @@ fn gap_between(a: &ChatItem, b: &ChatItem) -> f32 {
 
 fn view_item<'a>(idx: usize, item: &'a ChatItem, pane: &'a ChatPane) -> Element<'a, ChatMsg> {
     let body = match item {
-        ChatItem::User { text: msg, .. } => view_user_bubble(idx, msg, pane),
+        ChatItem::User {
+            text: msg,
+            attachments,
+            ..
+        } => view_user_bubble(idx, msg, attachments, pane),
         ChatItem::Assistant {
             text: msg,
             streaming,
@@ -757,230 +849,43 @@ fn view_item<'a>(idx: usize, item: &'a ChatItem, pane: &'a ChatPane) -> Element<
             tool,
             description,
             always_rule,
+            allowed,
+            always_allowed,
             input,
             question,
             options,
-        } => {
-            let mut actions = row![
-                button(text(labels::CHAT_ALLOW))
-                    .on_press(ChatMsg::PermissionAnswer {
-                        request_id: request_id.clone(),
-                        allow: true,
-                        always: false
-                    })
-                    .style(theme::ghost_button),
-                button(text(labels::CHAT_DENY))
-                    .on_press(ChatMsg::PermissionAnswer {
-                        request_id: request_id.clone(),
-                        allow: false,
-                        always: false
-                    })
-                    .style(theme::ghost_button)
-            ]
-            .spacing(6);
-            if always_rule.is_some() {
-                actions = actions.push(
-                    button(text(labels::CHAT_ALWAYS))
-                        .on_press(ChatMsg::PermissionAnswer {
-                            request_id: request_id.clone(),
-                            allow: true,
-                            always: true,
-                        })
-                        .style(theme::ghost_button),
-                );
-            }
-            if let Some(question_text) = question {
-                actions = actions.push(
-                    text(question_text)
-                        .font(theme::FONT_BODY)
-                        .size(theme::SIZE_LABEL),
-                );
-                for (label, option_description) in options {
-                    let mut updated = input.clone();
-                    updated.insert(
-                        "answers".to_string(),
-                        serde_json::json!({(question_text): label}),
-                    );
-                    actions = actions.push(
-                        button(
-                            text(format!("{label}  {option_description}")).size(theme::SIZE_LABEL),
-                        )
-                        .on_press(ChatMsg::AnswerQuestion {
-                            request_id: request_id.clone(),
-                            input: updated,
-                        })
-                        .style(theme::ghost_button),
-                    );
-                }
-            }
-            container(
-                column![
-                    text(format!("{tool}: {description}"))
-                        .font(theme::FONT_BODY_MEDIUM)
-                        .size(theme::SIZE_BODY),
-                    actions
-                ]
-                .spacing(8),
-            )
-            .padding(10)
-            .width(Fill)
-            .into()
-        }
+        } => crate::chat_prompt_cards::view_permission_card(
+            crate::chat_prompt_cards::PermissionCard {
+                request_id,
+                tool,
+                description,
+                always_rule: always_rule.as_deref(),
+                allowed: *allowed,
+                always_allowed: *always_allowed,
+                input,
+                question: question.as_deref(),
+                options,
+            },
+        ),
         ChatItem::Questions {
             request_id,
             input,
             questions,
             answered,
-        } => {
-            let drafts = input
-                .get("draftAnswers")
-                .and_then(serde_json::Value::as_object);
-            let mut card = column![text(labels::CHAT_QUESTION_TITLE)
-                .font(theme::FONT_BODY_MEDIUM)
-                .size(theme::SIZE_BODY)];
-            for q in questions {
-                if !q.header.is_empty() {
-                    card = card.push(
-                        text(q.header.to_uppercase())
-                            .font(theme::FONT_BODY_SEMIBOLD)
-                            .size(theme::SIZE_LABEL)
-                            .color(theme::palette().text2),
-                    );
-                }
-                card = card.push(
-                    text(q.question.as_str())
-                        .font(theme::FONT_BODY)
-                        .size(theme::SIZE_BODY),
-                );
-                if let Some(answer) = answered.as_ref().and_then(|a| a.get(&q.question)) {
-                    card = card.push(text(format!("→ {answer}")).color(theme::palette().online));
-                } else {
-                    for (label, description) in &q.options {
-                        let selected = drafts
-                            .and_then(|a| a.get(&q.question))
-                            .and_then(|v| v.get("selected"))
-                            .and_then(serde_json::Value::as_array)
-                            .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(label)));
-                        card = card.push(
-                            button(
-                                text(format!(
-                                    "{} {}  {}",
-                                    if q.multi_select {
-                                        if selected {
-                                            "☑"
-                                        } else {
-                                            "☐"
-                                        }
-                                    } else if selected {
-                                        "◉"
-                                    } else {
-                                        "○"
-                                    },
-                                    label,
-                                    description
-                                ))
-                                .size(theme::SIZE_LABEL),
-                            )
-                            .on_press(ChatMsg::QuestionToggle {
-                                request_id: request_id.clone(),
-                                question: q.question.clone(),
-                                option: label.clone(),
-                            })
-                            .style(theme::ghost_button),
-                        );
-                    }
-                    let free = drafts
-                        .and_then(|a| a.get(&q.question))
-                        .and_then(|v| v.get("other"))
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("");
-                    card = card.push(
-                        iced::widget::text_input(labels::CHAT_QUESTION_FREE_TEXT, free)
-                            .on_input({
-                                let request_id = request_id.clone();
-                                let question = q.question.clone();
-                                move |value| ChatMsg::QuestionFreeText {
-                                    request_id: request_id.clone(),
-                                    question: question.clone(),
-                                    value,
-                                }
-                            })
-                            .font(theme::FONT_BODY)
-                            .size(theme::SIZE_LABEL)
-                            .padding([5, 8])
-                            .style(chat_input_style),
-                    );
-                }
-            }
-            if answered.is_none() {
-                card = card.push(
-                    button(text(labels::CHAT_QUESTION_SEND))
-                        .on_press(ChatMsg::SubmitQuestions {
-                            request_id: request_id.clone(),
-                        })
-                        .style(theme::ghost_button),
-                );
-            }
-            container(card.spacing(6)).padding(12).width(Fill).into()
-        }
+        } => crate::chat_prompt_cards::view_question_card(
+            request_id,
+            input,
+            questions,
+            answered.as_ref(),
+        ),
         ChatItem::Plan {
             request_id,
             plan,
             feedback,
+            refining,
+            decision,
             ..
-        } => container(
-            column![
-                text(labels::CHAT_PLAN_TITLE)
-                    .font(theme::FONT_BODY_MEDIUM)
-                    .size(theme::SIZE_BODY),
-                if let Some(content) = pane.markdown(idx) {
-                    iced::widget::markdown::view_with(
-                        content.items(),
-                        iced::widget::markdown::Settings::with_text_size(
-                            theme::SIZE_BODY,
-                            iced::widget::markdown::Style::from(iced::Theme::Dark),
-                        ),
-                        &ChatMarkdownViewer { pane },
-                    )
-                } else {
-                    text(plan.as_str())
-                        .font(theme::FONT_BODY)
-                        .size(theme::SIZE_BODY)
-                        .into()
-                },
-                iced::widget::text_input(labels::CHAT_PLAN_FEEDBACK, feedback)
-                    .on_input({
-                        let request_id = request_id.clone();
-                        move |value| ChatMsg::PlanFeedback {
-                            request_id: request_id.clone(),
-                            value,
-                        }
-                    })
-                    .font(theme::FONT_BODY)
-                    .size(theme::SIZE_BODY)
-                    .padding([5, 8])
-                    .style(chat_input_style),
-                row![
-                    button(text(labels::CHAT_PLAN_APPROVE))
-                        .on_press(ChatMsg::PlanDecision {
-                            request_id: request_id.clone(),
-                            approve: true
-                        })
-                        .style(theme::ghost_button),
-                    button(text(labels::CHAT_PLAN_REFINE))
-                        .on_press(ChatMsg::PlanDecision {
-                            request_id: request_id.clone(),
-                            approve: false
-                        })
-                        .style(theme::ghost_button)
-                ]
-                .spacing(6)
-            ]
-            .spacing(8),
-        )
-        .padding(12)
-        .width(Fill)
-        .into(),
+        } => view_plan_card(idx, request_id, plan, feedback, *refining, *decision, pane),
         ChatItem::ResumePrompt { session_id } => container(
             column![
                 text(labels::CHAT_RESUME_LIVE_TITLE),
@@ -1026,7 +931,7 @@ fn view_item<'a>(idx: usize, item: &'a ChatItem, pane: &'a ChatPane) -> Element<
         .into(),
     };
     let message = match item {
-        ChatItem::User { text, at_ms } => Some((text.as_str(), *at_ms, true, false)),
+        ChatItem::User { text, at_ms, .. } => Some((text.as_str(), *at_ms, true, false)),
         ChatItem::Assistant {
             text,
             streaming: false,
@@ -1201,26 +1106,105 @@ fn current_time_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn view_user_bubble<'a>(idx: usize, msg: &'a str, pane: &'a ChatPane) -> Element<'a, ChatMsg> {
-    let bubble = container(selectable_message_text(
-        idx,
-        pane,
-        msg,
-        theme::SIZE_BODY,
-        false,
-    ))
-    .max_width(USER_BUBBLE_MAX_WIDTH)
-    .padding([7, 12])
-    .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(theme::palette().panel3)),
-        border: Border {
-            radius: 12.0.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    });
+fn view_user_bubble<'a>(
+    idx: usize,
+    msg: &'a str,
+    attachments: &'a [gsh_chat::Attachment],
+    pane: &'a ChatPane,
+) -> Element<'a, ChatMsg> {
+    let mut content = column![].spacing(8).align_x(Alignment::End);
+    for attachment in attachments {
+        if let Some(handle) = crate::chat_attachments::image_handle(attachment) {
+            let preview = iced::widget::image(handle)
+                .content_fit(iced::ContentFit::Contain)
+                .border_radius(10.0);
+            content = content.push(
+                container(preview)
+                    .max_width(360.0)
+                    .max_height(320.0)
+                    .clip(true)
+                    .style(|_: &Theme| container::Style {
+                        border: Border {
+                            color: theme::palette().border2,
+                            width: 1.0,
+                            radius: 10.0.into(),
+                        },
+                        ..Default::default()
+                    }),
+            );
+        }
+    }
 
-    row![Space::new().width(Fill), bubble].width(Fill).into()
+    let files = attachments
+        .iter()
+        .enumerate()
+        .filter(|(_, attachment)| attachment.kind != gsh_chat::AttachmentKind::Image)
+        .fold(row![].spacing(6), |chips, (_, attachment)| {
+            let icon = if attachment.kind == gsh_chat::AttachmentKind::Pdf {
+                labels::ICON_PICTURE_AS_PDF
+            } else {
+                labels::ICON_DESCRIPTION
+            };
+            chips.push(
+                container(
+                    row![
+                        text(icon)
+                            .font(theme::FONT_ICON)
+                            .size(theme::SIZE_SECTION_HEADER)
+                            .color(theme::palette().text3),
+                        text(attachment.name.as_str())
+                            .size(theme::SIZE_TAB)
+                            .color(theme::palette().text),
+                    ]
+                    .spacing(5)
+                    .align_y(Alignment::Center),
+                )
+                .padding([4, 6])
+                .style(|_: &Theme| container::Style {
+                    background: Some(Background::Color(theme::palette().panel2)),
+                    border: Border {
+                        color: theme::palette().border,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..Default::default()
+                }),
+            )
+        });
+
+    let has_files = attachments
+        .iter()
+        .any(|attachment| attachment.kind != gsh_chat::AttachmentKind::Image);
+    if !msg.is_empty() || has_files {
+        let mut bubble = column![].spacing(6).align_x(Alignment::End);
+        if !msg.is_empty() {
+            bubble = bubble.push(selectable_message_text(
+                idx,
+                pane,
+                msg,
+                theme::SIZE_BODY,
+                false,
+            ));
+        }
+        if has_files {
+            bubble = bubble.push(files);
+        }
+        content = content.push(
+            container(bubble)
+                .max_width(USER_BUBBLE_MAX_WIDTH)
+                .padding([7, 12])
+                .style(|_: &Theme| container::Style {
+                    background: Some(Background::Color(theme::palette().panel3)),
+                    border: Border {
+                        radius: 12.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+        );
+    }
+
+    row![Space::new().width(Fill), content].width(Fill).into()
 }
 
 fn view_assistant_text<'a>(
@@ -1239,10 +1223,7 @@ fn view_assistant_text<'a>(
     if let Some(content) = content {
         let rendered = iced::widget::markdown::view_with(
             content.items(),
-            iced::widget::markdown::Settings::with_text_size(
-                theme::SIZE_BODY,
-                iced::widget::markdown::Style::from(iced::Theme::Dark),
-            ),
+            chat_markdown_settings(),
             &ChatMarkdownViewer { pane },
         );
         let mut blocks = column![rendered];
@@ -1452,4 +1433,124 @@ fn chat_input_style(
         value: theme::palette().text,
         selection: theme::palette().accent_soft,
     }
+}
+
+fn view_plan_card<'a>(
+    index: usize,
+    request_id: &str,
+    plan: &str,
+    feedback: &str,
+    refining: bool,
+    decision: Option<crate::chat_pane::PlanDecision>,
+    pane: &'a ChatPane,
+) -> Element<'a, ChatMsg> {
+    let mut body = column![if let Some(content) = pane.markdown(index) {
+        iced::widget::markdown::view_with(
+            content.items(),
+            chat_markdown_settings(),
+            &ChatMarkdownViewer { pane },
+        )
+    } else {
+        text(plan.to_owned())
+            .font(theme::FONT_BODY)
+            .size(theme::SIZE_BODY)
+            .into()
+    }]
+    .spacing(10);
+
+    match decision {
+        Some(crate::chat_pane::PlanDecision::Approved) => {
+            body = body.push(prompt_outcome(
+                labels::CHAT_PLAN_APPROVED.to_owned(),
+                theme::palette().online,
+            ));
+        }
+        Some(crate::chat_pane::PlanDecision::Refined) => {
+            body = body.push(prompt_outcome(
+                labels::chat_plan_refined(feedback),
+                theme::palette().warn,
+            ));
+        }
+        None if refining => {
+            if let Some(editor) = pane.plan_feedback_editor(request_id) {
+                let lines = editor.line_count().clamp(2, 6);
+                let feedback_input = iced::widget::text_editor(editor)
+                    .on_action({
+                        let request_id = request_id.to_owned();
+                        move |action| ChatMsg::PlanFeedbackAction {
+                            request_id: request_id.clone(),
+                            action,
+                        }
+                    })
+                    .font(theme::FONT_BODY)
+                    .size(theme::SIZE_BODY)
+                    .line_height(iced::widget::text::LineHeight::Relative(
+                        theme::LINE_HEIGHT_DISPLAY,
+                    ))
+                    .padding([6, 8])
+                    .height(Length::Fixed(
+                        lines as f32 * theme::SIZE_BODY * theme::LINE_HEIGHT_DISPLAY + 12.0,
+                    ))
+                    .style(|_: &Theme, _status| iced::widget::text_editor::Style {
+                        background: Background::Color(theme::palette().panel2),
+                        border: Border {
+                            color: theme::palette().border2,
+                            width: 1.0,
+                            radius: theme::RADIUS_BUTTON.into(),
+                        },
+                        placeholder: theme::palette().text4,
+                        value: theme::palette().text,
+                        selection: theme::palette().accent_soft,
+                    });
+                body = body.push(feedback_input);
+            }
+            body = body.push(
+                row![
+                    primary_prompt_button(
+                        labels::CHAT_PLAN_SEND_REFINE.to_owned(),
+                        ChatMsg::PlanDecision {
+                            request_id: request_id.to_owned(),
+                            approve: false
+                        },
+                    ),
+                    outline_prompt_button(
+                        "Cancelar".to_owned(),
+                        ChatMsg::PlanRefining {
+                            request_id: request_id.to_owned(),
+                            refining: false
+                        },
+                    ),
+                ]
+                .spacing(8),
+            );
+        }
+        None => {
+            body = body.push(
+                row![
+                    primary_prompt_button(
+                        labels::CHAT_PLAN_APPROVE.to_owned(),
+                        ChatMsg::PlanDecision {
+                            request_id: request_id.to_owned(),
+                            approve: true
+                        },
+                    ),
+                    outline_prompt_button(
+                        labels::CHAT_PLAN_REFINE.to_owned(),
+                        ChatMsg::PlanRefining {
+                            request_id: request_id.to_owned(),
+                            refining: true
+                        },
+                    ),
+                ]
+                .spacing(8),
+            );
+        }
+    }
+
+    prompt_frame(
+        decision.is_none(),
+        labels::ICON_CHECKLIST,
+        labels::CHAT_PLAN_TITLE.to_owned(),
+        body.into(),
+    )
 }
