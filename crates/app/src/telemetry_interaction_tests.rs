@@ -385,7 +385,7 @@ fn multiline_run_command_applies_flutter_ellipsis_in_panel_and_renders_dart_deta
 #[test]
 fn shell_opens_single_case_tab_per_fingerprint_and_gates_right_tab() {
     let mut shell = super::tests::test_shell();
-    assert!(shell.right_available().telemetry);
+    assert!(!shell.right_available().telemetry);
 
     shell.workspaces = WorkspaceList::new(vec![Workspace::system("sys", "Terminal", None)]);
     assert!(!shell.right_available().telemetry);

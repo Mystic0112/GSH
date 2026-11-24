@@ -31,12 +31,8 @@ pub const NEW_WORKSPACE_REMOTE: &str = "Remoto";
 pub const WORKSPACE_MENU_CONFIGURE: &str = "Configurações";
 pub const WORKSPACE_MENU_COPY_ID: &str = "Copiar ID do workspace";
 pub const WORKSPACE_MENU_MOVE_TO: &str = "Mover para";
-pub const WORKSPACE_GSH: &str = "GSH";
-pub const WORKSPACE_GSH_INITIAL: &str = "G";
-pub const WORKSPACE_GSH_BRANCH: &str = "main";
-pub const WORKSPACE_EXAMPLE: &str = "Projeto de exemplo";
-pub const WORKSPACE_EXAMPLE_INITIAL: &str = "P";
-pub const WORKSPACE_EXAMPLE_BRANCH: &str = "feat/ui";
+pub const WORKSPACE_GSH: &str = "GSH Desktop";
+pub const RAIL_NO_WORKSPACES: &str = "Nenhum workspace ainda.";
 pub const DEFAULT_REALM: &str = "Padrão";
 pub const RAIL_KEEP_AWAKE_ON: &str =
     "Mantendo este computador acordado para acesso remoto. Clique para deixá-lo dormir de novo.";
@@ -52,7 +48,6 @@ pub const EDITOR_APPLY_CKP_LAYOUT: &str = "Aplicar layout";
 
 pub const CHANNELS_HEADER: &str = "Canais";
 pub const CHANNELS_ALL: &str = "Todos os canais";
-pub const CHANNELS_EMPTY: &str = "Nenhum workspace neste canal";
 pub const CHANNEL_NEW: &str = "Novo canal";
 pub const CHANNEL_EDIT: &str = "Editar canal";
 pub const CHANNEL_EDIT_ARCHIVED: &str = "Editar canal arquivado";

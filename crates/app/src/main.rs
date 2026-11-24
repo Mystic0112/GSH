@@ -10830,11 +10830,11 @@ mod tests {
         let response = response.recv().unwrap();
         assert_eq!(response["ok"], true);
         let data = response["data"].as_array().unwrap();
-        assert_eq!(data.len(), 2);
+        assert_eq!(data.len(), 1);
         assert_eq!(data[0]["id"], "gsh");
-        assert!(data[0]["name"].is_string());
-        assert!(data[0]["path"].is_string());
-        assert_eq!(data[0]["tabs"], 1);
+        assert_eq!(data[0]["name"], labels::WORKSPACE_GSH);
+        assert_eq!(data[0]["path"], "");
+        assert_eq!(data[0]["tabs"], 0);
     }
 
     #[test]
@@ -11135,7 +11135,17 @@ mod tests {
     #[test]
     fn cli_list_tabs_returns_active_terminal_metadata() {
         let mut shell = test_shell();
+        let dir = tempfile::tempdir().unwrap();
+        shell.workspaces.open_folder(dir.path());
         let id = *shell.terminals.keys().next().unwrap();
+        shell.terminals.insert(
+            id,
+            TerminalPane::from_snapshot_in_dir(
+                empty_test_snapshot(),
+                Some(dir.path().to_path_buf()),
+            )
+            .with_pane_id(pane_id_for_term(id)),
+        );
         let label = "Stable worker";
         shell.terminal_labels.insert(id, label.to_owned());
         let pane = shell.panes.pane_of(&PaneTab::Terminal(id)).unwrap();
@@ -11144,7 +11154,7 @@ mod tests {
             .model_mut(pane)
             .unwrap()
             .set_terminal_label(id, label.to_owned());
-        let workspace = shell.workspaces.items().first().unwrap();
+        let workspace = shell.workspaces.active().unwrap();
         let workspace_id = workspace.id.clone();
         let workspace_path = workspace
             .path
@@ -11532,7 +11542,9 @@ mod tests {
 
     #[test]
     fn graph_links_do_not_auto_send_a_turn_to_chat() {
+        let dir = tempfile::tempdir().unwrap();
         let mut shell = test_shell();
+        shell.workspaces.open_folder(dir.path());
         let workspace = shell.active_workspace_dir().unwrap().to_path_buf();
         shell.queue_agent_delivery(workspace, "t1".into(), "c1".into(), vec!["intro".into()]);
         assert!(shell.pending_agent_deliveries.is_empty());
@@ -11585,6 +11597,9 @@ mod tests {
         std::fs::write(&script, "#!/bin/sh\nwhile IFS= read -r line; do :; done\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut shell = test_shell();
+        let ws_dir = dir.path().join("ws");
+        std::fs::create_dir(&ws_dir).unwrap();
+        shell.workspaces.open_folder(&ws_dir);
         let id = shell.panes.alloc_chat_id();
         shell.panes.focused_model_mut().open_chat(id);
         let workspace = shell.active_workspace_dir().unwrap().to_path_buf();
@@ -12128,7 +12143,9 @@ mod tests {
 
     #[test]
     fn shell_restores_chat_session_id_in_workspace_directory() {
+        let dir = tempfile::tempdir().unwrap();
         let mut shell = test_shell();
+        shell.workspaces.open_folder(dir.path());
         let cwd = shell.active_workspace_dir().map(Path::to_path_buf);
         shell.panes.focused_model_mut().open_chat(42);
         let mut doc = shell.panes.snapshot();
@@ -12602,11 +12619,11 @@ mod tests {
 
         let _ = shell.update(Msg::WorkspaceFolderPicked(Some(picked.clone())));
         assert!(shell.workspace_settings.is_some());
-        assert_eq!(shell.workspaces.items().len(), 2);
+        assert_eq!(shell.workspaces.items().len(), 1);
         let _ = shell.update(Msg::WorkspaceSettings(
             workspace_settings_dialog::Message::Save,
         ));
-        assert_eq!(shell.workspaces.selected_index(), 2);
+        assert_eq!(shell.workspaces.selected_index(), 1);
         assert_eq!(shell.file_tree.root(), Some(picked.as_path()));
 
         // Clica no arquivo na árvore -> abre aba File e carrega o viewer
@@ -12670,7 +12687,7 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("gsh-ws-cancel-{}", std::process::id()));
         std::fs::create_dir_all(&folder).expect("create test folder");
         let _ = shell.update(Msg::WorkspaceFolderPicked(Some(folder.clone())));
-        assert_eq!(shell.workspaces.items().len(), 2);
+        assert_eq!(shell.workspaces.items().len(), 1);
         let draft = shell
             .workspace_settings
             .as_ref()
@@ -12684,7 +12701,7 @@ mod tests {
         assert_eq!(
             draft.color,
             workspace_settings_dialog::PALETTE
-                .get(2)
+                .get(1)
                 .copied()
                 .unwrap_or_default()
         );
@@ -12694,11 +12711,11 @@ mod tests {
         let _ = shell.update(Msg::WorkspaceSettings(
             workspace_settings_dialog::Message::Save,
         ));
-        assert_eq!(shell.workspaces.items().len(), 2);
+        assert_eq!(shell.workspaces.items().len(), 1);
         let _ = shell.update(Msg::WorkspaceSettings(
             workspace_settings_dialog::Message::Cancel,
         ));
-        assert_eq!(shell.workspaces.items().len(), 2);
+        assert_eq!(shell.workspaces.items().len(), 1);
     }
 
     #[test]
@@ -12846,13 +12863,13 @@ mod tests {
         std::fs::create_dir_all(&folder).expect("create test folder");
         let index = shell.workspaces.open_folder(folder.clone());
         let _ = shell.update(Msg::WorkspaceMenu(index, rail::WorkspaceMenuAction::Close));
-        assert_eq!(shell.workspaces.items().len(), 3);
+        assert_eq!(shell.workspaces.items().len(), 2);
         assert_eq!(shell.pending_workspace_close, Some(index));
         let _ = shell.update(Msg::CancelCloseWorkspace);
-        assert_eq!(shell.workspaces.items().len(), 3);
+        assert_eq!(shell.workspaces.items().len(), 2);
         let _ = shell.update(Msg::WorkspaceMenu(index, rail::WorkspaceMenuAction::Close));
         let _ = shell.update(Msg::ConfirmCloseWorkspace);
-        assert_eq!(shell.workspaces.items().len(), 2);
+        assert_eq!(shell.workspaces.items().len(), 1);
         assert!(folder.is_dir());
         let _ = std::fs::remove_dir_all(folder);
     }
@@ -12983,7 +13000,9 @@ mod tests {
 
     #[test]
     fn gsh_msg_local_escreve_no_terminal_alvo_e_registra_o_cabo_observado() {
+        let dir = tempfile::tempdir().unwrap();
         let mut shell = test_shell();
+        shell.workspaces.open_folder(dir.path());
         shell.terminals.insert(2, TerminalPane::new());
         shell.terminal_labels.insert(1, "Origem".into());
         shell.terminal_labels.insert(2, "Destino".into());
@@ -13295,8 +13314,8 @@ mod tests {
             .insert(gsh_config::schema::AppFeature::Harness);
         assert!(!shell.shows_harness());
         shell.settings.current.features.hidden.clear();
-        // o workspace de exemplo não tem pasta
-        shell.workspaces.select(1);
+        // o workspace de sistema GSH não tem pasta
+        shell.workspaces.select(0);
         assert!(!shell.shows_harness());
     }
 
