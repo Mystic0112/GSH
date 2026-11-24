@@ -158,4 +158,29 @@ mod tests {
         );
         capture("gsh-plus-menu.png", plus);
     }
+
+    #[test]
+    fn capture_files_menu_and_viewer_snapshots() {
+        theme::set_active(theme::ThemeVariant::Dark);
+        let menu = crate::file_tree_context_menu::context_menu(
+            Path::new("/workspace/src"),
+            true,
+            false,
+            true,
+            true,
+        );
+        capture("gsh-files-menu.png", menu);
+
+        let source = "---\nname: agente-demo\ndescription: Revisa markdown.\ntags:\n  - rust\n  - ui\n---\n# Arquivo\n\nUma prévia Markdown com [link](https://example.com).";
+        let frontmatter = crate::file_viewer_assets::split_frontmatter(source).unwrap();
+        let markdown = iced::widget::markdown::Content::parse(&frontmatter.body);
+        let viewer = crate::file_viewer_view::source_preview(
+            Path::new("/workspace/agent.md"),
+            Some(Path::new("/workspace")),
+            source,
+            Some(&markdown),
+            true,
+        );
+        capture("gsh-files-viewer.png", viewer);
+    }
 }

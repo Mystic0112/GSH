@@ -2593,6 +2593,7 @@ dependencies = [
  "tokio",
  "toml_edit",
  "ttf-parser",
+ "yaml-rust",
  "zbus 6.5.0",
  "zeroize",
 ]

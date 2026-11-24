@@ -7,6 +7,8 @@ use iced::Task;
 pub enum EditorMsg {
     Action(Action),
     Save,
+    TogglePreview,
+    OpenPath(std::path::PathBuf),
     Undo,
     Redo,
     Overwrite,
@@ -138,7 +140,10 @@ impl EditorPane {
                     }
                 }
             }
-            EditorMsg::Submit | EditorMsg::ApplyCkpLayout => {}
+            EditorMsg::Submit
+            | EditorMsg::ApplyCkpLayout
+            | EditorMsg::TogglePreview
+            | EditorMsg::OpenPath(_) => {}
             #[cfg(target_os = "linux")]
             EditorMsg::Format | EditorMsg::Formatted(_, _) => {}
             #[cfg(target_os = "linux")]

@@ -58,6 +58,12 @@ pub enum ViewerHook {
     OpenFile(PathBuf),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileClipboard {
+    pub path: PathBuf,
+    pub cut: bool,
+}
+
 /// Linha visível achatada pronta para renderização no painel de arquivos.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeRow {
@@ -130,6 +136,9 @@ pub struct FileTree {
     expanded: BTreeSet<PathBuf>,
     cache: BTreeMap<PathBuf, Result<Vec<FileEntry>, TreeReadError>>,
     selected_file: Option<PathBuf>,
+    selected_path: Option<PathBuf>,
+    context_target: Option<PathBuf>,
+    clipboard: Option<FileClipboard>,
 }
 
 impl FileTree {
@@ -152,12 +161,135 @@ impl FileTree {
         self.selected_file.as_deref()
     }
 
+    pub fn selected_path(&self) -> Option<&Path> {
+        self.selected_path.as_deref()
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selected_file = None;
+        self.selected_path = None;
+    }
+
+    pub fn retarget_path(&mut self, from: &Path, to: &Path) {
+        fn retarget(path: &Path, from: &Path, to: &Path) -> Option<PathBuf> {
+            let suffix = path.strip_prefix(from).ok()?;
+            Some(to.join(suffix))
+        }
+        if let Some(next) = self
+            .selected_path
+            .as_deref()
+            .and_then(|path| retarget(path, from, to))
+        {
+            self.selected_path = Some(next);
+        }
+        if let Some(next) = self
+            .selected_file
+            .as_deref()
+            .and_then(|path| retarget(path, from, to))
+        {
+            self.selected_file = Some(next);
+        }
+        self.context_target = None;
+    }
+
+    /// Selected directory, selected file parent, or workspace root for header creation.
+    pub fn create_target_dir(&self) -> Option<&Path> {
+        let root = self.root.as_deref()?;
+        let Some(selected) = self.selected_path.as_deref() else {
+            return Some(root);
+        };
+        if selected.is_dir() {
+            Some(selected)
+        } else {
+            selected.parent().or(Some(root))
+        }
+    }
+
+    pub fn context_target(&self) -> Option<&Path> {
+        self.context_target.as_deref()
+    }
+
+    /// Opens the context menu for a tree item. A target outside the workspace is ignored.
+    pub fn show_context_menu(&mut self, target: PathBuf) {
+        if self
+            .root
+            .as_deref()
+            .is_some_and(|root| target.starts_with(root))
+        {
+            self.context_target = Some(target);
+        }
+    }
+
+    pub fn close_context_menu(&mut self) {
+        self.context_target = None;
+    }
+
+    pub fn set_clipboard(&mut self, path: PathBuf, cut: bool) {
+        if self
+            .root
+            .as_deref()
+            .is_some_and(|root| path.starts_with(root))
+        {
+            self.clipboard = Some(FileClipboard { path, cut });
+        }
+        self.close_context_menu();
+    }
+
+    pub fn clipboard(&self) -> Option<&FileClipboard> {
+        self.clipboard.as_ref()
+    }
+
+    pub fn clear_clipboard(&mut self) {
+        self.clipboard = None;
+    }
+
+    pub fn can_paste(&self, target: &Path) -> bool {
+        let Some(root) = self.root.as_deref() else {
+            return false;
+        };
+        let Some(clipboard) = self.clipboard.as_ref() else {
+            return false;
+        };
+        target.starts_with(root)
+            && target.is_dir()
+            && clipboard.path.starts_with(root)
+            && clipboard.path.exists()
+    }
+
+    /// Expands every directory from the workspace root through `target_dir`.
+    /// This makes an inline create field visible even when its parent was collapsed.
+    pub fn reveal_dir(&mut self, target_dir: &Path) -> bool {
+        let Some(root) = self.root.clone() else {
+            return false;
+        };
+        if !target_dir.starts_with(&root) || !target_dir.is_dir() {
+            return false;
+        }
+        let Ok(relative) = target_dir.strip_prefix(&root) else {
+            return false;
+        };
+        let mut current = root.clone();
+        let components = relative.components();
+        for component in components {
+            current.push(component);
+            self.expanded.insert(current.clone());
+            self.cache
+                .entry(current.clone())
+                .or_insert_with(|| read_dir_sorted(&current));
+        }
+        true
+    }
+
     pub fn is_expanded(&self, dir: &Path) -> bool {
         self.expanded.contains(dir)
     }
 
     pub fn is_dir_cached(&self, dir: &Path) -> bool {
         self.cache.contains_key(dir)
+    }
+
+    pub fn is_expanded_empty_dir(&self, dir: &Path) -> bool {
+        matches!(self.cache.get(dir), Some(Ok(entries)) if entries.is_empty())
     }
 
     /// Troca a pasta raiz ativa e lê somente o primeiro nível.
@@ -169,6 +301,9 @@ impl FileTree {
         self.expanded.clear();
         self.cache.clear();
         self.selected_file = None;
+        self.selected_path = None;
+        self.context_target = None;
+        self.clipboard = None;
         if let Some(root) = self.root.clone() {
             let loaded = read_dir_sorted(&root);
             self.cache.insert(root, loaded);
@@ -177,6 +312,7 @@ impl FileTree {
 
     /// Expande ou recolhe `dir`. Só lê `dir` do disco no momento em que é expandido.
     pub fn toggle_dir(&mut self, dir: &Path) {
+        self.selected_path = Some(dir.to_path_buf());
         if self.expanded.contains(dir) {
             self.expanded.remove(dir);
         } else {
@@ -191,6 +327,7 @@ impl FileTree {
     /// Seleciona um arquivo e devolve o [`ViewerHook`] para abrir/ativar a aba de viewer.
     pub fn select_file(&mut self, file_path: PathBuf) -> ViewerHook {
         self.selected_file = Some(file_path.clone());
+        self.selected_path = Some(file_path.clone());
         ViewerHook::OpenFile(file_path)
     }
 
@@ -231,8 +368,7 @@ impl FileTree {
             Ok(entries) => {
                 for entry in entries {
                     let expanded = entry.is_dir && self.expanded.contains(&entry.path);
-                    let selected = !entry.is_dir
-                        && self.selected_file.as_deref() == Some(entry.path.as_path());
+                    let selected = self.selected_path.as_deref() == Some(entry.path.as_path());
                     out.push(TreeRow::Entry {
                         entry: entry.clone(),
                         depth,
@@ -255,109 +391,5 @@ impl FileTree {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use super::*;
-
-    static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
-
-    struct TempTreeDir {
-        path: PathBuf,
-    }
-
-    impl TempTreeDir {
-        fn new() -> Self {
-            let id = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "gsh-file-tree-test-{}-{}",
-                std::process::id(),
-                id
-            ));
-            fs::create_dir_all(&path).expect("create temp test dir");
-            Self { path }
-        }
-    }
-
-    impl Drop for TempTreeDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-
-    #[test]
-    fn lista_diretorios_primeiro_depois_arquivos_em_ordem_alfabetica_e_ignora_vcs() {
-        let tmp = TempTreeDir::new();
-        fs::create_dir_all(tmp.path.join("zeta")).unwrap();
-        fs::create_dir_all(tmp.path.join("Alpha")).unwrap();
-        fs::create_dir_all(tmp.path.join(".git")).unwrap();
-        fs::create_dir_all(tmp.path.join(".hg")).unwrap();
-        fs::create_dir_all(tmp.path.join(".svn")).unwrap();
-        fs::write(tmp.path.join(".DS_Store"), b"").unwrap();
-        fs::write(tmp.path.join(".env"), b"KEY=1").unwrap();
-        fs::write(tmp.path.join("main.rs"), b"fn main() {}").unwrap();
-        fs::write(tmp.path.join("Cargo.toml"), b"[package]").unwrap();
-
-        let entries = read_dir_sorted(&tmp.path).unwrap();
-        let names: Vec<(&str, bool)> = entries
-            .iter()
-            .map(|e| (e.name.as_str(), e.is_dir))
-            .collect();
-
-        assert_eq!(
-            names,
-            vec![
-                ("Alpha", true),
-                ("zeta", true),
-                (".env", false),
-                ("Cargo.toml", false),
-                ("main.rs", false),
-            ]
-        );
-    }
-
-    #[test]
-    fn carrega_subpastas_de_forma_lazy_ao_expandir_e_destaca_arquivo_selecionado() {
-        let tmp = TempTreeDir::new();
-        let src_dir = tmp.path.join("src");
-        fs::create_dir_all(&src_dir).unwrap();
-        fs::create_dir_all(src_dir.join(".git")).unwrap();
-        let lib_file = src_dir.join("lib.rs");
-        fs::write(&lib_file, b"pub fn ok() {}").unwrap();
-
-        let mut tree = FileTree::from_root(&tmp.path);
-        // Subpasta `src` ainda não foi lida do disco (lazy!)
-        assert!(!tree.is_dir_cached(&src_dir));
-        assert_eq!(tree.visible_rows().len(), 1);
-
-        // Expande `src`: agora lê `src` e exibe `lib.rs` (ignorando `src/.git`)
-        tree.toggle_dir(&src_dir);
-        assert!(tree.is_dir_cached(&src_dir));
-        assert!(tree.is_expanded(&src_dir));
-        assert_eq!(tree.visible_rows().len(), 2);
-
-        // Seleciona `lib.rs`
-        let hook = tree.select_file(lib_file.clone());
-        assert_eq!(hook, ViewerHook::OpenFile(lib_file.clone()));
-        assert_eq!(tree.selected_file(), Some(lib_file.as_path()));
-
-        // Recolhe `src`: volta a ter apenas 1 linha visível
-        tree.toggle_dir(&src_dir);
-        assert!(!tree.is_expanded(&src_dir));
-        assert_eq!(tree.visible_rows().len(), 1);
-    }
-
-    #[test]
-    fn erro_de_leitura_vira_estado_tipado_sem_panic() {
-        let missing = std::env::temp_dir().join("gsh-caminho-que-nao-existe-999999");
-        let tree = FileTree::from_root(&missing);
-        let rows = tree.visible_rows();
-        assert_eq!(
-            rows,
-            vec![TreeRow::Error {
-                depth: 0,
-                error: TreeReadError::NotFound,
-            }]
-        );
-    }
-}
+#[path = "file_tree_tests.rs"]
+mod tests;

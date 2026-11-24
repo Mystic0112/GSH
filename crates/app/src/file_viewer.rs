@@ -16,6 +16,9 @@ use crate::labels;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileViewerMsg {
     OpenMedia(PathBuf),
+    OpenLink(String),
+    ToggleSource(PathBuf),
+    OpenPath(PathBuf),
     Ignore,
 }
 
@@ -138,10 +141,11 @@ impl TextDocument {
 pub enum FileViewerState {
     Loaded(TextDocument),
     Markdown(TextDocument, iced::widget::markdown::Content),
-    Svg(String),
-    Image(Vec<u8>),
+    Svg(PathBuf, String),
+    Image(PathBuf, Vec<u8>),
     Media(PathBuf),
     TooLarge {
+        path: PathBuf,
         size_bytes: u64,
         max_bytes: u64,
     },
@@ -150,8 +154,8 @@ pub enum FileViewerState {
         max_bytes: u64,
         document: TextDocument,
     },
-    Binary(BinaryKind),
-    Error(ViewerReadError),
+    Binary(PathBuf, BinaryKind),
+    Error(PathBuf, ViewerReadError),
 }
 
 impl FileViewerState {
@@ -164,10 +168,10 @@ impl FileViewerState {
     pub fn load_with_limit(path: &Path, max_bytes: u64) -> Self {
         let meta = match fs::metadata(path) {
             Ok(m) => m,
-            Err(e) => return Self::Error(ViewerReadError::from_io(&e)),
+            Err(e) => return Self::Error(path.to_path_buf(), ViewerReadError::from_io(&e)),
         };
         if !meta.is_file() {
-            return Self::Error(ViewerReadError::NotRegularFile);
+            return Self::Error(path.to_path_buf(), ViewerReadError::NotRegularFile);
         }
         if assets::is_media(path) {
             return Self::Media(path.to_path_buf());
@@ -178,14 +182,14 @@ impl FileViewerState {
 
         let file = match fs::File::open(path) {
             Ok(f) => f,
-            Err(e) => return Self::Error(ViewerReadError::from_io(&e)),
+            Err(e) => return Self::Error(path.to_path_buf(), ViewerReadError::from_io(&e)),
         };
         let mut bytes = Vec::new();
         if let Err(e) = file
             .take(max_bytes.saturating_add(1))
             .read_to_end(&mut bytes)
         {
-            return Self::Error(ViewerReadError::from_io(&e));
+            return Self::Error(path.to_path_buf(), ViewerReadError::from_io(&e));
         }
         let read_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         if read_len > max_bytes {
@@ -194,30 +198,32 @@ impl FileViewerState {
 
         if assets::is_image(path) {
             return match assets::preview_image(bytes) {
-                Ok(png) => Self::Image(png),
-                Err(error) => Self::Error(ViewerReadError::Io(error)),
+                Ok(png) => Self::Image(path.to_path_buf(), png),
+                Err(error) => Self::Error(path.to_path_buf(), ViewerReadError::Io(error)),
             };
         }
         if bytes.contains(&0) {
-            return Self::Binary(BinaryKind::NullBytes);
+            return Self::Binary(path.to_path_buf(), BinaryKind::NullBytes);
         }
         match String::from_utf8(bytes) {
-            Ok(content) if assets::is_svg(path) => Self::Svg(content),
+            Ok(content) if assets::is_svg(path) => Self::Svg(path.to_path_buf(), content),
             Ok(content) if assets::is_markdown(path) => {
-                let source = assets::strip_frontmatter(&content).to_owned();
-                let markdown = iced::widget::markdown::Content::parse(&source);
+                let body = assets::split_frontmatter(&content)
+                    .map_or_else(|| content.clone(), |frontmatter| frontmatter.body);
+                let markdown = iced::widget::markdown::Content::parse(&body);
                 Self::Markdown(
-                    TextDocument::from_owned_text(path.to_path_buf(), source),
+                    TextDocument::from_owned_text(path.to_path_buf(), content),
                     markdown,
                 )
             }
             Ok(content) => Self::Loaded(TextDocument::from_owned_text(path.to_path_buf(), content)),
-            Err(_) => Self::Binary(BinaryKind::InvalidUtf8),
+            Err(_) => Self::Binary(path.to_path_buf(), BinaryKind::InvalidUtf8),
         }
     }
 
     fn large_preview(path: &Path, size_bytes: u64, max_bytes: u64) -> Self {
         let fallback = Self::TooLarge {
+            path: path.to_path_buf(),
             size_bytes,
             max_bytes,
         };
@@ -233,7 +239,7 @@ impl FileViewerState {
             return fallback;
         }
         if bytes.contains(&0) {
-            return Self::Binary(BinaryKind::NullBytes);
+            return Self::Binary(path.to_path_buf(), BinaryKind::NullBytes);
         }
         let content = match std::str::from_utf8(&bytes) {
             Ok(content) => content,
@@ -243,7 +249,7 @@ impl FileViewerState {
                     Err(_) => return fallback,
                 }
             }
-            Err(_) => return Self::Binary(BinaryKind::InvalidUtf8),
+            Err(_) => return Self::Binary(path.to_path_buf(), BinaryKind::InvalidUtf8),
         };
         Self::LargePreview {
             size_bytes,
@@ -256,20 +262,21 @@ impl FileViewerState {
         match self {
             Self::Loaded(_)
             | Self::Markdown(..)
-            | Self::Svg(_)
-            | Self::Image(_)
+            | Self::Svg(..)
+            | Self::Image(..)
             | Self::Media(_) => None,
             Self::TooLarge {
                 size_bytes,
                 max_bytes,
+                ..
             }
             | Self::LargePreview {
                 size_bytes,
                 max_bytes,
                 ..
             } => Some(labels::format_viewer_too_large(*size_bytes, *max_bytes)),
-            Self::Binary(kind) => Some(kind.ui_message().to_string()),
-            Self::Error(err) => Some(err.ui_message()),
+            Self::Binary(_, kind) => Some(kind.ui_message().to_string()),
+            Self::Error(_, err) => Some(err.ui_message()),
         }
     }
 }
@@ -329,7 +336,13 @@ mod tests {
         let FileViewerState::Markdown(doc, _) = FileViewerState::load(&path) else {
             panic!("esperava viewer Markdown");
         };
-        assert_eq!(doc.source(), "# Conteudo\n");
+        assert_eq!(doc.source(), "---\ntitle: Teste\n---\n# Conteudo\n");
+        assert_eq!(
+            assets::split_frontmatter(doc.source())
+                .map(|frontmatter| frontmatter.body)
+                .as_deref(),
+            Some("# Conteudo\n")
+        );
     }
 
     #[test]
@@ -358,13 +371,13 @@ mod tests {
         let null_file = tmp.write("bin.dat", b"abc\0def");
         assert!(matches!(
             FileViewerState::load(&null_file),
-            FileViewerState::Binary(BinaryKind::NullBytes)
+            FileViewerState::Binary(_, BinaryKind::NullBytes)
         ));
 
         let bad_utf8 = tmp.write("latin.bin", &[0xFF, 0xFE, 0xFD]);
         assert!(matches!(
             FileViewerState::load(&bad_utf8),
-            FileViewerState::Binary(BinaryKind::InvalidUtf8)
+            FileViewerState::Binary(_, BinaryKind::InvalidUtf8)
         ));
     }
 
@@ -374,7 +387,7 @@ mod tests {
         let state = FileViewerState::load(&missing);
         assert!(matches!(
             state,
-            FileViewerState::Error(ViewerReadError::NotFound)
+            FileViewerState::Error(_, ViewerReadError::NotFound)
         ));
         assert_eq!(
             state.ui_notice().as_deref(),

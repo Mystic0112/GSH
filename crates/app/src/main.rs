@@ -60,6 +60,7 @@ pub mod farm;
 mod file_icons;
 pub mod file_ops;
 pub mod file_tree;
+pub mod file_tree_context_menu;
 pub mod file_viewer;
 mod file_viewer_assets;
 mod file_viewer_view;
@@ -129,7 +130,7 @@ mod workspace_snapshots;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver as MpscReceiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
@@ -1006,6 +1007,8 @@ struct Shell {
     chats: BTreeMap<ChatId, ChatPane>,
     file_viewers: BTreeMap<PathBuf, FileViewerState>,
     editors: BTreeMap<PathBuf, editor_pane::EditorPane>,
+    file_previews: BTreeSet<PathBuf>,
+    file_preview_markdown: BTreeMap<PathBuf, iced::widget::markdown::Content>,
     #[cfg(target_os = "linux")]
     lsp: lsp_runtime::Pool,
     /// Arquivo com alteração não salva esperando a escolha do diálogo (`showCloseDirtyDialog`).
@@ -1018,6 +1021,11 @@ struct Shell {
     file_tree: FileTree,
     file_create: Option<file_ops::CreateForm>,
     file_create_generation: u64,
+    file_rename: Option<file_ops::RenameForm>,
+    file_rename_generation: u64,
+    pending_files_delete: Option<PathBuf>,
+    file_delete_generation: u64,
+    files_operation_notice: Option<(&'static str, String)>,
     git: git_state::GitState,
     /// Aba escolhida do painel direito; a exibida é `right_tab()` (cai em Arquivos se sumiu).
     right_tab: RightTab,
@@ -1293,6 +1301,8 @@ impl Default for Shell {
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
             editors: BTreeMap::new(),
+            file_previews: BTreeSet::new(),
+            file_preview_markdown: BTreeMap::new(),
             #[cfg(target_os = "linux")]
             lsp: lsp_runtime::Pool::default(),
             pending_close_file: None,
@@ -1310,6 +1320,11 @@ impl Default for Shell {
             file_tree,
             file_create: None,
             file_create_generation: 0,
+            file_rename: None,
+            file_rename_generation: 0,
+            pending_files_delete: None,
+            file_delete_generation: 0,
+            files_operation_notice: None,
             git,
             right_tab: RightTab::default(),
             agent_filter: None,
@@ -1577,6 +1592,13 @@ fn open_in_file_manager(path: &Path) {
     #[cfg(all(unix, not(target_os = "macos")))]
     let result = Command::new("xdg-open").arg(path).spawn();
     let _ = result;
+}
+
+fn is_openable_viewer_link(url: &str) -> bool {
+    (url.starts_with("https://") || url.starts_with("http://"))
+        && !url
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
 }
 
 fn empty_test_snapshot() -> gsh_term::TermSnapshot {
@@ -3998,6 +4020,40 @@ impl Shell {
         self.attach_lsp(&path);
     }
 
+    fn toggle_file_source(&mut self, path: PathBuf) {
+        if self.editors.contains_key(&path) {
+            if self.file_previews.remove(&path) {
+                self.file_preview_markdown.remove(&path);
+            } else {
+                let source = self
+                    .editors
+                    .get(&path)
+                    .map(|editor| editor.state.buffer.text().to_owned());
+                if let Some(source) = source {
+                    if path.extension().is_some_and(|ext| {
+                        ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+                    }) {
+                        let body = crate::file_viewer_assets::split_frontmatter(&source)
+                            .map_or_else(|| source.clone(), |frontmatter| frontmatter.body);
+                        self.file_preview_markdown
+                            .insert(path.clone(), iced::widget::markdown::Content::parse(&body));
+                    }
+                    self.file_previews.insert(path);
+                }
+            }
+            return;
+        }
+        let source = match self.file_viewers.get(&path) {
+            Some(FileViewerState::Markdown(document, _)) => Some(document.source().to_owned()),
+            Some(FileViewerState::Svg(_, source)) => Some(source.clone()),
+            _ => None,
+        };
+        if let Some(source) = source {
+            self.file_viewers.remove(&path);
+            self.insert_file_editor(path, source);
+        }
+    }
+
     /// Carrega o arquivo (editor ou visualizador) e o abre no pane focado; devolve o caminho
     /// canônico que indexa `editors` e `file_viewers`.
     fn open_in_editor(&mut self, target: PathBuf) -> PathBuf {
@@ -4022,6 +4078,399 @@ impl Shell {
         }
         self.panes.focused_model_mut().open_file(target.clone());
         target
+    }
+
+    fn start_file_create(&mut self, kind: file_ops::CreateKind, target: PathBuf) -> Task<Msg> {
+        if self.file_create.is_some() {
+            return Task::none();
+        }
+        self.file_tree.close_context_menu();
+        self.file_tree.reveal_dir(&target);
+        self.file_create_generation = self.file_create_generation.wrapping_add(1);
+        self.file_create = Some(file_ops::CreateForm::new_at(kind, target));
+        iced::widget::operation::focus("files-create")
+    }
+
+    fn file_operation_error_message(error: file_ops::FileOpError) -> String {
+        match error {
+            file_ops::FileOpError::InvalidName => labels::FILE_OP_INVALID_NAME.to_owned(),
+            file_ops::FileOpError::AlreadyExists => labels::FILES_ALREADY_EXISTS.to_owned(),
+            file_ops::FileOpError::PermissionDenied => labels::FILES_CREATE_PERMISSION.to_owned(),
+            file_ops::FileOpError::Io => labels::FILES_CREATE_FAILED.to_owned(),
+        }
+    }
+
+    fn update_files(&mut self, message: FilesMsg) -> Task<Msg> {
+        match message {
+            FilesMsg::ToggleDir(dir) => self.file_tree.toggle_dir(&dir),
+            FilesMsg::SelectFile(path) => {
+                let ViewerHook::OpenFile(target) = self.file_tree.select_file(path);
+                self.open_in_editor(target);
+            }
+            FilesMsg::ClearSelection => self.file_tree.clear_selection(),
+            FilesMsg::CopySelected => {
+                if let Some(path) = self.file_tree.selected_path().map(Path::to_path_buf) {
+                    self.file_tree.set_clipboard(path, false);
+                }
+            }
+            FilesMsg::CutSelected => {
+                if let Some(path) = self.file_tree.selected_path().map(Path::to_path_buf) {
+                    self.file_tree.set_clipboard(path, true);
+                }
+            }
+            FilesMsg::PasteSelected => {
+                if let Some(target) = self.file_tree.create_target_dir().map(Path::to_path_buf) {
+                    return self.update_files(FilesMsg::ContextAction(
+                        target,
+                        files_panel::FileTreeAction::Paste,
+                    ));
+                }
+            }
+            FilesMsg::RenameSelected => {
+                if let Some(path) = self.file_tree.selected_path().map(Path::to_path_buf) {
+                    return self.update_files(FilesMsg::StartRename(path));
+                }
+            }
+            FilesMsg::DeleteSelected => {
+                if let Some(path) = self.file_tree.selected_path().map(Path::to_path_buf) {
+                    return self.update_files(FilesMsg::RequestDelete(path));
+                }
+            }
+            FilesMsg::CollapseAll => self.file_tree.collapse_all(),
+            FilesMsg::Refresh => {
+                self.file_tree.refresh();
+                return self
+                    .git
+                    .start(git_state::Action::Refresh)
+                    .map(Msg::GitResult);
+            }
+            FilesMsg::StartCreate(kind) => {
+                if let Some(target) = self.file_tree.create_target_dir().map(Path::to_path_buf) {
+                    return self.start_file_create(kind, target);
+                }
+            }
+            FilesMsg::CreateNameChanged(name) => {
+                if let Some(form) = self.file_create.as_mut().filter(|form| !form.busy) {
+                    form.name = name;
+                    form.error = None;
+                }
+            }
+            FilesMsg::CancelCreate => {
+                if self.file_create.as_ref().is_some_and(|form| !form.busy) {
+                    self.file_create = None;
+                }
+            }
+            FilesMsg::SubmitCreate => {
+                let Some(root) = self.file_tree.root().map(Path::to_path_buf) else {
+                    return Task::none();
+                };
+                let Some(form) = self.file_create.as_mut().filter(|form| !form.busy) else {
+                    return Task::none();
+                };
+                form.busy = true;
+                form.error = None;
+                let generation = self.file_create_generation;
+                return Task::perform(
+                    file_ops::create_in_async(
+                        root,
+                        form.target_dir.clone(),
+                        form.name.clone(),
+                        form.kind,
+                    ),
+                    move |(root, _, result)| {
+                        Msg::Files(FilesMsg::CreateFinished(generation, root, result))
+                    },
+                );
+            }
+            FilesMsg::CreateFinished(generation, root, result) => {
+                if generation == self.file_create_generation
+                    && self.file_tree.root() == Some(root.as_path())
+                {
+                    if let Some(form) = self.file_create.as_mut() {
+                        match result {
+                            Ok(()) => {
+                                self.file_tree.reveal_dir(&form.target_dir.clone());
+                                self.file_tree.refresh();
+                                self.file_create = None;
+                            }
+                            Err(error) => {
+                                form.busy = false;
+                                form.error = Some(error);
+                                return iced::widget::operation::focus("files-create");
+                            }
+                        }
+                    }
+                }
+            }
+            FilesMsg::StartRename(path) => {
+                if self.file_create.is_none()
+                    && self.file_rename.is_none()
+                    && self.file_tree.root().is_some_and(|root| path != root)
+                {
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
+                    self.file_tree.close_context_menu();
+                    self.file_rename_generation = self.file_rename_generation.wrapping_add(1);
+                    self.file_rename = Some(file_ops::RenameForm::new(path, name));
+                    return iced::widget::operation::focus("files-rename");
+                }
+            }
+            FilesMsg::RenameNameChanged(name) => {
+                if let Some(form) = self.file_rename.as_mut().filter(|form| !form.busy) {
+                    form.name = name;
+                    form.error = None;
+                }
+            }
+            FilesMsg::CancelRename => {
+                if self.file_rename.as_ref().is_some_and(|form| !form.busy) {
+                    self.file_rename = None;
+                }
+            }
+            FilesMsg::SubmitRename => {
+                let Some(root) = self.file_tree.root().map(Path::to_path_buf) else {
+                    return Task::none();
+                };
+                let Some(form) = self.file_rename.as_mut().filter(|form| !form.busy) else {
+                    return Task::none();
+                };
+                form.busy = true;
+                form.error = None;
+                let generation = self.file_rename_generation;
+                let path = form.path.clone();
+                let name = form.name.clone();
+                let root_for_operation = root.clone();
+                let path_for_operation = path.clone();
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            file_ops::rename(&root_for_operation, &path_for_operation, &name)
+                        })
+                        .await
+                        .unwrap_or(Err(file_ops::FileOpError::Io))
+                        .map(|_| ())
+                    },
+                    move |result| Msg::Files(FilesMsg::RenameFinished(generation, path, result)),
+                );
+            }
+            FilesMsg::RenameFinished(generation, path, result) => {
+                if generation == self.file_rename_generation
+                    && self
+                        .file_rename
+                        .as_ref()
+                        .is_some_and(|form| form.path == path)
+                    && self.file_tree.root().is_some()
+                {
+                    match result {
+                        Ok(()) => {
+                            if let Some(form) = self.file_rename.take() {
+                                let next = path
+                                    .parent()
+                                    .unwrap_or_else(|| Path::new(""))
+                                    .join(form.name.trim());
+                                self.file_tree.retarget_path(&path, &next);
+                            }
+                            self.file_tree.refresh();
+                        }
+                        Err(error) => {
+                            if let Some(form) = self.file_rename.as_mut() {
+                                form.busy = false;
+                                form.error = Some(error);
+                            }
+                            return iced::widget::operation::focus("files-rename");
+                        }
+                    }
+                }
+            }
+            FilesMsg::RequestDelete(path) => {
+                self.file_tree.close_context_menu();
+                if self.file_tree.root().is_some_and(|root| path != root) {
+                    self.pending_files_delete = Some(path);
+                    #[cfg(target_os = "macos")]
+                    return self.update_files(FilesMsg::ConfirmDelete);
+                }
+            }
+            FilesMsg::ConfirmDelete => {
+                let Some(path) = self.pending_files_delete.take() else {
+                    return Task::none();
+                };
+                let Some(root) = self.file_tree.root().map(Path::to_path_buf) else {
+                    return Task::none();
+                };
+                self.file_delete_generation = self.file_delete_generation.wrapping_add(1);
+                let generation = self.file_delete_generation;
+                let root_for_operation = root.clone();
+                let path_for_operation = path.clone();
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            file_ops::delete(&root_for_operation, &path_for_operation)
+                        })
+                        .await
+                        .unwrap_or(Err(file_ops::FileOpError::Io))
+                    },
+                    move |result| {
+                        Msg::Files(FilesMsg::DeleteFinished(generation, root, path, result))
+                    },
+                );
+            }
+            FilesMsg::CancelDelete => self.pending_files_delete = None,
+            FilesMsg::DeleteFinished(generation, root, path, result) => {
+                if generation == self.file_delete_generation
+                    && self.file_tree.root() == Some(root.as_path())
+                {
+                    match result {
+                        Ok(()) => {
+                            if self.file_tree.selected_path().is_some_and(|selected| {
+                                selected == path || selected.starts_with(&path)
+                            }) {
+                                self.file_tree.clear_selection();
+                            }
+                            self.file_tree.refresh();
+                        }
+                        Err(error) => {
+                            self.files_operation_notice = Some((
+                                labels::FILES_COULD_NOT_DELETE_TITLE,
+                                Self::file_operation_error_message(error),
+                            ));
+                        }
+                    }
+                }
+            }
+            FilesMsg::OpenContextMenu(path) => self.file_tree.show_context_menu(path),
+            FilesMsg::CloseContextMenu => self.file_tree.close_context_menu(),
+            FilesMsg::ContextAction(path, action) => {
+                self.file_tree.close_context_menu();
+                match action {
+                    files_panel::FileTreeAction::Open => {
+                        let ViewerHook::OpenFile(target) = self.file_tree.select_file(path);
+                        self.open_in_editor(target);
+                    }
+                    files_panel::FileTreeAction::OpenWith
+                    | files_panel::FileTreeAction::OpenFileManager => open_in_file_manager(&path),
+                    files_panel::FileTreeAction::OpenAsMarkdown
+                    | files_panel::FileTreeAction::OpenAsHtml
+                    | files_panel::FileTreeAction::OpenLayout => {
+                        self.open_in_editor(path);
+                    }
+                    files_panel::FileTreeAction::ShowGitDiff => {
+                        if let Some(relative) = self
+                            .git
+                            .root
+                            .as_deref()
+                            .and_then(|root| path.strip_prefix(root).ok())
+                            .and_then(Path::to_str)
+                        {
+                            self.right_tab = RightTab::Git;
+                            return self
+                                .git
+                                .start(git_state::Action::Diff(relative.to_owned(), false))
+                                .map(Msg::GitResult);
+                        }
+                    }
+                    files_panel::FileTreeAction::NewFile => {
+                        return self.start_file_create(file_ops::CreateKind::File, path);
+                    }
+                    files_panel::FileTreeAction::NewFolder => {
+                        return self.start_file_create(file_ops::CreateKind::Folder, path);
+                    }
+                    files_panel::FileTreeAction::CreateTerminal => {
+                        self.open_terminal_for_dir(Some(path));
+                    }
+                    files_panel::FileTreeAction::Rename => {
+                        return self.update_files(FilesMsg::StartRename(path));
+                    }
+                    files_panel::FileTreeAction::Delete => {
+                        return self.update_files(FilesMsg::RequestDelete(path));
+                    }
+                    files_panel::FileTreeAction::Copy => {
+                        self.file_tree.set_clipboard(path, false);
+                    }
+                    files_panel::FileTreeAction::Cut => {
+                        self.file_tree.set_clipboard(path, true);
+                    }
+                    files_panel::FileTreeAction::Paste => {
+                        let target = if path.is_dir() {
+                            path
+                        } else {
+                            path.parent().unwrap_or_else(|| Path::new("")).to_path_buf()
+                        };
+                        let Some(clipboard) = self.file_tree.clipboard().cloned() else {
+                            return Task::none();
+                        };
+                        let Some(root) = self.file_tree.root().map(Path::to_path_buf) else {
+                            return Task::none();
+                        };
+                        let source = clipboard.path.clone();
+                        let cut = clipboard.cut;
+                        let operation_root = root.clone();
+                        let operation_target = target.clone();
+                        let operation_source = source.clone();
+                        return Task::perform(
+                            async move {
+                                tokio::task::spawn_blocking(move || {
+                                    file_ops::paste(
+                                        &operation_root,
+                                        &operation_source,
+                                        &operation_target,
+                                        cut,
+                                    )
+                                })
+                                .await
+                                .unwrap_or(Err(file_ops::FileOpError::Io))
+                            },
+                            move |result| {
+                                Msg::Files(FilesMsg::PasteFinished(
+                                    root, target, source, cut, result,
+                                ))
+                            },
+                        );
+                    }
+                    files_panel::FileTreeAction::CopyRelativePath => {
+                        let text = self
+                            .file_tree
+                            .root()
+                            .and_then(|root| path.strip_prefix(root).ok())
+                            .unwrap_or(path.as_path())
+                            .to_string_lossy()
+                            .into_owned();
+                        return iced::clipboard::write(text);
+                    }
+                    files_panel::FileTreeAction::CopyAbsolutePath => {
+                        return iced::clipboard::write(path.to_string_lossy().into_owned());
+                    }
+                }
+            }
+            FilesMsg::PasteFinished(root, _target, source, cut, result) => {
+                if self.file_tree.root() == Some(root.as_path()) {
+                    match result {
+                        Ok(path) => {
+                            if cut {
+                                self.file_tree.retarget_path(&source, &path);
+                                self.file_tree.clear_clipboard();
+                            }
+                            self.file_tree.refresh();
+                        }
+                        Err(error) => {
+                            self.files_operation_notice = Some((
+                                labels::FILES_COULD_NOT_PASTE_TITLE,
+                                Self::file_operation_error_message(error),
+                            ));
+                        }
+                    }
+                }
+            }
+            FilesMsg::DismissOperationNotice => self.files_operation_notice = None,
+            FilesMsg::ToggleAgentMenu => self.agent_menu_open = !self.agent_menu_open,
+            FilesMsg::CloseAgentMenu => self.agent_menu_open = false,
+            FilesMsg::SetAgentFilter(tab) => {
+                self.agent_filter = tab;
+                self.agent_menu_open = false;
+            }
+        }
+        Task::none()
     }
 
     /// Clique num resultado da busca: abre o arquivo e revela a linha (`openSearchResult`).
@@ -7024,6 +7473,11 @@ impl Shell {
                 }
             }
             Msg::Editor(path, msg) => {
+                if let editor_pane::EditorMsg::OpenPath(folder) = &msg {
+                    open_in_file_manager(folder);
+                    return Task::none();
+                }
+                let show_file_preview = matches!(msg, editor_pane::EditorMsg::TogglePreview);
                 if matches!(msg, editor_pane::EditorMsg::ApplyCkpLayout) {
                     return self.apply_ckp_editor(&path);
                 }
@@ -7064,6 +7518,20 @@ impl Shell {
                         }
                         self.telemetry.record_file_edit(&path);
                     }
+                    if show_file_preview {
+                        let source = editor.state.buffer.text().to_owned();
+                        if path.extension().is_some_and(|ext| {
+                            ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+                        }) {
+                            let body = crate::file_viewer_assets::split_frontmatter(&source)
+                                .map_or_else(|| source.clone(), |frontmatter| frontmatter.body);
+                            self.file_preview_markdown.insert(
+                                path.clone(),
+                                iced::widget::markdown::Content::parse(&body),
+                            );
+                        }
+                        self.file_previews.insert(path.clone());
+                    }
                     task
                 } else {
                     Task::none()
@@ -7076,89 +7544,34 @@ impl Shell {
                 let _ = path;
                 Task::none()
             }
-            Msg::FileViewer(file_viewer::FileViewerMsg::Ignore) => Task::none(),
-            Msg::Files(files_msg) => {
-                match files_msg {
-                    FilesMsg::ToggleDir(dir) => self.file_tree.toggle_dir(&dir),
-                    FilesMsg::SelectFile(file_path) => {
-                        let ViewerHook::OpenFile(target) = self.file_tree.select_file(file_path);
-                        self.open_in_editor(target);
-                    }
-                    FilesMsg::CollapseAll => self.file_tree.collapse_all(),
-                    FilesMsg::Refresh => {
-                        self.file_tree.refresh();
-                        return self
-                            .git
-                            .start(git_state::Action::Refresh)
-                            .map(Msg::GitResult);
-                    }
-                    FilesMsg::StartCreate(kind) => {
-                        if self.file_tree.root().is_some() && self.file_create.is_none() {
-                            self.file_create_generation =
-                                self.file_create_generation.wrapping_add(1);
-                            self.file_create = Some(file_ops::CreateForm::new(kind));
-                            return iced::widget::operation::focus("files-create");
-                        }
-                    }
-                    FilesMsg::CreateNameChanged(name) => {
-                        if let Some(form) = self.file_create.as_mut().filter(|form| !form.busy) {
-                            form.name = name;
-                            form.error = None;
-                        }
-                    }
-                    FilesMsg::CancelCreate => {
-                        if self.file_create.as_ref().is_some_and(|form| !form.busy) {
-                            self.file_create = None;
-                        }
-                    }
-                    FilesMsg::SubmitCreate => {
-                        if let (Some(root), Some(form)) = (
-                            self.file_tree.root(),
-                            self.file_create.as_mut().filter(|form| !form.busy),
-                        ) {
-                            form.busy = true;
-                            form.error = None;
-                            let generation = self.file_create_generation;
-                            return Task::perform(
-                                file_ops::create_async(
-                                    root.to_path_buf(),
-                                    form.name.clone(),
-                                    form.kind,
-                                ),
-                                move |(root, result)| {
-                                    Msg::Files(FilesMsg::CreateFinished(generation, root, result))
-                                },
-                            );
-                        }
-                    }
-                    FilesMsg::ToggleAgentMenu => self.agent_menu_open = !self.agent_menu_open,
-                    FilesMsg::CloseAgentMenu => self.agent_menu_open = false,
-                    FilesMsg::SetAgentFilter(tab) => {
-                        self.agent_filter = tab;
-                        self.agent_menu_open = false;
-                    }
-                    FilesMsg::CreateFinished(generation, root, result) => {
-                        if generation == self.file_create_generation
-                            && self.file_tree.root() == Some(root.as_path())
-                        {
-                            if let Some(form) = self.file_create.as_mut() {
-                                match result {
-                                    Ok(()) => {
-                                        self.file_create = None;
-                                        self.file_tree.refresh();
-                                    }
-                                    Err(error) => {
-                                        form.busy = false;
-                                        form.error = Some(error);
-                                        return iced::widget::operation::focus("files-create");
-                                    }
-                                }
-                            }
-                        }
-                    }
+            Msg::FileViewer(file_viewer::FileViewerMsg::OpenLink(url)) => {
+                if is_openable_viewer_link(&url) {
+                    let program = if cfg!(target_os = "macos") {
+                        "open"
+                    } else if cfg!(windows) {
+                        "explorer"
+                    } else {
+                        "xdg-open"
+                    };
+                    let _ = Command::new(program)
+                        .arg(url)
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn();
                 }
                 Task::none()
             }
+            Msg::FileViewer(file_viewer::FileViewerMsg::ToggleSource(path)) => {
+                self.toggle_file_source(path);
+                Task::none()
+            }
+            Msg::FileViewer(file_viewer::FileViewerMsg::OpenPath(path)) => {
+                open_in_file_manager(&path);
+                Task::none()
+            }
+            Msg::FileViewer(file_viewer::FileViewerMsg::Ignore) => Task::none(),
+            Msg::Files(files_msg) => self.update_files(files_msg),
             Msg::SelectRightTab(tab) => {
                 if self.right_tab() == RightTab::Search && tab != RightTab::Search {
                     self.search.reset();
@@ -9125,6 +9538,68 @@ impl Shell {
         } else {
             Subscription::none()
         };
+        let cancel_rename = if self.files_open
+            && self.right_tab() == RightTab::Files
+            && self.file_rename.as_ref().is_some_and(|form| !form.busy)
+        {
+            iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Msg::Files(FilesMsg::CancelRename)),
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        };
+        let file_tree_shortcuts = if self.files_open
+            && self.right_tab() == RightTab::Files
+            && self.file_create.is_none()
+            && self.file_rename.is_none()
+        {
+            iced::event::listen_with(|event, status, _| {
+                if status != iced::event::Status::Ignored {
+                    return None;
+                }
+                let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key, modifiers, ..
+                }) = event
+                else {
+                    return None;
+                };
+                if modifiers.command() {
+                    return match key.as_ref() {
+                        iced::keyboard::Key::Character(value)
+                            if value.eq_ignore_ascii_case("c") =>
+                        {
+                            Some(Msg::Files(FilesMsg::CopySelected))
+                        }
+                        iced::keyboard::Key::Character(value)
+                            if value.eq_ignore_ascii_case("x") =>
+                        {
+                            Some(Msg::Files(FilesMsg::CutSelected))
+                        }
+                        iced::keyboard::Key::Character(value)
+                            if value.eq_ignore_ascii_case("v") =>
+                        {
+                            Some(Msg::Files(FilesMsg::PasteSelected))
+                        }
+                        _ => None,
+                    };
+                }
+                match key.as_ref() {
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::F2) => {
+                        Some(Msg::Files(FilesMsg::RenameSelected))
+                    }
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete) => {
+                        Some(Msg::Files(FilesMsg::DeleteSelected))
+                    }
+                    _ => None,
+                }
+            })
+        } else {
+            Subscription::none()
+        };
         // renomeando a aba: Esc cancela e clicar fora do campo confirma (perda de foco)
         let tab_rename_events = if self.tab_rename.is_some() {
             iced::event::listen_with(|event, status, _| match event {
@@ -9280,6 +9755,8 @@ impl Shell {
                 harness_spinner,
                 windows,
                 cancel_create,
+                cancel_rename,
+                file_tree_shortcuts,
                 menu_shortcuts,
                 tab_rename_events,
                 localsend_popup_escape,
@@ -9328,13 +9805,25 @@ impl Shell {
             Some(PaneTab::File(path)) => {
                 if let Some(editor) = self.editors.get(path) {
                     let path = path.clone();
-                    editor
-                        .view()
-                        .map(move |message| Msg::Editor(path.clone(), message))
+                    if self.file_previews.contains(&path) {
+                        let markdown = self.file_preview_markdown.get(&path);
+                        file_viewer_view::source_preview(
+                            &path,
+                            self.file_tree.root(),
+                            editor.state.buffer.text(),
+                            markdown,
+                            editor.state.buffer.is_dirty(),
+                        )
+                        .map(Msg::FileViewer)
+                    } else {
+                        editor
+                            .view_with_root(self.file_tree.root())
+                            .map(move |message| Msg::Editor(path.clone(), message))
+                    }
                 } else {
                     self.file_viewers
                         .get(path)
-                        .map(file_viewer_view::view)
+                        .map(|state| file_viewer_view::view(state, self.file_tree.root()))
                         .map(|element| element.map(Msg::FileViewer))
                         .unwrap_or_else(pane_chrome::view_empty_body)
                 }
@@ -9992,6 +10481,7 @@ impl Shell {
                     self.git.root.as_deref(),
                     self.git.busy,
                     self.file_create.as_ref(),
+                    self.file_rename.as_ref(),
                     agents,
                 )
                 .map(Msg::Files),
@@ -10417,6 +10907,49 @@ impl Shell {
         } else {
             layered
         };
+        let layered: Element<'_, Msg> = if let Some(path) = self.pending_files_delete.as_ref() {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let message = if cfg!(target_os = "macos") {
+                format!(
+                    "{}{}{}",
+                    labels::FILES_DELETE_TO_TRASH_PREFIX,
+                    name,
+                    labels::FILES_DELETE_TO_TRASH_SUFFIX
+                )
+            } else {
+                format!(
+                    "{}{}{}",
+                    labels::FILES_DELETE_PERMANENT_PREFIX,
+                    name,
+                    labels::FILES_DELETE_PERMANENT_SUFFIX
+                )
+            };
+            stack![
+                layered,
+                pane_close_dialog::confirm(
+                    labels::FILES_DELETE_QUESTION_TITLE.to_owned(),
+                    message,
+                    labels::DB_DIALOG_DELETE,
+                    Msg::Files(FilesMsg::CancelDelete),
+                    Msg::Files(FilesMsg::ConfirmDelete),
+                    Msg::Noop,
+                )
+            ]
+            .into()
+        } else if let Some((title, message)) = self.files_operation_notice.as_ref() {
+            stack![
+                layered,
+                pane_close_dialog::notice(
+                    title,
+                    message.clone(),
+                    Msg::Files(FilesMsg::DismissOperationNotice),
+                    Msg::Noop,
+                )
+            ]
+            .into()
+        } else {
+            layered
+        };
         let drag_feedback: Option<Element<'_, Msg>> = if self.tab_drag_active {
             self.tab_drag_source
                 .zip(self.tab_drag_cursor)
@@ -10558,6 +11091,15 @@ mod tests {
     use iced_test::simulator::Simulator;
 
     use crate::island::IslandAgentState;
+
+    #[test]
+    fn markdown_viewer_links_only_open_clean_web_urls() {
+        assert!(is_openable_viewer_link("https://example.com/path?q=ok"));
+        assert!(is_openable_viewer_link("http://example.com"));
+        assert!(!is_openable_viewer_link("javascript:alert(1)"));
+        assert!(!is_openable_viewer_link("https://example.com/a b"));
+        assert!(!is_openable_viewer_link("https://example.com/\n"));
+    }
 
     #[test]
     fn ctrl_w_is_the_close_tab_shortcut_without_other_modifiers() {
@@ -10768,6 +11310,8 @@ mod tests {
             chats: BTreeMap::new(),
             file_viewers: BTreeMap::new(),
             editors: BTreeMap::new(),
+            file_previews: BTreeSet::new(),
+            file_preview_markdown: BTreeMap::new(),
             #[cfg(target_os = "linux")]
             lsp: lsp_runtime::Pool::default(),
             pending_close_file: None,
@@ -10779,6 +11323,11 @@ mod tests {
             file_tree: FileTree::new(),
             file_create: None,
             file_create_generation: 0,
+            file_rename: None,
+            file_rename_generation: 0,
+            pending_files_delete: None,
+            file_delete_generation: 0,
+            files_operation_notice: None,
             git: git_state::GitState::default(),
             right_tab: RightTab::default(),
             agent_filter: None,

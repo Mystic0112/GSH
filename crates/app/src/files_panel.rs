@@ -1,9 +1,4 @@
-//! Aba Arquivos do painel direito (`file_tree_panel.dart` do Flutter).
-//!
-//! Corpo da aba (a moldura e a barra de abas ficam em `right_tabs`):
-//! cabeçalho "ARQUIVOS" com ações de recolher/atualizar, árvore de arquivos
-//! interativa (pastas expansíveis de forma lazy e seleção de arquivo) e rodapé
-//! de status LSP de 34px.
+//! Aba Arquivos do painel direito, portada do `file_tree_panel.dart` do Flutter.
 
 use std::path::PathBuf;
 
@@ -11,41 +6,62 @@ use iced::widget::{button, column, container, row, scrollable, text, text_input,
 use iced::{Alignment, Background, Border, Element, Fill, Length, Padding, Theme};
 
 use crate::agent_file_marks::{self, AgentFiles};
-use crate::file_ops::{CreateForm, CreateKind, FileOpError};
+use crate::file_ops::{CreateForm, CreateKind, FileOpError, RenameForm};
 use crate::file_tree::{FileEntry, FileTree, TreeRow};
 use crate::labels;
 use crate::theme;
 
-/// Mensagens emitidas pelo painel de arquivos.
+pub use crate::file_tree_context_menu::FileTreeAction;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FilesMsg {
-    /// Expande ou recolhe uma pasta na árvore.
     ToggleDir(PathBuf),
-    /// Clique simples num arquivo na árvore: seleciona e abre/ativa sua aba no pane central.
     SelectFile(PathBuf),
-    /// Recolhe todas as pastas expandidas.
+    ClearSelection,
+    CopySelected,
+    CutSelected,
+    PasteSelected,
+    RenameSelected,
+    DeleteSelected,
     CollapseAll,
-    /// Atualiza os diretórios abertos no painel.
     Refresh,
     StartCreate(CreateKind),
     CreateNameChanged(String),
     SubmitCreate,
     CancelCreate,
     CreateFinished(u64, PathBuf, Result<(), FileOpError>),
-    /// Botão robô do cabeçalho: abre ou fecha o menu do filtro por agente.
+    StartRename(PathBuf),
+    RenameNameChanged(String),
+    SubmitRename,
+    CancelRename,
+    RenameFinished(u64, PathBuf, Result<(), FileOpError>),
+    RequestDelete(PathBuf),
+    ConfirmDelete,
+    CancelDelete,
+    DeleteFinished(u64, PathBuf, PathBuf, Result<(), FileOpError>),
+    PasteFinished(
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        bool,
+        Result<PathBuf, FileOpError>,
+    ),
+    DismissOperationNotice,
+    OpenContextMenu(PathBuf),
+    CloseContextMenu,
+    ContextAction(PathBuf, FileTreeAction),
     ToggleAgentMenu,
     CloseAgentMenu,
-    /// Escolha do menu: `None` é "Todos os agentes".
     SetAgentFilter(Option<String>),
 }
 
-/// Corpo da aba Arquivos: cabeçalho (só com pasta), árvore e rodapé de status LSP.
 pub fn view<'a>(
     tree: &'a FileTree,
     status: Option<&'a gsh_git::GitRepoStatus>,
     repo_root: Option<&'a std::path::Path>,
     busy: bool,
     form: Option<&'a CreateForm>,
+    rename: Option<&'a RenameForm>,
     agents: AgentFiles<'_>,
 ) -> Element<'a, FilesMsg> {
     let has_root = tree.root().is_some();
@@ -56,10 +72,9 @@ pub fn view<'a>(
     // Com filtro por agente a árvore vira a lista plana do que ele tocou.
     let content = match agents.filter {
         Some(tab_id) if has_root => agent_file_marks::touched_list(agents, tab_id, tree.root()),
-        _ => view_tree_body(tree, status, repo_root, agents),
+        _ => view_tree_body(tree, status, repo_root, form, rename, agents),
     };
-    body.push(create_input(form))
-        .push(content)
+    body.push(content)
         .push(crate::panel_widgets::hairline_h())
         .push(view_footer())
         .into()
@@ -112,13 +127,14 @@ fn header_action<'a>(glyph: &'static str, message: Option<FilesMsg>) -> Element<
     .into()
 }
 
-fn create_input(form: Option<&CreateForm>) -> Element<'_, FilesMsg> {
-    let Some(form) = form else {
-        return Space::new().height(0).into();
-    };
+fn create_input(form: &CreateForm, depth: usize) -> Element<'_, FilesMsg> {
     let hint = match form.kind {
         CreateKind::Folder => labels::FILES_NEW_FOLDER_HINT,
         CreateKind::File => labels::FILES_NEW_FILE_HINT,
+    };
+    let icon = match form.kind {
+        CreateKind::Folder => crate::file_icons::view("new", true, false),
+        CreateKind::File => crate::file_icons::view("new file", false, false),
     };
     let input = text_input(hint, &form.name)
         .id("files-create")
@@ -127,21 +143,42 @@ fn create_input(form: Option<&CreateForm>) -> Element<'_, FilesMsg> {
         )
         .on_submit_maybe((!form.busy).then_some(FilesMsg::SubmitCreate))
         .style(crate::panel_widgets::input_style);
-    let mut content = column![input].spacing(4);
+    let content = row![
+        Space::new().width((depth as f32) * theme::FILE_TREE_ROW_INDENT),
+        Space::new().width(theme::FILE_TREE_CHEVRON_WIDTH + theme::FILE_TREE_CHEVRON_GAP),
+        icon,
+        Space::new().width(theme::FILE_TREE_ICON_GAP),
+        input.width(Fill),
+    ]
+    .align_y(Alignment::Center);
     if let Some(error) = form.error {
-        content = content.push(
+        return column![
+            content,
             text(error.label())
                 .size(theme::SIZE_LABEL)
-                .color(theme::palette().error),
-        );
+                .color(theme::palette().error)
+        ]
+        .padding(Padding {
+            top: 0.0,
+            right: theme::FILE_TREE_ROW_PADDING,
+            bottom: 0.0,
+            left: (depth as f32) * theme::FILE_TREE_ROW_INDENT,
+        })
+        .into();
     }
-    container(content).padding([0, 12]).width(Fill).into()
+    container(content)
+        .height(theme::FILE_TREE_ROW_HEIGHT)
+        .padding([0.0, theme::FILE_TREE_ROW_PADDING])
+        .width(Fill)
+        .into()
 }
 
 fn view_tree_body<'a>(
     tree: &'a FileTree,
     status: Option<&'a gsh_git::GitRepoStatus>,
     repo_root: Option<&'a std::path::Path>,
+    form: Option<&'a CreateForm>,
+    rename: Option<&'a RenameForm>,
     agents: AgentFiles<'_>,
 ) -> Element<'a, FilesMsg> {
     if tree.root().is_none() {
@@ -153,6 +190,12 @@ fn view_tree_body<'a>(
         theme::FILE_TREE_SCROLL_PADDING_VERTICAL,
         theme::FILE_TREE_ROW_PADDING,
     ]);
+    let Some(root) = tree.root() else {
+        return crate::panel_widgets::empty_label(labels::FILES_NO_FOLDER);
+    };
+    if let Some(form) = form.filter(|form| root == form.target_dir.as_path()) {
+        list = list.push(create_input(form, 0));
+    }
     for item in rows {
         match item {
             TreeRow::Entry {
@@ -169,9 +212,28 @@ fn view_tree_body<'a>(
                 } else {
                     agent_file_marks::marks(agents, &entry.path)
                 };
+                let renaming = rename.filter(|rename| rename.path == entry.path);
+                let empty_dir = entry.is_dir && expanded && tree.is_expanded_empty_dir(&entry.path);
+                let empty_path = entry.path.clone();
+                let create_form = form.filter(|form| form.target_dir == empty_path);
                 list = list.push(view_entry_row(
-                    entry, depth, expanded, selected, git_status, marks,
+                    tree,
+                    entry,
+                    EntryRowState {
+                        depth,
+                        expanded,
+                        selected,
+                        git_status,
+                        marks,
+                        renaming,
+                    },
                 ));
+                if let Some(form) = create_form {
+                    list = list.push(create_input(form, depth.saturating_add(1)));
+                }
+                if empty_dir {
+                    list = list.push(empty_folder_slot(tree, &empty_path));
+                }
             }
             TreeRow::Error { depth, error } => {
                 let indent = (depth as f32) * 12.0 + 8.0;
@@ -193,20 +255,58 @@ fn view_tree_body<'a>(
         }
     }
 
-    scrollable(list.width(Fill)).width(Fill).height(Fill).into()
+    let root_path = PathBuf::from(root);
+    let root_menu = (tree.context_target() == Some(root_path.as_path())).then(|| {
+        crate::file_tree_context_menu::context_menu(
+            &root_path,
+            true,
+            false,
+            tree.can_paste(&root_path),
+            false,
+        )
+    });
+    crate::anchored::Anchored::new(
+        iced::widget::mouse_area(scrollable(list.width(Fill)).width(Fill).height(Fill))
+            .on_press(FilesMsg::ClearSelection)
+            .on_right_press(FilesMsg::OpenContextMenu(root_path)),
+        root_menu,
+        FilesMsg::CloseContextMenu,
+    )
+    .on_escape(FilesMsg::CloseContextMenu)
+    .into()
 }
 
-fn view_entry_row<'a>(
-    entry: FileEntry,
+fn empty_folder_slot<'a>(tree: &'a FileTree, path: &std::path::Path) -> Element<'a, FilesMsg> {
+    let popup = (tree.context_target() == Some(path)).then(|| {
+        crate::file_tree_context_menu::context_menu(path, true, false, tree.can_paste(path), false)
+    });
+    crate::anchored::Anchored::new(
+        iced::widget::mouse_area(Space::new().width(Fill).height(theme::FILE_TREE_ROW_HEIGHT))
+            .on_right_press(FilesMsg::OpenContextMenu(path.to_path_buf())),
+        popup,
+        FilesMsg::CloseContextMenu,
+    )
+    .on_escape(FilesMsg::CloseContextMenu)
+    .into()
+}
+
+struct EntryRowState<'a> {
     depth: usize,
     expanded: bool,
     selected: bool,
     git_status: Option<gsh_git::GitFileStatus>,
     marks: Option<Element<'a, FilesMsg>>,
+    renaming: Option<&'a RenameForm>,
+}
+
+fn view_entry_row<'a>(
+    tree: &'a FileTree,
+    entry: FileEntry,
+    state: EntryRowState<'a>,
 ) -> Element<'a, FilesMsg> {
-    let indent = (depth as f32) * theme::FILE_TREE_ROW_INDENT;
+    let indent = (state.depth as f32) * theme::FILE_TREE_ROW_INDENT;
     let chevron = if entry.is_dir {
-        if expanded {
+        if state.expanded {
             labels::ICON_CHEVRON_DOWN
         } else {
             labels::ICON_CHEVRON_RIGHT
@@ -214,20 +314,48 @@ fn view_entry_row<'a>(
     } else {
         ""
     };
-    let icon = crate::file_icons::view(&entry.name, entry.is_dir, expanded);
-    let name_color = if let Some(status) = git_status {
+    let icon = crate::file_icons::view(&entry.name, entry.is_dir, state.expanded);
+    let name_color = if let Some(status) = state.git_status {
         crate::git_presenter::status_color(status)
-    } else if selected {
+    } else if state.selected {
         theme::palette().text
     } else {
         theme::palette().text2
     };
     let msg = if entry.is_dir {
-        FilesMsg::ToggleDir(entry.path)
+        FilesMsg::ToggleDir(entry.path.clone())
     } else {
-        FilesMsg::SelectFile(entry.path)
+        FilesMsg::SelectFile(entry.path.clone())
     };
 
+    let label: Element<'a, FilesMsg> = if let Some(form) = state.renaming {
+        let input = text_input("", &form.name)
+            .id("files-rename")
+            .on_input_maybe(
+                (!form.busy).then_some(FilesMsg::RenameNameChanged as fn(String) -> FilesMsg),
+            )
+            .on_submit_maybe((!form.busy).then_some(FilesMsg::SubmitRename))
+            .style(crate::panel_widgets::input_style);
+        if let Some(error) = form.error {
+            column![
+                input,
+                text(error.label())
+                    .size(theme::SIZE_LABEL)
+                    .color(theme::palette().error),
+            ]
+            .spacing(2.0)
+            .into()
+        } else {
+            input.into()
+        }
+    } else {
+        text(entry.name.clone())
+            .font(theme::FONT_BODY)
+            .size(theme::FILE_TREE_NAME_SIZE)
+            .color(name_color)
+            .wrapping(iced::widget::text::Wrapping::None)
+            .into()
+    };
     let mut row_content = row![
         Space::new().width(indent),
         container(
@@ -240,29 +368,25 @@ fn view_entry_row<'a>(
         Space::new().width(theme::FILE_TREE_CHEVRON_GAP),
         icon,
         Space::new().width(theme::FILE_TREE_ICON_GAP),
-        container(
-            text(entry.name)
-                .font(theme::FONT_BODY)
-                .size(theme::FILE_TREE_NAME_SIZE)
-                .color(name_color)
-                .wrapping(iced::widget::text::Wrapping::None)
-        )
-        .width(Fill)
-        .clip(true),
+        container(label).width(Fill).clip(true),
     ]
     .align_y(Alignment::Center);
-    if let Some(marks) = marks {
+    if let Some(marks) = state.marks {
         row_content = row_content.push(marks);
     }
 
-    button(row_content)
+    let row = button(row_content)
         .width(Fill)
-        .height(theme::FILE_TREE_ROW_HEIGHT)
+        .height(if state.renaming.is_some() {
+            Length::Shrink
+        } else {
+            Length::Fixed(theme::FILE_TREE_ROW_HEIGHT)
+        })
         .padding([0.0, theme::FILE_TREE_ROW_PADDING])
         .on_press(msg)
         .style(move |_: &Theme, status| {
             let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let bg = if selected {
+            let bg = if state.selected {
                 Some(Background::Color(theme::palette().panel2))
             } else if hovered {
                 Some(Background::Color(theme::palette().panel))
@@ -279,8 +403,29 @@ fn view_entry_row<'a>(
                 },
                 ..Default::default()
             }
-        })
-        .into()
+        });
+    let is_dir = entry.is_dir && !entry.name.to_ascii_lowercase().ends_with(".notebook");
+    let paste_dir = if is_dir {
+        entry.path.as_path()
+    } else {
+        entry.path.parent().unwrap_or(entry.path.as_path())
+    };
+    let can_paste = tree.can_paste(paste_dir);
+    let menu = crate::file_tree_context_menu::context_menu(
+        &entry.path,
+        is_dir,
+        state.git_status.is_some(),
+        can_paste,
+        true,
+    );
+    let is_open = tree.context_target() == Some(entry.path.as_path());
+    crate::anchored::Anchored::new(
+        iced::widget::mouse_area(row).on_right_press(FilesMsg::OpenContextMenu(entry.path.clone())),
+        is_open.then_some(menu),
+        FilesMsg::CloseContextMenu,
+    )
+    .on_escape(FilesMsg::CloseContextMenu)
+    .into()
 }
 
 fn view_footer<'a>() -> Element<'a, FilesMsg> {

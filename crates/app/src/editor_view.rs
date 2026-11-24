@@ -118,6 +118,9 @@ impl EditorPane {
             .into()
     }
     pub fn view(&self) -> Element<'_, EditorMsg> {
+        self.view_with_root(None)
+    }
+    pub fn view_with_root(&self, root: Option<&std::path::Path>) -> Element<'_, EditorMsg> {
         use iced::widget::{column, container, responsive, text};
         let body = responsive(move |size| self.body(size.height, size.width));
         let mut content = column![body].height(Fill);
@@ -211,6 +214,21 @@ impl EditorPane {
                     iced::widget::button(labels::EDITOR_OVERWRITE).on_press(EditorMsg::Overwrite),
                 );
             }
+        }
+        if self.state.path.extension().is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("md")
+                || ext.eq_ignore_ascii_case("markdown")
+                || ext.eq_ignore_ascii_case("svg")
+        }) {
+            content = content.push(crate::file_viewer_view::footer(
+                &self.state.path,
+                root,
+                self.state.buffer.is_dirty(),
+                true,
+                true,
+                Some(EditorMsg::TogglePreview),
+                EditorMsg::OpenPath,
+            ));
         }
         container(content)
             .height(Fill)
