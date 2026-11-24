@@ -4,7 +4,8 @@
 //! mensagens do usuário, respostas do assistente (com cursor durante stream),
 //! chamadas de ferramenta resumidas em linha (expansíveis) e avisos de erro.
 
-use iced::widget::{button, column, container, row, scrollable, text, Space};
+use gsh_chat::SessionState;
+use iced::widget::{button, column, container, row, scrollable, text, tooltip, Space};
 use iced::{Alignment, Background, Border, Element, Fill, Length, Padding, Theme};
 
 use crate::chat_composer;
@@ -58,8 +59,12 @@ const USER_BUBBLE_MAX_WIDTH: f32 = 580.0;
 const MAX_TOOL_RESULT_LINES: usize = 14;
 
 /// Renderiza o [`ChatPane`] completo (cabeçalho + transcrição/vazio + composer).
-pub fn view(pane: &ChatPane, transcript_width: f32) -> Element<'_, ChatMsg> {
-    let header = view_header(pane);
+pub fn view(
+    pane: &ChatPane,
+    transcript_width: f32,
+    show_session_state: bool,
+) -> Element<'_, ChatMsg> {
+    let header = view_header(pane, show_session_state);
 
     let center: Element<'_, ChatMsg> = if pane.items().is_empty() {
         view_empty(pane)
@@ -95,7 +100,7 @@ pub fn view(pane: &ChatPane, transcript_width: f32) -> Element<'_, ChatMsg> {
     .into()
 }
 
-fn view_header(pane: &ChatPane) -> Element<'_, ChatMsg> {
+fn view_header(pane: &ChatPane, show_session_state: bool) -> Element<'_, ChatMsg> {
     let title: Element<'_, ChatMsg> = if pane.rename_open() {
         row![
             iced::widget::text_input(labels::CHAT_RENAME, pane.rename_text())
@@ -125,6 +130,13 @@ fn view_header(pane: &ChatPane) -> Element<'_, ChatMsg> {
         .style(theme::ghost_button)
         .into()
     };
+    let session_badge = if show_session_state {
+        pane.session_state()
+            .map(|(state, detail)| view_session_state_badge(state, detail))
+            .unwrap_or_else(|| Space::new().width(0.0).into())
+    } else {
+        Space::new().width(0.0).into()
+    };
     let content = row![
         text(labels::ICON_LAPTOP)
             .font(theme::FONT_ICON)
@@ -148,6 +160,7 @@ fn view_header(pane: &ChatPane) -> Element<'_, ChatMsg> {
             },
             ..Default::default()
         }),
+        session_badge,
         Space::new().width(Fill),
         button(row![
             text(labels::ICON_HISTORY)
@@ -186,6 +199,53 @@ fn view_header(pane: &ChatPane) -> Element<'_, ChatMsg> {
         .width(Fill)
         .height(Length::Fixed(38.0))
         .into()
+}
+
+fn view_session_state_badge(state: SessionState, detail: &str) -> Element<'_, ChatMsg> {
+    let color = match state {
+        SessionState::Completed => theme::palette().online,
+        SessionState::ReviewReady => theme::palette().accent_text,
+        SessionState::Blocked => theme::palette().warn,
+        SessionState::Failed => theme::palette().error,
+    };
+    let label = labels::chat_session_state(state);
+    let badge: Element<'_, ChatMsg> = container(
+        row![
+            container(Space::new().width(6.0).height(6.0)).style(move |_: &Theme| {
+                container::Style {
+                    background: Some(Background::Color(color)),
+                    border: Border {
+                        radius: 3.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
+            }),
+            text(label).size(theme::SIZE_TAB).color(color),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
+    )
+    .padding([3, 8])
+    .style(move |_: &Theme| container::Style {
+        background: Some(Background::Color(theme::with_alpha(color, 0.12))),
+        border: Border {
+            radius: 10.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .into();
+    if detail.is_empty() {
+        badge
+    } else {
+        tooltip(
+            badge,
+            crate::pane_chrome::tip_bubble(detail),
+            tooltip::Position::Bottom,
+        )
+        .into()
+    }
 }
 
 fn view_history(pane: &ChatPane) -> Element<'_, ChatMsg> {
@@ -382,12 +442,114 @@ fn view_transcript(pane: &ChatPane, transcript_width: f32) -> Element<'_, ChatMs
 
     let centered = container(list).width(Fill).center_x(Fill).padding([24, 24]);
 
-    scrollable(centered).width(Fill).height(Fill).into()
+    scrollable(centered)
+        .id(pane.transcript_scroll_id())
+        .on_scroll(|viewport| ChatMsg::TranscriptScrolled(transcript_near_end(viewport)))
+        .width(Fill)
+        .height(Fill)
+        .into()
+}
+
+fn transcript_near_end(viewport: scrollable::Viewport) -> bool {
+    transcript_remaining_height(
+        viewport.content_bounds().height,
+        viewport.bounds().height,
+        viewport.absolute_offset().y,
+    ) <= 80.0
+}
+
+fn transcript_remaining_height(content_height: f32, viewport_height: f32, offset_y: f32) -> f32 {
+    content_height - viewport_height - offset_y
+}
+
+#[cfg(test)]
+mod transcript_scroll_tests {
+    use super::transcript_remaining_height;
+
+    #[test]
+    fn follows_stream_only_when_within_eighty_pixels_of_end() {
+        assert!(transcript_remaining_height(1_000.0, 500.0, 420.0) <= 80.0);
+        assert!(transcript_remaining_height(1_000.0, 500.0, 500.0) <= 80.0);
+        assert!(transcript_remaining_height(400.0, 500.0, 0.0) <= 80.0);
+        assert!(transcript_remaining_height(1_000.0, 500.0, 419.0) > 80.0);
+    }
 }
 
 fn is_edit_tool(tool: &ChatToolEntry) -> bool {
-    matches!(tool.name.as_str(), "Edit" | "MultiEdit" | "Write")
+    !tool.is_error && matches!(tool.name.as_str(), "Edit" | "MultiEdit" | "Write")
 }
+
+#[cfg(test)]
+mod edit_card_tests {
+    use super::is_edit_tool;
+    use crate::chat_pane::ChatToolEntry;
+
+    fn edit_tool(is_error: bool) -> ChatToolEntry {
+        ChatToolEntry {
+            id: "edit".to_owned(),
+            name: "Edit".to_owned(),
+            summary: "arquivo.rs".to_owned(),
+            command: None,
+            done: true,
+            is_error,
+            result: String::new(),
+            expanded: false,
+            input: serde_json::Map::new(),
+        }
+    }
+
+    #[test]
+    fn uses_portuguese_singular_and_plural_file_labels() {
+        assert_eq!(crate::labels::chat_edited_files(1), "Editou 1 arquivo");
+        assert_eq!(crate::labels::chat_edited_files(2), "Editou 2 arquivos");
+    }
+
+    #[test]
+    fn excludes_failed_edit_tools_from_grouped_cards() {
+        assert!(is_edit_tool(&edit_tool(false)));
+        assert!(!is_edit_tool(&edit_tool(true)));
+    }
+}
+
+#[cfg(test)]
+mod message_action_tests {
+    #[test]
+    fn relative_message_time_matches_chat_telemetry_labels() {
+        assert_eq!(crate::labels::chat_relative_time(60_000, 60_000), "agora");
+        assert_eq!(
+            crate::labels::chat_relative_time(60_000, 361_000),
+            "há 5 min"
+        );
+        assert_eq!(crate::labels::chat_relative_time(0, 7_200_000), "há 2 h");
+        assert_eq!(crate::labels::chat_relative_time(0, 172_800_000), "há 2 d");
+    }
+
+    #[test]
+    fn session_states_use_flutter_portuguese_labels() {
+        use gsh_chat::SessionState;
+
+        assert_eq!(
+            crate::labels::chat_session_state(SessionState::Completed),
+            "Concluída"
+        );
+        assert_eq!(
+            crate::labels::chat_session_state(SessionState::ReviewReady),
+            "Pronta para revisão"
+        );
+        assert_eq!(
+            crate::labels::chat_session_state(SessionState::Blocked),
+            "Bloqueada"
+        );
+        assert_eq!(
+            crate::labels::chat_session_state(SessionState::Failed),
+            "Falhou"
+        );
+    }
+}
+
+#[cfg(test)]
+#[path = "chat_view_snapshots.rs"]
+mod snapshots;
 
 fn edit_hunks(tool: &ChatToolEntry) -> Vec<(String, String)> {
     let value = |key: &str| {
@@ -460,22 +622,31 @@ fn view_edits_card<'a>(pane: &'a ChatPane, indices: &[usize]) -> Element<'a, Cha
     let all_done = tools.iter().all(|(_, t)| t.done);
     let card_index = indices.first().copied().unwrap_or(0);
     let collapsed = pane.edit_card_collapsed(card_index);
-    let mut rows = column![button(
-        text(format!(
-            "{} {} arquivos   +{}  -{}",
-            if all_done {
-                "✓"
-            } else {
-                labels::ICON_TOOL_RUNNING
-            },
-            labels::CHAT_EDITED_FILES,
-            totals.0,
-            totals.1
-        ))
-        .size(theme::SIZE_LABEL)
-    )
-    .on_press(ChatMsg::ToggleEditCard(card_index))
-    .style(theme::ghost_button)]
+    let heading = row![
+        text(if all_done {
+            labels::ICON_DIFFERENCE
+        } else {
+            labels::ICON_TOOL_RUNNING
+        })
+        .font(theme::FONT_ICON)
+        .size(theme::SIZE_ICON)
+        .color(theme::palette().text3),
+        text(labels::chat_edited_files(groups.len())).size(theme::SIZE_LABEL),
+        Space::new().width(Fill),
+        text(format!("+{}", totals.0))
+            .font(theme::FONT_MONO)
+            .size(theme::SIZE_TAB)
+            .color(theme::palette().online),
+        text(format!("−{}", totals.1))
+            .font(theme::FONT_MONO)
+            .size(theme::SIZE_TAB)
+            .color(theme::palette().error),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+    let mut rows = column![button(heading)
+        .on_press(ChatMsg::ToggleEditCard(card_index))
+        .style(theme::ghost_button)]
     .spacing(3);
     if !collapsed {
         for (path, ids) in groups {
@@ -494,14 +665,25 @@ fn view_edits_card<'a>(pane: &'a ChatPane, indices: &[usize]) -> Element<'a, Cha
                 .any(|i| matches!(pane.items().get(*i),Some(ChatItem::Tool(t)) if t.expanded));
             rows = rows.push(
                 button(
-                    text(format!(
-                        "{} {}   +{}  -{}",
-                        if opened { "⌄" } else { "›" },
-                        gsh_core::tabs::basename(&path),
-                        sums.0,
-                        sums.1
-                    ))
-                    .size(theme::SIZE_TAB),
+                    row![
+                        text(if opened { "⌄" } else { "›" }).size(theme::SIZE_TAB),
+                        text(labels::ICON_CODE)
+                            .font(theme::FONT_ICON)
+                            .size(theme::SIZE_ICON)
+                            .color(theme::palette().text3),
+                        text(gsh_core::tabs::basename(&path)).size(theme::SIZE_TAB),
+                        Space::new().width(Fill),
+                        text(format!("+{}", sums.0))
+                            .font(theme::FONT_MONO)
+                            .size(theme::SIZE_TAB)
+                            .color(theme::palette().online),
+                        text(format!("−{}", sums.1))
+                            .font(theme::FONT_MONO)
+                            .size(theme::SIZE_TAB)
+                            .color(theme::palette().error),
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
                 )
                 .on_press(ChatMsg::ToggleEditTools(ids.clone()))
                 .style(theme::ghost_button),
@@ -557,22 +739,19 @@ fn gap_between(a: &ChatItem, b: &ChatItem) -> f32 {
 }
 
 fn view_item<'a>(idx: usize, item: &'a ChatItem, pane: &'a ChatPane) -> Element<'a, ChatMsg> {
-    match item {
-        ChatItem::User { text: msg } => view_user_bubble(msg),
+    let body = match item {
+        ChatItem::User { text: msg, .. } => view_user_bubble(idx, msg, pane),
         ChatItem::Assistant {
             text: msg,
             streaming,
-        } => view_assistant_text(msg, *streaming, pane.markdown(idx), pane),
+            ..
+        } => view_assistant_text(idx, msg, *streaming, pane.markdown(idx), pane),
         ChatItem::Tool(tool) => view_tool_line(idx, tool),
         ChatItem::Error { message } => view_error_notice(message),
-        ChatItem::Thinking { text: thinking } => container(
-            text(thinking.as_str())
-                .font(theme::FONT_BODY)
-                .size(theme::SIZE_LABEL)
-                .color(theme::palette().text3),
-        )
-        .width(Fill)
-        .into(),
+        ChatItem::Thinking {
+            text: thinking,
+            streaming,
+        } => view_thinking(idx, thinking, *streaming, pane),
         ChatItem::Permission {
             request_id,
             tool,
@@ -845,24 +1024,191 @@ fn view_item<'a>(idx: usize, item: &'a ChatItem, pane: &'a ChatPane) -> Element<
         )
         .width(Fill)
         .into(),
-        ChatItem::Classified { state, detail } => container(
-            text(format!("{state:?}: {detail}"))
-                .font(theme::FONT_BODY)
-                .size(theme::SIZE_LABEL)
-                .color(theme::palette().text3),
-        )
-        .width(Fill)
-        .into(),
+    };
+    let message = match item {
+        ChatItem::User { text, at_ms } => Some((text.as_str(), *at_ms, true, false)),
+        ChatItem::Assistant {
+            text,
+            streaming: false,
+            at_ms,
+        } => Some((text.as_str(), *at_ms, false, true)),
+        _ => None,
+    };
+    if let Some((text, at_ms, user, assistant)) = message {
+        view_message_actions(idx, text, at_ms, user, assistant, pane, body)
+    } else {
+        body
     }
 }
 
-fn view_user_bubble(msg: &str) -> Element<'_, ChatMsg> {
-    let bubble = container(
-        text(msg)
-            .font(theme::FONT_BODY)
-            .size(theme::SIZE_BODY)
-            .color(theme::palette().text),
+fn view_thinking<'a>(
+    index: usize,
+    thinking: &'a str,
+    streaming: bool,
+    pane: &'a ChatPane,
+) -> Element<'a, ChatMsg> {
+    let collapsed = pane.thinking_collapsed(index);
+    let heading = row![
+        text(labels::ICON_LIGHTBULB)
+            .font(theme::FONT_ICON)
+            .size(theme::SIZE_ICON)
+            .color(theme::palette().text3),
+        text(if streaming {
+            labels::CHAT_THINKING_LIVE
+        } else {
+            labels::CHAT_THINKING
+        })
+        .size(theme::SIZE_LABEL)
+        .color(theme::palette().text3),
+        text(if collapsed {
+            labels::ICON_CHEVRON_RIGHT
+        } else {
+            labels::ICON_CHEVRON_DOWN
+        })
+        .font(theme::FONT_ICON)
+        .size(theme::SIZE_TAB)
+        .color(theme::palette().text3),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    let mut content = column![button(heading)
+        .on_press(ChatMsg::ToggleThinking(index))
+        .style(theme::ghost_button)]
+    .spacing(4);
+    if !collapsed {
+        content = content.push(
+            row![
+                container(Space::new().width(2.0).height(Fill)).style(|_: &Theme| {
+                    container::Style {
+                        background: Some(Background::Color(theme::palette().border2)),
+                        ..Default::default()
+                    }
+                }),
+                Space::new().width(10.0),
+                selectable_message_text(index, pane, thinking.trim(), theme::SIZE_LABEL, true,),
+            ]
+            .width(Fill),
+        );
+    }
+    content.width(Fill).into()
+}
+
+fn selectable_message_text<'a>(
+    index: usize,
+    pane: &'a ChatPane,
+    fallback: &'a str,
+    size: f32,
+    italic: bool,
+) -> Element<'a, ChatMsg> {
+    let font = if italic {
+        iced::Font {
+            style: iced::font::Style::Italic,
+            ..theme::FONT_BODY
+        }
+    } else {
+        theme::FONT_BODY
+    };
+    let Some(content) = pane.message_editor(index) else {
+        return text(fallback)
+            .font(font)
+            .size(size)
+            .color(theme::palette().text)
+            .into();
+    };
+    iced::widget::text_editor(content)
+        .on_action(move |action| ChatMsg::MessageTextAction { index, action })
+        .font(font)
+        .size(size)
+        .line_height(iced::widget::text::LineHeight::Relative(
+            theme::LINE_HEIGHT_DISPLAY,
+        ))
+        .padding(0)
+        .height(Length::Shrink)
+        .style(|_: &Theme, _status| iced::widget::text_editor::Style {
+            background: Background::Color(iced::Color::TRANSPARENT),
+            border: Border::default(),
+            placeholder: theme::palette().text4,
+            value: theme::palette().text,
+            selection: theme::palette().accent_soft,
+        })
+        .into()
+}
+
+fn view_message_actions<'a>(
+    index: usize,
+    message: &str,
+    at_ms: u64,
+    user: bool,
+    assistant: bool,
+    pane: &'a ChatPane,
+    body: Element<'a, ChatMsg>,
+) -> Element<'a, ChatMsg> {
+    let always = assistant && index + 1 == pane.items().len() && !pane.is_busy();
+    let visible = always || pane.hovered_message() == Some(index);
+    let copied = pane.copied_message() == Some(index);
+    let copy = button(
+        text(if copied {
+            labels::ICON_CHECK
+        } else {
+            labels::ICON_CONTENT_COPY
+        })
+        .font(theme::FONT_ICON)
+        .size(theme::SIZE_TAB)
+        .color(theme::palette().text3),
     )
+    .padding(3)
+    .on_press(ChatMsg::CopyMessage {
+        index,
+        text: message.to_owned(),
+    })
+    .style(theme::ghost_button);
+    let copy = tooltip(
+        copy,
+        text(if copied {
+            labels::CHAT_COPIED
+        } else {
+            labels::CHAT_COPY
+        }),
+        tooltip::Position::Top,
+    );
+    let actions = if visible {
+        row![
+            copy,
+            text(labels::chat_relative_time(at_ms, current_time_ms()))
+                .size(theme::SIZE_TAB)
+                .color(theme::palette().text4),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)
+    } else {
+        row![Space::new().height(18.0)]
+    };
+    let action_line = if user {
+        row![Space::new().width(Fill), actions]
+    } else {
+        row![actions]
+    };
+    iced::widget::mouse_area(column![body, action_line.height(18.0)].spacing(4))
+        .on_enter(ChatMsg::MessageHovered(Some(index)))
+        .on_exit(ChatMsg::MessageHovered(None))
+        .into()
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn view_user_bubble<'a>(idx: usize, msg: &'a str, pane: &'a ChatPane) -> Element<'a, ChatMsg> {
+    let bubble = container(selectable_message_text(
+        idx,
+        pane,
+        msg,
+        theme::SIZE_BODY,
+        false,
+    ))
     .max_width(USER_BUBBLE_MAX_WIDTH)
     .padding([7, 12])
     .style(|_: &Theme| container::Style {
@@ -878,6 +1224,7 @@ fn view_user_bubble(msg: &str) -> Element<'_, ChatMsg> {
 }
 
 fn view_assistant_text<'a>(
+    index: usize,
     msg: &'a str,
     streaming: bool,
     content: Option<&'a iced::widget::markdown::Content>,
@@ -909,14 +1256,16 @@ fn view_assistant_text<'a>(
         }
         return container(blocks).width(Fill).into();
     }
-    container(
+    let content = if streaming {
         text(display)
             .font(theme::FONT_BODY)
             .size(theme::SIZE_BODY)
-            .color(theme::palette().text),
-    )
-    .width(Fill)
-    .into()
+            .color(theme::palette().text)
+            .into()
+    } else {
+        selectable_message_text(index, pane, msg, theme::SIZE_BODY, false)
+    };
+    container(content).width(Fill).into()
 }
 
 fn view_tool_line(idx: usize, tool: &ChatToolEntry) -> Element<'_, ChatMsg> {

@@ -146,7 +146,38 @@ pub const CHAT_HANDOFF_NO_SESSION: &str = "Ainda não há uma sessão para conti
 pub const CHAT_HANDOFF_BUSY: &str = "Aguarde o turno terminar antes de continuar no terminal.";
 pub const CHAT_HANDOFF_ACTIVE: &str = "Esta conversa já está no Remote Control: ";
 pub const CHAT_HANDOFF_NOTICE: &str = "A conversa continuará no terminal.";
-pub const CHAT_EDITED_FILES: &str = "arquivos editados";
+pub const CHAT_THINKING: &str = "Raciocínio";
+pub const CHAT_THINKING_LIVE: &str = "Pensando…";
+pub const CHAT_COPY: &str = "Copiar";
+pub const CHAT_COPIED: &str = "Copiado";
+pub const CHAT_STATE_COMPLETED: &str = "Concluída";
+pub const CHAT_STATE_REVIEW_READY: &str = "Pronta para revisão";
+pub const CHAT_STATE_BLOCKED: &str = "Bloqueada";
+pub const CHAT_STATE_FAILED: &str = "Falhou";
+pub fn chat_edited_files(count: usize) -> String {
+    if count == 1 {
+        "Editou 1 arquivo".to_owned()
+    } else {
+        format!("Editou {count} arquivos")
+    }
+}
+pub fn chat_session_state(state: gsh_chat::SessionState) -> &'static str {
+    match state {
+        gsh_chat::SessionState::Completed => CHAT_STATE_COMPLETED,
+        gsh_chat::SessionState::ReviewReady => CHAT_STATE_REVIEW_READY,
+        gsh_chat::SessionState::Blocked => CHAT_STATE_BLOCKED,
+        gsh_chat::SessionState::Failed => CHAT_STATE_FAILED,
+    }
+}
+pub fn chat_relative_time(at_ms: u64, now_ms: u64) -> String {
+    let elapsed_minutes = now_ms.saturating_sub(at_ms) / 60_000;
+    match elapsed_minutes {
+        0 => TELEMETRY_JUST_NOW.to_owned(),
+        1..=59 => telemetry_minutes_ago(elapsed_minutes as i64),
+        _ if elapsed_minutes < 1_440 => telemetry_hours_ago((elapsed_minutes / 60) as i64),
+        _ => telemetry_days_ago((elapsed_minutes / 1_440) as i64),
+    }
+}
 pub const CHAT_ASK_LIST_SESSIONS: &str = "Liste as sessões para as quais posso mandar mensagem, com ListAgents, e espere eu escolher uma. ";
 pub const CHAT_NO_PEER_SESSIONS: &str = "Nenhuma outra sessão do Claude Code rodando agora.";
 pub const CHAT_SEND_TO_SESSION_PREFIX: &str = "Mande esta mensagem para a sessão \"";
@@ -1594,6 +1625,8 @@ pub const SETTINGS_COMMON_ADD: &str = "Adicionar";
 pub const ICON_ACCOUNT_CIRCLE: &str = "\u{f20b}";
 pub const ICON_CANCEL: &str = "\u{e888}";
 pub const ICON_CODE: &str = "\u{e86f}";
+pub const ICON_DIFFERENCE: &str = "\u{eb7d}";
+pub const ICON_LIGHTBULB: &str = "\u{e90f}";
 pub const ICON_DARK_MODE: &str = "\u{e51c}";
 pub const ICON_DESKTOP_WINDOWS: &str = "\u{e30c}";
 pub const ICON_LIGHT_MODE: &str = "\u{e518}";
