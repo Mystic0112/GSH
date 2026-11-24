@@ -229,7 +229,7 @@ pub const NO_LSP_AVAILABLE: &str = "Nenhum LSP disponível";
 // Ícones tipográficos dos controles de chrome
 pub const ICON_SIDEBAR_LEFT: &str = "\u{f114}";
 pub const ICON_SIDEBAR_RIGHT: &str = "\u{f114}";
-pub const ICON_LAYERS: &str = "\u{e9f4}";
+pub const ICON_LAYERS: &str = "\u{e53b}";
 pub const ICON_BACK: &str = "\u{e5c4}";
 pub const ICON_NEW_FOLDER: &str = "\u{e2cc}";
 pub const ICON_NEW_FILE: &str = "\u{e89c}";
