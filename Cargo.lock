@@ -2563,6 +2563,7 @@ dependencies = [
  "arboard",
  "base64 0.22.1",
  "dirs",
+ "fancy-regex",
  "gsh-chat",
  "gsh-config",
  "gsh-core",

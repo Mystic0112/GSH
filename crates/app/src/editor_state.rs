@@ -8,6 +8,26 @@ pub struct EditorState {
     pub buffer: Buffer,
     pub notice: Option<EditorNotice>,
     fingerprint: Option<(std::time::SystemTime, u64)>,
+    encoding: TextEncoding,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextEncoding {
+    #[default]
+    Utf8,
+    Latin1,
+}
+
+impl TextEncoding {
+    fn encode(self, text: &str) -> Option<Vec<u8>> {
+        match self {
+            Self::Utf8 => Some(text.as_bytes().to_vec()),
+            Self::Latin1 => text
+                .chars()
+                .map(|ch| u8::try_from(u32::from(ch)).ok())
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -26,12 +46,16 @@ impl EditorNotice {
 
 impl EditorState {
     pub fn new(path: PathBuf, text: String) -> Self {
+        Self::with_encoding(path, text, TextEncoding::Utf8)
+    }
+    pub fn with_encoding(path: PathBuf, text: String, encoding: TextEncoding) -> Self {
         let fingerprint = file_fingerprint(&path).ok();
         Self {
             path,
             buffer: Buffer::new(text),
             notice: None,
             fingerprint,
+            encoding,
         }
     }
 
@@ -84,7 +108,14 @@ impl EditorState {
                 if !overwrite && self.fingerprint != Some(current) {
                     return Err(EditorError::ModifiedOnDisk);
                 }
-                self.buffer.save(&path)?;
+                let (bytes, upgraded_encoding) = match self.encoding.encode(self.buffer.text()) {
+                    Some(bytes) => (bytes, false),
+                    None => (self.buffer.text().as_bytes().to_vec(), true),
+                };
+                self.buffer.save_bytes(&path, &bytes)?;
+                if upgraded_encoding {
+                    self.encoding = TextEncoding::Utf8;
+                }
                 self.fingerprint = Some(file_fingerprint(&path).map_err(EditorError::Save)?);
                 Ok(())
             });

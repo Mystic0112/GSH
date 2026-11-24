@@ -189,6 +189,77 @@ mod tests {
     }
 
     #[test]
+    fn capture_file_find_quick_open_and_overview_ruler() {
+        theme::set_active(theme::ThemeVariant::Dark);
+        let mut editor = crate::editor_pane::EditorPane::new(
+            PathBuf::from("/workspace/src/main.rs"),
+            "fn main() {\n    let value = needle;\n    needle();\n}\n".to_owned(),
+        );
+        let _ = editor.update(crate::editor_pane::EditorMsg::FindOpen);
+        let _ = editor.update(crate::editor_pane::EditorMsg::FindQuery(
+            "needle".to_owned(),
+        ));
+        capture("gsh-files-find.png", editor.view().map(|_| ()));
+
+        let mut finder = crate::file_finder_palette::State::from_files(
+            PathBuf::from("/workspace"),
+            vec![
+                "src/main.rs".into(),
+                "docs/readme.md".into(),
+                "src/editor.rs".into(),
+            ],
+        );
+        let generation = finder.generation.wrapping_add(1);
+        let _ = finder.apply(crate::file_finder_palette::Action::Query("read".into()));
+        let _ = finder.apply(crate::file_finder_palette::Action::DebouncedQuery(
+            "read".into(),
+            generation,
+        ));
+        capture(
+            "gsh-files-quickopen.png",
+            crate::file_finder_palette::view(&finder).map(|_| ()),
+        );
+
+        let ruler = iced::widget::canvas(crate::editor_overview_ruler::Ruler {
+            line_count: 100,
+            marks: vec![
+                crate::editor_overview_ruler::Mark {
+                    line: 12,
+                    lane: 0,
+                    color: theme::palette().accent,
+                },
+                crate::editor_overview_ruler::Mark {
+                    line: 51,
+                    lane: 0,
+                    color: theme::palette().accent_text,
+                },
+                crate::editor_overview_ruler::Mark {
+                    line: 85,
+                    lane: 2,
+                    color: theme::palette().error,
+                },
+            ],
+            on_jump: |_| (),
+        })
+        .width(8)
+        .height(Fill);
+        let code = iced::widget::column![
+            iced::widget::text(" 1  use std::path::Path;"),
+            iced::widget::text(" 2  fn parse(input: &str) {"),
+            iced::widget::text(" 3      let value = input;"),
+            iced::widget::text(" 4  }"),
+        ]
+        .spacing(5);
+        let ruler_view: Element<'_, ()> = row![
+            container(code).width(Fill).padding(18),
+            container(ruler).height(Fill).padding([18, 60]),
+        ]
+        .height(Fill)
+        .into();
+        capture("gsh-files-ruler.png", ruler_view);
+    }
+
+    #[test]
     fn capture_empty_rail_and_topbar_snapshots() {
         theme::set_active(theme::ThemeVariant::Dark);
 

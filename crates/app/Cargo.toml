@@ -24,12 +24,13 @@ gsh-localsend = { path = "../localsend" }
 gsh-telemetry = { path = "../telemetry" }
 gsh-term = { path = "../term" }
 gsh-team = { path = "../team" }
+fancy-regex = "0.16.2"
 iced = { version = "0.14", features = ["advanced", "canvas", "tokio", "svg", "image", "markdown"] }
 iced_runtime = "0.14"
 notify-rust = "4.19"
 base64 = "0.22"
 arboard = { version = "3.7", features = ["wayland-data-control"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 pulldown-cmark = "0.12"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rfd.workspace = true

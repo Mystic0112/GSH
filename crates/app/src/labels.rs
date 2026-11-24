@@ -45,6 +45,15 @@ pub const UPDATE_CARD_TITLE: &str = "Update available";
 pub const UPDATE_CARD_CLICK_TO_DOWNLOAD: &str = "click to download";
 pub const UPDATE_CARD_DISMISS_TOOLTIP: &str = "Dispensar";
 pub const EDITOR_APPLY_CKP_LAYOUT: &str = "Aplicar layout";
+pub const EDITOR_FIND_PLACEHOLDER: &str = "Buscar";
+pub const EDITOR_FIND_CASE: &str = "Diferenciar maiúsculas";
+pub const EDITOR_FIND_WORD: &str = "Palavra inteira";
+pub const EDITOR_FIND_REGEX: &str = "Usar expressão regular";
+pub const EDITOR_FIND_PREVIOUS: &str = "Anterior (⇧⏎)";
+pub const EDITOR_FIND_NEXT: &str = "Próximo (⏎)";
+pub const EDITOR_FIND_CLOSE: &str = "Fechar (Esc)";
+pub const EDITOR_FIND_BAD_PATTERN: &str = "Padrão inválido";
+pub const EDITOR_FIND_NO_RESULTS: &str = "Nenhum resultado";
 
 pub const CHANNELS_HEADER: &str = "Canais";
 pub const CHANNELS_ALL: &str = "Todos os canais";
