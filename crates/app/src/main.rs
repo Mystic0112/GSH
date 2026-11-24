@@ -9321,8 +9321,11 @@ impl Shell {
                 .chats
                 .get(&id)
                 .map(|chat| {
-                    chat.view(self.settings.current.chat.transcript_width.px() as f32)
-                        .map(move |m| Msg::Chat(id, m))
+                    chat.view(
+                        self.settings.current.chat.transcript_width.px() as f32,
+                        self.settings.current.chat.classify_session_states,
+                    )
+                    .map(move |m| Msg::Chat(id, m))
                 })
                 .unwrap_or_else(pane_chrome::view_empty_body),
             Some(PaneTab::File(path)) => {
@@ -13613,8 +13616,10 @@ mod tests {
         let chat = shell.chats.get(&chat_id).unwrap();
         assert_eq!(chat.input(), "rascunho separado");
         assert_eq!(chat.attachments().len(), 1);
-        assert!(matches!(chat.items(), [chat_pane::ChatItem::User { text }]
-            if text.contains("src/main.rs:2") && text.contains("todo!();") && text.contains("remover todo! antes do merge")));
+        assert!(
+            matches!(chat.items(), [chat_pane::ChatItem::User { text, .. }]
+            if text.contains("src/main.rs:2") && text.contains("todo!();") && text.contains("remover todo! antes do merge"))
+        );
 
         let other = tempfile::tempdir().unwrap();
         let index = shell.workspaces.open_folder(other.path());

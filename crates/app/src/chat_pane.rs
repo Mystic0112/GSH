@@ -21,6 +21,13 @@ use crate::chat_view;
 use crate::labels;
 use crate::terminal_pane::TICK_INTERVAL_MS;
 
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Entrada de chamada de ferramenta na transcrição do chat.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatToolEntry {
@@ -41,11 +48,13 @@ pub enum ChatItem {
     /// Mensagem enviada pelo usuário.
     User {
         text: String,
+        at_ms: u64,
     },
     /// Mensagem do assistente (em streaming ou concluída).
     Assistant {
         text: String,
         streaming: bool,
+        at_ms: u64,
     },
     /// Chamada de ferramenta resumida em uma linha (expansível).
     Tool(ChatToolEntry),
@@ -55,6 +64,7 @@ pub enum ChatItem {
     },
     Thinking {
         text: String,
+        streaming: bool,
     },
     Permission {
         request_id: String,
@@ -88,10 +98,6 @@ pub enum ChatItem {
         from: String,
         text: String,
     },
-    Classified {
-        state: SessionState,
-        detail: String,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +122,18 @@ pub enum ChatMsg {
     ToggleTool(usize),
     ToggleEditTools(Vec<usize>),
     ToggleEditCard(usize),
+    TranscriptScrolled(bool),
+    ToggleThinking(usize),
+    MessageHovered(Option<usize>),
+    MessageTextAction {
+        index: usize,
+        action: iced::widget::text_editor::Action,
+    },
+    CopyMessage {
+        index: usize,
+        text: String,
+    },
+    MessageCopied(usize),
     /// Pulso periódico para drenar eventos do [`ChatEngine`].
     Tick,
     PermissionAnswer {
@@ -296,6 +314,12 @@ pub struct ChatPane {
     remote_images: HashMap<String, Vec<u8>>,
     remote_images_pending: std::collections::HashSet<String>,
     collapsed_edit_cards: std::collections::HashSet<usize>,
+    transcript_scroll_id: iced::widget::Id,
+    transcript_near_end: bool,
+    collapsed_thinking: std::collections::HashSet<usize>,
+    hovered_message: Option<usize>,
+    copied_message: Option<usize>,
+    message_editors: HashMap<usize, iced::widget::text_editor::Content>,
 }
 
 impl Default for ChatPane {
@@ -349,6 +373,12 @@ impl ChatPane {
             remote_images: HashMap::new(),
             remote_images_pending: std::collections::HashSet::new(),
             collapsed_edit_cards: std::collections::HashSet::new(),
+            transcript_scroll_id: iced::widget::Id::unique(),
+            transcript_near_end: true,
+            collapsed_thinking: std::collections::HashSet::new(),
+            hovered_message: None,
+            copied_message: None,
+            message_editors: HashMap::new(),
         }
     }
 
@@ -477,7 +507,11 @@ impl ChatPane {
         self.ensure_engine()
             .and_then(|engine| engine.send(&text, &[]))
             .map_err(|error| error.to_string())?;
-        self.items.push(ChatItem::User { text });
+        self.items.push(ChatItem::User {
+            text,
+            at_ms: now_ms(),
+        });
+        self.rebuild_message_editors();
         self.busy = true;
         Ok(())
     }
@@ -661,11 +695,45 @@ impl ChatPane {
         self.items
             .iter()
             .find_map(|item| match item {
-                ChatItem::User { text } => text.lines().next().map(str::trim),
+                ChatItem::User { text, .. } => text.lines().next().map(str::trim),
                 _ => None,
             })
             .filter(|s| !s.is_empty())
             .unwrap_or(labels::CHAT_NEW_CONVERSATION)
+    }
+
+    pub fn transcript_scroll_id(&self) -> iced::widget::Id {
+        self.transcript_scroll_id.clone()
+    }
+
+    pub fn thinking_collapsed(&self, index: usize) -> bool {
+        self.collapsed_thinking.contains(&index)
+    }
+
+    pub fn hovered_message(&self) -> Option<usize> {
+        self.hovered_message
+    }
+
+    pub fn copied_message(&self) -> Option<usize> {
+        self.copied_message
+    }
+
+    pub fn message_editor(&self, index: usize) -> Option<&iced::widget::text_editor::Content> {
+        self.message_editors.get(&index)
+    }
+
+    pub fn session_state(&self) -> Option<(SessionState, &str)> {
+        self.session_state
+            .as_ref()
+            .map(|(state, detail)| (*state, detail.as_str()))
+    }
+
+    fn transcript_scroll_task(&self) -> Task<ChatMsg> {
+        if self.transcript_near_end {
+            iced::widget::operation::snap_to_end(self.transcript_scroll_id.clone())
+        } else {
+            Task::none()
+        }
     }
 
     /// Encerra a sessão de chat e mata o processo filho se estiver em execução.
@@ -699,7 +767,11 @@ impl ChatPane {
                     return Task::none();
                 }
                 self.set_input(String::new());
-                self.items.push(ChatItem::User { text: text.clone() });
+                self.items.push(ChatItem::User {
+                    text: text.clone(),
+                    at_ms: now_ms(),
+                });
+                self.rebuild_message_editors();
                 self.busy = true;
 
                 if !self.static_test_mode {
@@ -752,10 +824,49 @@ impl ChatPane {
                 }
                 Task::none()
             }
+            ChatMsg::TranscriptScrolled(near_end) => {
+                self.transcript_near_end = near_end;
+                Task::none()
+            }
+            ChatMsg::ToggleThinking(index) => {
+                if !self.collapsed_thinking.insert(index) {
+                    self.collapsed_thinking.remove(&index);
+                }
+                Task::none()
+            }
+            ChatMsg::MessageHovered(index) => {
+                self.hovered_message = index;
+                Task::none()
+            }
+            ChatMsg::MessageTextAction { index, action } => {
+                if !action.is_edit() {
+                    if let Some(content) = self.message_editors.get_mut(&index) {
+                        content.perform(action);
+                    }
+                }
+                Task::none()
+            }
+            ChatMsg::CopyMessage { index, text } => {
+                self.copied_message = Some(index);
+                let reset = Task::perform(
+                    async move {
+                        tokio::time::sleep(Duration::from_millis(1_500)).await;
+                        index
+                    },
+                    ChatMsg::MessageCopied,
+                );
+                Task::batch([iced::clipboard::write::<ChatMsg>(text), reset])
+            }
+            ChatMsg::MessageCopied(index) => {
+                if self.copied_message == Some(index) {
+                    self.copied_message = None;
+                }
+                Task::none()
+            }
             ChatMsg::Tick => {
                 self.spinner_rotation = (self.spinner_rotation + 0.1) % std::f32::consts::TAU;
                 self.poll_events();
-                self.download_remote_images()
+                Task::batch([self.download_remote_images(), self.transcript_scroll_task()])
             }
             ChatMsg::PermissionAnswer {
                 request_id,
@@ -766,6 +877,7 @@ impl ChatPane {
                     engine.answer_permission(&request_id, allow, always, None, None);
                 }
                 self.items.retain(|item| !matches!(item, ChatItem::Permission { request_id: id, .. } if id == &request_id));
+                self.rebuild_message_editors();
                 Task::none()
             }
             ChatMsg::AnswerQuestion { request_id, input } => {
@@ -773,6 +885,7 @@ impl ChatPane {
                     engine.answer_permission(&request_id, true, false, Some(input), None);
                 }
                 self.items.retain(|item| !matches!(item, ChatItem::Permission { request_id: id, .. } if id == &request_id));
+                self.rebuild_message_editors();
                 Task::none()
             }
             ChatMsg::SetMode(mode) => {
@@ -1233,6 +1346,7 @@ impl ChatPane {
                     self.items.retain(
                         |i| !matches!(i,ChatItem::ResumePrompt{session_id:id} if id==&session_id),
                     );
+                    self.rebuild_message_editors();
                 }
                 Task::none()
             }
@@ -1274,26 +1388,39 @@ impl ChatPane {
             ChatEvent::ModelChanged(model) => self.model = Some(model),
             ChatEvent::Context { tokens, window } => self.context = (tokens, window),
             ChatEvent::PlanUsage(usage) => self.usage = usage,
-            ChatEvent::Text { text, .. } => {
+            ChatEvent::Text { text, at_ms } => {
                 if let Some(ChatItem::Assistant {
                     text: current,
                     streaming: true,
+                    at_ms: current_at,
                 }) = self.items.last_mut()
                 {
                     *current = text;
+                    if let Some(timestamp) = at_ms {
+                        *current_at = timestamp;
+                    }
                 } else {
                     self.items.push(ChatItem::Assistant {
                         text,
                         streaming: false,
+                        at_ms: at_ms.unwrap_or_else(now_ms),
                     });
+                    self.rebuild_message_editors();
                 }
             }
-            ChatEvent::UserText { text, .. } => self.items.push(ChatItem::User { text }),
+            ChatEvent::UserText { text, at_ms } => {
+                self.items.push(ChatItem::User {
+                    text,
+                    at_ms: at_ms.unwrap_or_else(now_ms),
+                });
+                self.rebuild_message_editors();
+            }
             ChatEvent::Renamed(title) => self.title = Some(title),
             ChatEvent::TextDelta(delta) => {
                 if let Some(ChatItem::Assistant {
                     text,
                     streaming: true,
+                    ..
                 }) = self.items.last_mut()
                 {
                     text.push_str(&delta);
@@ -1301,20 +1428,33 @@ impl ChatPane {
                     self.items.push(ChatItem::Assistant {
                         text: delta,
                         streaming: true,
+                        at_ms: now_ms(),
                     });
                 }
             }
             ChatEvent::ThinkingDelta(delta) => {
-                if let Some(ChatItem::Thinking { text }) = self.items.last_mut() {
+                if let Some(ChatItem::Thinking {
+                    text,
+                    streaming: true,
+                }) = self.items.last_mut()
+                {
                     text.push_str(&delta);
                 } else {
-                    self.items.push(ChatItem::Thinking { text: delta });
+                    self.items.push(ChatItem::Thinking {
+                        text: delta,
+                        streaming: true,
+                    });
                 }
             }
-            ChatEvent::Thinking(text) => self.items.push(ChatItem::Thinking { text }),
+            ChatEvent::Thinking(text) => {
+                self.items.push(ChatItem::Thinking {
+                    text,
+                    streaming: false,
+                });
+                self.rebuild_message_editors();
+            }
             ChatEvent::SessionClassified { state, detail } => {
-                self.session_state = Some((state, detail.clone()));
-                self.items.push(ChatItem::Classified { state, detail });
+                self.session_state = Some((state, detail));
             }
             ChatEvent::PeerMessage {
                 from_name, text, ..
@@ -1517,8 +1657,8 @@ impl ChatPane {
     }
 
     /// Renderiza o pane de chat.
-    pub fn view(&self, transcript_width: f32) -> Element<'_, ChatMsg> {
-        chat_view::view(self, transcript_width)
+    pub fn view(&self, transcript_width: f32, show_session_state: bool) -> Element<'_, ChatMsg> {
+        chat_view::view(self, transcript_width, show_session_state)
     }
 
     fn ensure_engine(&mut self) -> Result<&ChatEngine, ChatError> {
@@ -1571,7 +1711,9 @@ impl ChatPane {
         }
         self.items.push(ChatItem::User {
             text: text.to_string(),
+            at_ms: now_ms(),
         });
+        self.rebuild_message_editors();
         self.busy = true;
         if !self.static_test_mode {
             let sent = self
@@ -1592,14 +1734,40 @@ impl ChatPane {
         if let Some(ChatItem::Assistant { streaming, .. }) = self.items.last_mut() {
             *streaming = false;
         }
+        self.rebuild_message_editors();
     }
 
     fn finish_streaming_items(&mut self) {
         for item in &mut self.items {
             match item {
                 ChatItem::Assistant { streaming, .. } => *streaming = false,
+                ChatItem::Thinking { streaming, .. } => *streaming = false,
                 ChatItem::Tool(tool) => tool.done = true,
                 _ => {}
+            }
+        }
+        self.rebuild_message_editors();
+    }
+
+    fn rebuild_message_editors(&mut self) {
+        self.message_editors.clear();
+        for (index, item) in self.items.iter().enumerate() {
+            let text = match item {
+                ChatItem::User { text, .. }
+                | ChatItem::Assistant {
+                    text,
+                    streaming: false,
+                    ..
+                }
+                | ChatItem::Thinking {
+                    text,
+                    streaming: false,
+                } => Some(text.as_str()),
+                _ => None,
+            };
+            if let Some(text) = text {
+                self.message_editors
+                    .insert(index, iced::widget::text_editor::Content::with_text(text));
             }
         }
     }
@@ -1710,6 +1878,7 @@ impl ChatPane {
     fn load_session(&mut self, session: gsh_chat::SessionEntry) {
         self.close();
         self.items.clear();
+        self.message_editors.clear();
         self.session_id = Some(session.id.clone());
         self.cwd = Some(PathBuf::from(&session.project));
         self.agent_workspace = self.cwd.clone();
@@ -1869,6 +2038,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn estado_classificado_fica_no_cabecalho_em_pt_br_e_nao_na_transcricao() {
+        let mut pane = ChatPane::default();
+        pane.apply_event(ChatEvent::SessionClassified {
+            state: SessionState::Completed,
+            detail: "sem alterações pendentes".to_owned(),
+        });
+        assert_eq!(
+            pane.session_state()
+                .map(|(state, _)| labels::chat_session_state(state)),
+            Some("Concluída")
+        );
+        assert!(pane.items().is_empty());
+    }
+
+    #[test]
+    fn bloco_de_raciocinio_abre_e_recolhe() {
+        let mut pane = ChatPane::default();
+        pane.apply_event(ChatEvent::Thinking("analisando o pedido".to_owned()));
+        assert!(!pane.thinking_collapsed(0));
+        let _ = pane.update(ChatMsg::ToggleThinking(0));
+        assert!(pane.thinking_collapsed(0));
+        let _ = pane.update(ChatMsg::ToggleThinking(0));
+        assert!(!pane.thinking_collapsed(0));
+    }
+
+    #[test]
+    fn texto_de_mensagem_e_raciocinio_mantem_conteudo_selecionavel_sem_edicao() {
+        let mut pane = ChatPane::default();
+        pane.apply_event(ChatEvent::UserText {
+            text: "mensagem".to_owned(),
+            at_ms: Some(120_000),
+        });
+        assert_eq!(
+            pane.message_editor(0).map(|content| content.text()),
+            Some("mensagem".to_owned())
+        );
+        pane.apply_event(ChatEvent::Thinking("raciocínio".to_owned()));
+        assert_eq!(
+            pane.message_editor(0).map(|content| content.text()),
+            Some("mensagem".to_owned())
+        );
+        assert_eq!(
+            pane.message_editor(1).map(|content| content.text()),
+            Some("raciocínio".to_owned())
+        );
+        let _ = pane.update(ChatMsg::MessageTextAction {
+            index: 0,
+            action: iced::widget::text_editor::Action::Edit(
+                iced::widget::text_editor::Edit::Insert('!'),
+            ),
+        });
+        assert_eq!(
+            pane.items().first(),
+            Some(&ChatItem::User {
+                text: "mensagem".to_owned(),
+                at_ms: 120_000
+            })
+        );
+    }
+
+    #[test]
+    fn copiar_mensagem_mostra_feedback_e_depois_limpa() {
+        let mut pane = ChatPane::default();
+        let _ = pane.update(ChatMsg::CopyMessage {
+            index: 4,
+            text: "texto copiado".to_owned(),
+        });
+        assert_eq!(pane.copied_message(), Some(4));
+        let _ = pane.update(ChatMsg::MessageCopied(4));
+        assert_eq!(pane.copied_message(), None);
+    }
+
+    #[test]
     fn links_open_only_in_the_system_browser_for_supported_schemes() {
         assert!(is_supported_external_url("https://example.com"));
         assert!(is_supported_external_url("http://localhost:3000"));
@@ -1911,7 +2153,7 @@ mod tests {
         assert_eq!(pane.claude_profile_path(), Some(profile.as_path()));
         assert!(pane.restore_session_id("profile-session"));
         assert!(pane.items().iter().any(|item| matches!(item,
-            ChatItem::User { text } if text == "conteúdo do perfil"
+            ChatItem::User { text, .. } if text == "conteúdo do perfil"
         )));
         let foreign = root.path().join("foreign.jsonl");
         fs::write(&foreign, "outro perfil").unwrap();
@@ -1954,11 +2196,8 @@ mod tests {
             1,
             "o anexo nao enviado tem que continuar anexado"
         );
-        assert_eq!(
-            pane.items(),
-            &[ChatItem::User {
-                text: "oi do canal".to_string()
-            }]
+        assert!(
+            matches!(pane.items().first(), Some(ChatItem::User { text, .. }) if text == "oi do canal")
         );
         assert!(pane.is_busy());
         assert!(!pane.deliver_text("segunda"), "ocupado: nao entrega");
@@ -1991,22 +2230,15 @@ mod tests {
         assert!(pane.input().is_empty());
         assert!(pane.is_busy());
         assert_eq!(pane.conversation_title(), "oi agente");
-        assert_eq!(
-            pane.items(),
-            &[ChatItem::User {
-                text: "oi agente".to_string()
-            }]
+        assert!(
+            matches!(pane.items().first(), Some(ChatItem::User { text, .. }) if text == "oi agente")
         );
 
         // Chegam deltas de texto -> acumula num único Assistant em streaming
         pane.apply_event(ChatEvent::TextDelta("Vou ".to_string()));
         pane.apply_event(ChatEvent::TextDelta("checar.".to_string()));
-        assert_eq!(
-            pane.items().last(),
-            Some(&ChatItem::Assistant {
-                text: "Vou checar.".to_string(),
-                streaming: true,
-            })
+        assert!(
+            matches!(pane.items().last(), Some(ChatItem::Assistant { text, streaming: true, .. }) if text == "Vou checar.")
         );
 
         // Chega tool_use -> fecha o streaming do texto anterior e adiciona Tool resumida
@@ -2018,12 +2250,8 @@ mod tests {
                 .cloned()
                 .unwrap_or_default(),
         });
-        assert_eq!(
-            pane.items().get(1),
-            Some(&ChatItem::Assistant {
-                text: "Vou checar.".to_string(),
-                streaming: false,
-            })
+        assert!(
+            matches!(pane.items().get(1), Some(ChatItem::Assistant { text, streaming: false, .. }) if text == "Vou checar.")
         );
         assert!(matches!(
             pane.items().get(2),
@@ -2053,12 +2281,8 @@ mod tests {
         assert!(pane.is_busy());
         let _ = pane.update(ChatMsg::Cancel);
         assert!(!pane.is_busy());
-        assert_eq!(
-            pane.items().last(),
-            Some(&ChatItem::Assistant {
-                text: "Gerando mais...".to_string(),
-                streaming: false,
-            })
+        assert!(
+            matches!(pane.items().last(), Some(ChatItem::Assistant { text, streaming: false, .. }) if text == "Gerando mais...")
         );
     }
 
