@@ -194,7 +194,6 @@ impl EditorPane {
         }
         if let Some(notice) = &self.state.notice {
             let message = match notice {
-                EditorNotice::ConfirmClose => labels::EDITOR_CONFIRM_CLOSE.to_owned(),
                 EditorNotice::ModifiedOnDisk => labels::EDITOR_EXTERNAL_CHANGE.to_owned(),
                 EditorNotice::SaveError(error) => labels::format_editor_error(error),
             };

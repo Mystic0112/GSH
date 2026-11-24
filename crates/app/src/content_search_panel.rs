@@ -81,6 +81,8 @@ fn header(state: &SearchState) -> Element<'_, SearchMsg> {
         content = content.push(
             canvas::Canvas::new(Spinner {
                 elapsed_ms: state.spin_ms,
+                color: None,
+                stroke: None,
             })
             .width(theme::SEARCH_SPINNER_SIZE)
             .height(theme::SEARCH_SPINNER_SIZE),
@@ -482,16 +484,39 @@ fn ellipsize(segments: Vec<Segment>, max_chars: usize) -> Vec<Segment> {
 
 /// Spinner quadrado de `size` px (`CircularProgressIndicator` do shadcn) que gira com `elapsed_ms`.
 pub fn spinner<'a, M: 'a>(size: f32, elapsed_ms: u64) -> Element<'a, M> {
-    canvas::Canvas::new(Spinner { elapsed_ms })
-        .width(size)
-        .height(size)
-        .into()
+    canvas::Canvas::new(Spinner {
+        elapsed_ms,
+        color: None,
+        stroke: None,
+    })
+    .width(size)
+    .height(size)
+    .into()
+}
+
+/// Spinner com cor e espessura próprias (`CircularProgressIndicator(size:, strokeWidth:, color:)`).
+pub fn spinner_colored<'a, M: 'a>(
+    size: f32,
+    stroke: f32,
+    color: Color,
+    elapsed_ms: u64,
+) -> Element<'a, M> {
+    canvas::Canvas::new(Spinner {
+        elapsed_ms,
+        color: Some(color),
+        stroke: Some(stroke),
+    })
+    .width(size)
+    .height(size)
+    .into()
 }
 
 /// Spinner de 12px (`CircularProgressIndicator(size: 12)` do shadcn): trilho a 20% e arco em
 /// `accent` com traço de 1px, que gira e muda de comprimento como o do Material.
 struct Spinner {
     elapsed_ms: u64,
+    color: Option<Color>,
+    stroke: Option<f32>,
 }
 
 impl<M> canvas::Program<M> for Spinner {
@@ -506,10 +531,12 @@ impl<M> canvas::Program<M> for Spinner {
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let width = bounds.width.min(bounds.height) / 12.0;
+        let width = self
+            .stroke
+            .unwrap_or(bounds.width.min(bounds.height) / 12.0);
         let center = Point::new(bounds.width / 2.0, bounds.height / 2.0);
         let radius = (bounds.width.min(bounds.height) - width) / 2.0;
-        let accent = theme::palette().accent;
+        let accent = self.color.unwrap_or_else(|| theme::palette().accent);
         frame.stroke(
             &Path::circle(center, radius),
             Stroke::default()

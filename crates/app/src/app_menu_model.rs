@@ -1,5 +1,8 @@
 //! Fonte declarativa única para a barra de menus Linux e seus atalhos.
 
+use crate::labels;
+use crate::pane_tree::PaneMove;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     NewTerminal,
@@ -26,11 +29,14 @@ pub enum Action {
     ActualSize,
     SelectTab(u8),
     SelectLastTab,
+    FocusPane(crate::pane_tree::PaneMove),
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Entry {
     pub group: &'static str,
+    /// Rótulo do submenu em que o item mora (`MenuBarMenu` aninhado), se houver.
+    pub submenu: Option<&'static str>,
     pub id: &'static str,
     pub label: &'static str,
     pub shortcut: Option<&'static str>,
@@ -40,6 +46,7 @@ pub struct Entry {
 pub const ENTRIES: &[Entry] = &[
     Entry {
         group: "Arquivo",
+        submenu: None,
         id: "newTerminal",
         label: "Novo terminal",
         shortcut: Some("Ctrl+T"),
@@ -48,6 +55,7 @@ pub const ENTRIES: &[Entry] = &[
     #[cfg(target_os = "linux")]
     Entry {
         group: "Arquivo",
+        submenu: None,
         id: "newRemoteTerminal",
         label: "Novo terminal remoto por SSH",
         shortcut: None,
@@ -55,6 +63,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Arquivo",
+        submenu: None,
         id: "newChat",
         label: "Novo chat",
         shortcut: Some("Ctrl+Shift+L"),
@@ -62,6 +71,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Arquivo",
+        submenu: None,
         id: "newChatRight",
         label: "Novo chat à direita",
         shortcut: Some("Ctrl+Shift+J"),
@@ -69,6 +79,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Arquivo",
+        submenu: None,
         id: "openWorkspace",
         label: "Abrir workspace",
         shortcut: Some("Ctrl+O"),
@@ -76,6 +87,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "GSH",
+        submenu: None,
         id: "openSettings",
         label: "Configurações",
         shortcut: Some("Ctrl+,"),
@@ -83,6 +95,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "GSH",
+        submenu: None,
         id: "checkForUpdates",
         label: "Verificar atualizações…",
         shortcut: None,
@@ -90,6 +103,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "GSH",
+        submenu: None,
         id: "quit",
         label: "Sair",
         shortcut: None,
@@ -97,6 +111,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Arquivo",
+        submenu: None,
         id: "save",
         label: "Salvar",
         shortcut: Some("Ctrl+S"),
@@ -104,6 +119,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Exibir",
+        submenu: None,
         id: "toggleWorkspacePanel",
         label: "Alternar painel de workspaces",
         shortcut: Some("Ctrl+B"),
@@ -111,6 +127,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Exibir",
+        submenu: None,
         id: "toggleFiles",
         label: "Alternar arquivos",
         shortcut: Some("Ctrl+Shift+B"),
@@ -118,6 +135,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Exibir",
+        submenu: None,
         id: "searchInFiles",
         label: "Buscar em arquivos",
         shortcut: Some("Ctrl+Shift+F"),
@@ -125,6 +143,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Exibir",
+        submenu: None,
         id: "splitRight",
         label: "Dividir à direita",
         shortcut: Some("Ctrl+D"),
@@ -132,6 +151,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Exibir",
+        submenu: None,
         id: "splitDown",
         label: "Dividir abaixo",
         shortcut: Some("Ctrl+Shift+D"),
@@ -139,6 +159,111 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Exibir",
+        submenu: Some(labels::MENU_FOCUS_PANE),
+        id: "focusPaneLeft",
+        label: labels::MENU_FOCUS_LEFT,
+        shortcut: None,
+        action: Action::FocusPane(PaneMove::Left),
+    },
+    Entry {
+        group: "Exibir",
+        submenu: Some(labels::MENU_FOCUS_PANE),
+        id: "focusPaneRight",
+        label: labels::MENU_FOCUS_RIGHT,
+        shortcut: None,
+        action: Action::FocusPane(PaneMove::Right),
+    },
+    Entry {
+        group: "Exibir",
+        submenu: Some(labels::MENU_FOCUS_PANE),
+        id: "focusPaneUp",
+        label: labels::MENU_FOCUS_UP,
+        shortcut: None,
+        action: Action::FocusPane(PaneMove::Up),
+    },
+    Entry {
+        group: "Exibir",
+        submenu: Some(labels::MENU_FOCUS_PANE),
+        id: "focusPaneDown",
+        label: labels::MENU_FOCUS_DOWN,
+        shortcut: None,
+        action: Action::FocusPane(PaneMove::Down),
+    },
+    Entry {
+        group: "Exibir",
+        submenu: Some(labels::MENU_SELECT_TAB),
+        id: "selectTab1",
+        label: labels::MENU_TAB_LABELS[0],
+        shortcut: Some("Ctrl+1"),
+        action: Action::SelectTab(0),
+    },
+    Entry {
+        group: "Exibir",
+        submenu: Some(labels::MENU_SELECT_TAB),
+        id: "selectTab2",
+        label: labels::MENU_TAB_LABELS[1],
+        shortcut: Some("Ctrl+2"),
+        action: Action::SelectTab(1),
+    },
+    Entry {
+        group: "Exibir",
+        submenu: Some(labels::MENU_SELECT_TAB),
+        id: "selectTab3",
+        label: labels::MENU_TAB_LABELS[2],
+        shortcut: Some("Ctrl+3"),
+        action: Action::SelectTab(2),
+    },
+    Entry {
+        group: "Exibir",
+        submenu: Some(labels::MENU_SELECT_TAB),
+        id: "selectTab4",
+        label: labels::MENU_TAB_LABELS[3],
+        shortcut: Some("Ctrl+4"),
+        action: Action::SelectTab(3),
+    },
+    Entry {
+        group: "Exibir",
+        submenu: Some(labels::MENU_SELECT_TAB),
+        id: "selectTab5",
+        label: labels::MENU_TAB_LABELS[4],
+        shortcut: Some("Ctrl+5"),
+        action: Action::SelectTab(4),
+    },
+    Entry {
+        group: "Exibir",
+        submenu: Some(labels::MENU_SELECT_TAB),
+        id: "selectTab6",
+        label: labels::MENU_TAB_LABELS[5],
+        shortcut: Some("Ctrl+6"),
+        action: Action::SelectTab(5),
+    },
+    Entry {
+        group: "Exibir",
+        submenu: Some(labels::MENU_SELECT_TAB),
+        id: "selectTab7",
+        label: labels::MENU_TAB_LABELS[6],
+        shortcut: Some("Ctrl+7"),
+        action: Action::SelectTab(6),
+    },
+    Entry {
+        group: "Exibir",
+        submenu: Some(labels::MENU_SELECT_TAB),
+        id: "selectTab8",
+        label: labels::MENU_TAB_LABELS[7],
+        shortcut: Some("Ctrl+8"),
+        action: Action::SelectTab(7),
+    },
+    Entry {
+        group: "Exibir",
+        submenu: Some(labels::MENU_SELECT_TAB),
+        id: "selectLastTab",
+        label: labels::MENU_LAST_TAB,
+        shortcut: Some("Ctrl+9"),
+        action: Action::SelectLastTab,
+    },
+    Entry {
+        group: "Exibir",
+        submenu: None,
         id: "previousWorkspace",
         label: "Workspace anterior",
         shortcut: Some("Ctrl+Shift+N"),
@@ -146,6 +271,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Exibir",
+        submenu: None,
         id: "nextWorkspace",
         label: "Próximo workspace",
         shortcut: Some("Ctrl+Shift+M"),
@@ -153,6 +279,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Exibir",
+        submenu: None,
         id: "zoomIn",
         label: "Aumentar zoom",
         shortcut: Some("Ctrl+="),
@@ -160,6 +287,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Exibir",
+        submenu: None,
         id: "zoomOut",
         label: "Diminuir zoom",
         shortcut: Some("Ctrl+-"),
@@ -167,6 +295,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Exibir",
+        submenu: None,
         id: "actualSize",
         label: "Tamanho original",
         shortcut: Some("Ctrl+0"),
@@ -174,69 +303,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Janela",
-        id: "selectTab1",
-        label: "Selecionar aba 1",
-        shortcut: Some("Ctrl+1"),
-        action: Action::SelectTab(0),
-    },
-    Entry {
-        group: "Janela",
-        id: "selectTab2",
-        label: "Selecionar aba 2",
-        shortcut: Some("Ctrl+2"),
-        action: Action::SelectTab(1),
-    },
-    Entry {
-        group: "Janela",
-        id: "selectTab3",
-        label: "Selecionar aba 3",
-        shortcut: Some("Ctrl+3"),
-        action: Action::SelectTab(2),
-    },
-    Entry {
-        group: "Janela",
-        id: "selectTab4",
-        label: "Selecionar aba 4",
-        shortcut: Some("Ctrl+4"),
-        action: Action::SelectTab(3),
-    },
-    Entry {
-        group: "Janela",
-        id: "selectTab5",
-        label: "Selecionar aba 5",
-        shortcut: Some("Ctrl+5"),
-        action: Action::SelectTab(4),
-    },
-    Entry {
-        group: "Janela",
-        id: "selectTab6",
-        label: "Selecionar aba 6",
-        shortcut: Some("Ctrl+6"),
-        action: Action::SelectTab(5),
-    },
-    Entry {
-        group: "Janela",
-        id: "selectTab7",
-        label: "Selecionar aba 7",
-        shortcut: Some("Ctrl+7"),
-        action: Action::SelectTab(6),
-    },
-    Entry {
-        group: "Janela",
-        id: "selectTab8",
-        label: "Selecionar aba 8",
-        shortcut: Some("Ctrl+8"),
-        action: Action::SelectTab(7),
-    },
-    Entry {
-        group: "Janela",
-        id: "selectLastTab",
-        label: "Última aba",
-        shortcut: Some("Ctrl+9"),
-        action: Action::SelectLastTab,
-    },
-    Entry {
-        group: "Janela",
+        submenu: None,
         id: "minimizeWindow",
         label: "Minimizar janela",
         shortcut: None,
@@ -244,6 +311,7 @@ pub const ENTRIES: &[Entry] = &[
     },
     Entry {
         group: "Janela",
+        submenu: None,
         id: "zoomWindow",
         label: "Alternar tamanho da janela",
         shortcut: None,
@@ -307,6 +375,7 @@ mod tests {
     fn invalid_override_falls_back_to_the_declared_shortcut() {
         let entry = Entry {
             group: "Arquivo",
+            submenu: None,
             id: "newTerminal",
             label: "Novo terminal",
             shortcut: Some("Ctrl+T"),

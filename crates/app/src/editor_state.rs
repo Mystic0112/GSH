@@ -7,13 +7,11 @@ pub struct EditorState {
     pub path: PathBuf,
     pub buffer: Buffer,
     pub notice: Option<EditorNotice>,
-    close_pending: bool,
     fingerprint: Option<(std::time::SystemTime, u64)>,
 }
 
 #[derive(Debug)]
 pub enum EditorNotice {
-    ConfirmClose,
     ModifiedOnDisk,
     SaveError(EditorError),
 }
@@ -21,7 +19,7 @@ impl EditorNotice {
     pub fn color(&self) -> iced::Color {
         match self {
             Self::SaveError(_) => crate::theme::palette().error,
-            Self::ConfirmClose | Self::ModifiedOnDisk => crate::theme::palette().warn,
+            Self::ModifiedOnDisk => crate::theme::palette().warn,
         }
     }
 }
@@ -33,7 +31,6 @@ impl EditorState {
             path,
             buffer: Buffer::new(text),
             notice: None,
-            close_pending: false,
             fingerprint,
         }
     }
@@ -66,7 +63,6 @@ impl EditorState {
             .ok_or(EditorError::InvalidPosition)?;
         self.buffer.select(start, end_old)?;
         let changed = self.buffer.insert(replacement);
-        self.close_pending = false;
         self.notice = None;
         Ok(changed)
     }
@@ -97,30 +93,13 @@ impl EditorState {
             return;
         }
         self.notice = result.err().map(EditorNotice::SaveError);
-        self.close_pending = false;
-    }
-    pub fn request_close(&mut self) -> bool {
-        if !self.buffer.is_dirty() || self.close_pending {
-            return true;
-        }
-        self.close_pending = true;
-        self.notice = Some(EditorNotice::ConfirmClose);
-        false
-    }
-    pub fn cancel_close(&mut self) {
-        self.close_pending = false;
-        if matches!(self.notice, Some(EditorNotice::ConfirmClose)) {
-            self.notice = None;
-        }
     }
     pub fn undo(&mut self) {
         self.buffer.undo();
-        self.close_pending = false;
         self.notice = None;
     }
     pub fn redo(&mut self) {
         self.buffer.redo();
-        self.close_pending = false;
         self.notice = None;
     }
 }
@@ -134,18 +113,15 @@ fn file_fingerprint(path: &std::path::Path) -> std::io::Result<(std::time::Syste
 mod tests {
     use super::*;
     #[test]
-    fn edit_undo_redo_save_and_confirm_close() {
+    fn edit_undo_redo_and_save() {
         let path = std::env::temp_dir().join(format!("gsh-editor-ui-{}", std::process::id()));
         std::fs::write(&path, "á\n").unwrap();
         let mut state = EditorState::new(path.clone(), "á\n".into());
         state.replace_text("áβ\n").unwrap();
         assert!(state.buffer.is_dirty());
-        assert!(!state.request_close());
         state.undo();
         assert_eq!(state.buffer.text(), "á\n");
         state.redo();
-        assert!(!state.request_close());
-        assert!(state.request_close());
         state.save();
         assert!(state.notice.is_none());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "áβ\n");

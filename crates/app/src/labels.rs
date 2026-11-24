@@ -171,13 +171,20 @@ pub const CHAT_PLAN_FEEDBACK: &str = "O que você gostaria de ajustar?";
 pub const CHAT_CMD_PREFIX: &str = "$ ";
 pub const CHAT_TOOL_NAME_PAD: &str = "  ";
 
+// Menu do app: submenus de Exibir (`core.menu` do Flutter)
+pub const MENU_FOCUS_PANE: &str = "Focar Painel";
+pub const MENU_FOCUS_LEFT: &str = "Esquerda  (⌘⌥←)";
+pub const MENU_FOCUS_RIGHT: &str = "Direita  (⌘⌥→)";
+pub const MENU_FOCUS_UP: &str = "Acima  (⌘⌥↑)";
+pub const MENU_FOCUS_DOWN: &str = "Abaixo  (⌘⌥↓)";
+pub const MENU_SELECT_TAB: &str = "Selecionar Aba";
+pub const MENU_TAB_LABELS: [&str; 8] = [
+    "Aba 1", "Aba 2", "Aba 3", "Aba 4", "Aba 5", "Aba 6", "Aba 7", "Aba 8",
+];
+pub const MENU_LAST_TAB: &str = "Última Aba";
+
 // Viewer de arquivo (estados tipados de limite, binário e erro de leitura)
 pub const VIEWER_TOO_LARGE_PREFIX: &str = "Arquivo acima do limite de edição (";
-pub const EDITOR_CONFIRM_CLOSE: &str =
-    "Alterações não salvas. Clique novamente em fechar para descartá-las.";
-pub const EDITOR_CONFIRM_WINDOW: &str = "Há alterações não salvas. Descartar e fechar a janela?";
-pub const EDITOR_DISCARD: &str = "Descartar e fechar";
-pub const EDITOR_CANCEL: &str = "Cancelar";
 pub const EDITOR_EXTERNAL_CHANGE: &str = "O arquivo mudou no disco. Confirme para sobrescrever.";
 pub const EDITOR_OVERWRITE: &str = "Sobrescrever arquivo";
 #[cfg(target_os = "linux")]

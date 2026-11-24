@@ -147,7 +147,9 @@ impl Shell {
     /// Terminal em edição do nome ou diálogo de fechar abas aberto: o teclado não chega ao
     /// terminal.
     pub(crate) fn tab_modal_open(&self) -> bool {
-        self.tab_rename.is_some() || self.pending_close_tabs.is_some()
+        self.tab_rename.is_some()
+            || self.pending_close_tabs.is_some()
+            || self.pending_close_file.is_some()
     }
 
     /// Duplo clique numa aba de terminal (`_handleTap`): o segundo clique em menos de 300 ms
@@ -298,9 +300,6 @@ impl Shell {
     pub(crate) fn close_tabs(&mut self, pending: PendingCloseTabs) -> Task<Msg> {
         let PendingCloseTabs { pane, tabs } = pending;
         self.panes.focus(pane);
-        for editor in self.editors.values_mut() {
-            editor.state.cancel_close();
-        }
         let Some(model) = self.panes.model(pane) else {
             return Task::none();
         };

@@ -614,8 +614,8 @@ enum Msg {
     Editor(PathBuf, editor_pane::EditorMsg),
     FileViewer(file_viewer::FileViewerMsg),
     WindowCloseRequested(iced::window::Id),
-    ConfirmWindowClose,
-    CancelWindowClose,
+    /// Resposta do diálogo de arquivo com alteração não salva (fechar aba ou janela).
+    CloseFile(CloseChoice),
     WindowUnfocused,
     WindowFocused,
     StatusTick,
@@ -632,6 +632,8 @@ enum Msg {
     TabRenameChanged(String),
     TabRenameSubmit,
     TabRenameCancel,
+    /// Quadro da animação das marcas de agente nas abas.
+    TabAnimTick,
     ConfirmCloseTabs,
     CancelCloseTabs,
     TabDrag(Pane, TabDragEvent),
@@ -639,6 +641,8 @@ enum Msg {
     OpenTabList(Pane),
     CloseTabList,
     ToggleAppMenu,
+    OpenAppSubmenu(&'static str),
+    CloseAppSubmenu,
     CloseAppMenu,
     ToggleChannelPopup,
     CloseChannelPopup,
@@ -793,6 +797,25 @@ fn menu_shortcut_matches(
         })
 }
 
+/// Ctrl+Alt+seta: foca o pane vizinho (`_handlePaneNavKey` do Flutter; o ⌘ é do macOS).
+fn pane_move_shortcut(
+    key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+) -> Option<pane_tree::PaneMove> {
+    use iced::keyboard::key::Named;
+    use pane_tree::PaneMove;
+    if !modifiers.control() || !modifiers.alt() || modifiers.shift() {
+        return None;
+    }
+    match key.as_ref() {
+        iced::keyboard::Key::Named(Named::ArrowLeft) => Some(PaneMove::Left),
+        iced::keyboard::Key::Named(Named::ArrowRight) => Some(PaneMove::Right),
+        iced::keyboard::Key::Named(Named::ArrowUp) => Some(PaneMove::Up),
+        iced::keyboard::Key::Named(Named::ArrowDown) => Some(PaneMove::Down),
+        _ => None,
+    }
+}
+
 fn is_close_tab_shortcut(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> bool {
     modifiers.control()
         && !modifiers.logo()
@@ -801,7 +824,23 @@ fn is_close_tab_shortcut(key: &iced::keyboard::Key, modifiers: iced::keyboard::M
         && matches!(key.as_ref(), iced::keyboard::Key::Character(value) if value.eq_ignore_ascii_case("w"))
 }
 
-/// Escolha do diálogo ao fechar uma query com alterações não salvas.
+/// Arquivo com alteração não salva e o que fazer depois da escolha do diálogo.
+struct PendingCloseFile {
+    path: PathBuf,
+    then: AfterCloseFile,
+}
+
+enum AfterCloseFile {
+    /// Fecha a aba do arquivo naquele pane.
+    Tab(Pane),
+    /// Fecha a janela; `rest` são os próximos arquivos sujos a perguntar.
+    Window {
+        id: iced::window::Id,
+        rest: Vec<PathBuf>,
+    },
+}
+
+/// Escolha do diálogo ao fechar um arquivo ou uma query com alterações não salvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloseChoice {
     Cancel,
@@ -931,11 +970,15 @@ struct Shell {
     tab_menu: Option<(Pane, usize)>,
     /// Aba de terminal com o nome em edição inline.
     tab_rename: Option<tab_menu::TabRename>,
+    /// Relógio (ms) do spinner e do pisca das marcas de agente nas abas.
+    tab_anim_ms: u64,
     /// "Fechar abas?" aguardando confirmação.
     pending_close_tabs: Option<tab_menu::PendingCloseTabs>,
     /// Último clique numa aba de terminal, para o duplo clique que renomeia.
     last_tab_click: Option<(Pane, TermId, Instant)>,
     app_menu_open: bool,
+    /// Submenu aberto do menu do app (`Focar Painel`, `Selecionar Aba`).
+    app_submenu: Option<&'static str>,
     tab_drag_source: Option<(Pane, usize)>,
     tab_drag_target: Option<(Pane, usize, bool)>,
     tab_drag_origin: Option<iced::Point>,
@@ -965,7 +1008,8 @@ struct Shell {
     editors: BTreeMap<PathBuf, editor_pane::EditorPane>,
     #[cfg(target_os = "linux")]
     lsp: lsp_runtime::Pool,
-    pending_window_close: Option<iced::window::Id>,
+    /// Arquivo com alteração não salva esperando a escolha do diálogo (`showCloseDirtyDialog`).
+    pending_close_file: Option<PendingCloseFile>,
     workspaces: WorkspaceList,
     channel_editor: Option<rail::ChannelEditor>,
     channel_popup_open: bool,
@@ -1217,9 +1261,11 @@ impl Default for Shell {
             tab_list_open: None,
             tab_menu: None,
             tab_rename: None,
+            tab_anim_ms: 0,
             pending_close_tabs: None,
             last_tab_click: None,
             app_menu_open: false,
+            app_submenu: None,
             tab_drag_source: None,
             tab_drag_target: None,
             tab_drag_origin: None,
@@ -1249,7 +1295,7 @@ impl Default for Shell {
             editors: BTreeMap::new(),
             #[cfg(target_os = "linux")]
             lsp: lsp_runtime::Pool::default(),
-            pending_window_close: None,
+            pending_close_file: None,
             workspaces,
             channel_editor: None,
             channel_popup_open: false,
@@ -4590,6 +4636,41 @@ impl Shell {
         }
     }
 
+    /// Marca de agente da aba (`pane_view.dart`): terminal pelo status do hook, chat enquanto responde.
+    fn tab_indicator_for(&self, tab: &PaneTab) -> Option<pane_tab::TabIndicator> {
+        match tab {
+            PaneTab::Terminal(id) => {
+                let record = self
+                    .status_runtime
+                    .pane_record(&agent_status::pane_id_for_term(*id))?;
+                let status = record.status();
+                // o status do hook só vale com o id da sessão do agente
+                let agent = record.session_id().is_some().then_some(status);
+                pane_tab::tab_indicator(
+                    status == gsh_core::status::TurnStatus::Working,
+                    agent,
+                    record.unseen_finish(),
+                )
+            }
+            PaneTab::Chat(id) => self
+                .chats
+                .get(id)
+                .is_some_and(ChatPane::is_busy)
+                .then_some(pane_tab::TabIndicator::Spinner { agent: false }),
+            _ => None,
+        }
+    }
+
+    fn any_tab_animating(&self) -> bool {
+        self.panes.models().into_iter().any(|model| {
+            model
+                .tabs()
+                .iter()
+                .filter_map(|tab| self.tab_indicator_for(tab))
+                .any(pane_tab::TabIndicator::animates)
+        })
+    }
+
     fn terminal_harness_icon(&self, id: TermId) -> Option<(&'static [u8], bool)> {
         let kind = self.active_harnesses.get(&id).copied().or_else(|| {
             match self
@@ -5383,9 +5464,6 @@ impl Shell {
     }
 
     fn reveal_terminal_by_pane_id(&mut self, pane_id: &str) {
-        for editor in self.editors.values_mut() {
-            editor.state.cancel_close();
-        }
         let Some(target_id) = term_id_from_pane_id(pane_id) else {
             return;
         };
@@ -5554,6 +5632,45 @@ impl Shell {
     }
 
     /// Encerra a sessão de uma aba que já saiu da árvore de panes.
+    fn finish_window_close(&mut self, id: iced::window::Id) -> Task<Msg> {
+        self.stop_localsend_sender();
+        self.save_layout();
+        gsh_db::ssh::SshTunnelManager::global().close_all();
+        iced::window::close(id)
+    }
+
+    /// Segue depois de resolvido um arquivo sujo: fecha a aba, ou pergunta o próximo / fecha a janela.
+    fn after_close_file(&mut self, path: &Path, then: AfterCloseFile) -> Task<Msg> {
+        match then {
+            AfterCloseFile::Tab(pane) => {
+                let tab = PaneTab::File(path.to_path_buf());
+                let Some(index) = self
+                    .panes
+                    .model(pane)
+                    .and_then(|model| model.tabs().iter().position(|open| *open == tab))
+                else {
+                    return Task::none();
+                };
+                self.panes.focus(pane);
+                if let Some(removed) = self.panes.focused_model_mut().close(index) {
+                    self.dispose_tab(removed);
+                }
+                self.after_tab_close()
+            }
+            AfterCloseFile::Window { id, mut rest } => {
+                if rest.is_empty() {
+                    return self.finish_window_close(id);
+                }
+                let path = rest.remove(0);
+                self.pending_close_file = Some(PendingCloseFile {
+                    path,
+                    then: AfterCloseFile::Window { id, rest },
+                });
+                Task::none()
+            }
+        }
+    }
+
     fn dispose_tab(&mut self, tab: PaneTab) {
         match tab {
             PaneTab::Terminal(id) => {
@@ -6324,18 +6441,6 @@ impl Shell {
         {
             self.commit_tab_rename();
         }
-        if matches!(
-            &msg,
-            Msg::SelectTab(_)
-                | Msg::Files(FilesMsg::SelectFile(_))
-                | Msg::NewTerminalTab
-                | Msg::NewChatTab
-                | Msg::WindowUnfocused
-        ) {
-            for editor in self.editors.values_mut() {
-                editor.state.cancel_close();
-            }
-        }
         match msg {
             Msg::TabHover(tab) => {
                 self.hovered_tab = tab;
@@ -6360,6 +6465,10 @@ impl Shell {
             }
             Msg::TabRenameSubmit => {
                 self.commit_tab_rename();
+                Task::none()
+            }
+            Msg::TabAnimTick => {
+                self.tab_anim_ms = self.tab_anim_ms.wrapping_add(SEARCH_SPIN_TICK_MS);
                 Task::none()
             }
             Msg::TabRenameCancel => {
@@ -6441,10 +6550,20 @@ impl Shell {
             }
             Msg::ToggleAppMenu => {
                 self.app_menu_open = !self.app_menu_open;
+                self.app_submenu = None;
                 Task::none()
             }
             Msg::CloseAppMenu => {
                 self.app_menu_open = false;
+                self.app_submenu = None;
+                Task::none()
+            }
+            Msg::OpenAppSubmenu(name) => {
+                self.app_submenu = Some(name);
+                Task::none()
+            }
+            Msg::CloseAppSubmenu => {
+                self.app_submenu = None;
                 Task::none()
             }
             Msg::ToggleChannelPopup => {
@@ -6461,11 +6580,19 @@ impl Shell {
             }
             Msg::AppMenuAction(message) => {
                 self.app_menu_open = false;
+                self.app_submenu = None;
                 self.update_inner(*message)
             }
             Msg::AppMenuShortcut(key, modifiers) if is_close_tab_shortcut(&key, modifiers) => {
                 let active = self.panes.focused_model().active_index();
                 active.map_or_else(Task::none, |index| self.update_inner(Msg::CloseTab(index)))
+            }
+            Msg::AppMenuShortcut(key, modifiers)
+                if pane_move_shortcut(&key, modifiers).is_some() =>
+            {
+                pane_move_shortcut(&key, modifiers)
+                    .and_then(|movement| self.panes.neighbor(self.panes.focused(), movement))
+                    .map_or_else(Task::none, |pane| self.update_inner(Msg::FocusPane(pane)))
             }
             Msg::AppMenuShortcut(key, modifiers) => self
                 .app_menu_shortcut_action(&key, modifiers)
@@ -6525,31 +6652,50 @@ impl Shell {
                 Task::none()
             }
             Msg::WindowCloseRequested(id) => {
-                if self.editors.values().any(|e| e.state.buffer.is_dirty()) {
-                    self.pending_window_close = Some(id);
-                    Task::none()
-                } else {
-                    self.stop_localsend_sender();
-                    self.save_layout();
-                    gsh_db::ssh::SshTunnelManager::global().close_all();
-                    iced::window::close(id)
+                let mut dirty = self
+                    .editors
+                    .iter()
+                    .filter(|(_, editor)| editor.state.buffer.is_dirty())
+                    .map(|(path, _)| path.clone());
+                match dirty.next() {
+                    // mesmo diálogo do fechar aba, arquivo por arquivo
+                    Some(path) => {
+                        self.pending_close_file = Some(PendingCloseFile {
+                            path,
+                            then: AfterCloseFile::Window {
+                                id,
+                                rest: dirty.collect(),
+                            },
+                        });
+                        Task::none()
+                    }
+                    None => self.finish_window_close(id),
                 }
             }
-            Msg::ConfirmWindowClose => {
-                self.stop_localsend_sender();
-                self.save_layout();
-                gsh_db::ssh::SshTunnelManager::global().close_all();
-                self.pending_window_close
-                    .take()
-                    .map_or_else(Task::none, iced::window::close)
-            }
-            Msg::CancelWindowClose => {
-                self.pending_window_close = None;
-                Task::none()
+            Msg::CloseFile(choice) => {
+                let Some(PendingCloseFile { path, then }) = self.pending_close_file.take() else {
+                    return Task::none();
+                };
+                match choice {
+                    CloseChoice::Cancel => Task::none(),
+                    CloseChoice::DontSave => self.after_close_file(&path, then),
+                    CloseChoice::SaveAndClose => {
+                        let save = self
+                            .update_inner(Msg::Editor(path.clone(), editor_pane::EditorMsg::Save));
+                        // só fecha se gravou: erro de IO ou arquivo mudado no disco mantém aberto
+                        if self
+                            .editors
+                            .get(&path)
+                            .is_some_and(|editor| editor.state.buffer.is_dirty())
+                        {
+                            return save;
+                        }
+                        Task::batch([save, self.after_close_file(&path, then)])
+                    }
+                }
             }
             Msg::WindowUnfocused => {
                 self.window_focused = false;
-                self.pending_window_close = None;
                 self.hovered_tab = None;
                 Task::none()
             }
@@ -6691,7 +6837,11 @@ impl Shell {
                 ref key,
                 modifiers,
                 ..
-            })) if self.app_menu_shortcut_action(key, modifiers).is_some() => Task::none(),
+            })) if self.app_menu_shortcut_action(key, modifiers).is_some()
+                || pane_move_shortcut(key, modifiers).is_some() =>
+            {
+                Task::none()
+            }
             Msg::Terminal(term_msg) => {
                 let mut command_tasks = Vec::new();
                 if matches!(term_msg, TerminalMsg::Tick) {
@@ -7255,11 +7405,6 @@ impl Shell {
                 Task::none()
             }
             Msg::CloseTab(idx) => {
-                if self.panes.focused_model().active_index() != Some(idx) {
-                    for editor in self.editors.values_mut() {
-                        editor.state.cancel_close();
-                    }
-                }
                 if let Some(PaneTab::Query { id, .. }) = self.panes.focused_model().tabs().get(idx)
                 {
                     let id = *id;
@@ -7270,11 +7415,18 @@ impl Shell {
                     }
                 }
                 if let Some(PaneTab::File(path)) = self.panes.focused_model().tabs().get(idx) {
-                    if let Some(editor) = self.editors.get_mut(path) {
-                        if !editor.state.request_close() {
-                            self.panes.focused_model_mut().activate(idx);
-                            return Task::none();
-                        }
+                    if self
+                        .editors
+                        .get(path)
+                        .is_some_and(|editor| editor.state.buffer.is_dirty())
+                    {
+                        // `showCloseDirtyDialog`: salvar e fechar, não salvar ou cancelar
+                        self.pending_close_file = Some(PendingCloseFile {
+                            path: path.clone(),
+                            then: AfterCloseFile::Tab(self.panes.focused()),
+                        });
+                        self.panes.focused_model_mut().activate(idx);
+                        return Task::none();
                     }
                 }
                 if let Some(removed) = self.panes.focused_model_mut().close(idx) {
@@ -9023,6 +9175,12 @@ impl Shell {
         } else {
             Subscription::none()
         };
+        // só corre enquanto alguma aba mostra spinner ou bolinha piscando
+        let tab_anim = if self.any_tab_animating() {
+            iced::time::every(Duration::from_millis(SEARCH_SPIN_TICK_MS)).map(|_| Msg::TabAnimTick)
+        } else {
+            Subscription::none()
+        };
         let search_spinner = if search_visible && self.search.searching {
             iced::time::every(Duration::from_millis(SEARCH_SPIN_TICK_MS))
                 .map(|_| Msg::Search(SearchMsg::Spin))
@@ -9126,6 +9284,7 @@ impl Shell {
                 tab_rename_events,
                 localsend_popup_escape,
                 search_clear,
+                tab_anim,
                 search_spinner,
             ]
             .into_iter()
@@ -9493,6 +9652,12 @@ impl Shell {
                     .pane_drag_target
                     .and_then(|(target_pane, zone)| (target_pane == pane).then_some(zone)),
                 terminal_icon: |term_id| self.terminal_harness_icon(term_id),
+                tab_indicators: model
+                    .tabs()
+                    .iter()
+                    .map(|tab| self.tab_indicator_for(tab))
+                    .collect(),
+                anim_ms: self.tab_anim_ms,
                 terminal_title: |term_id| {
                     self.terminals.get(&term_id).and_then(TerminalPane::title)
                 },
@@ -9546,32 +9711,51 @@ impl Shell {
     }
 
     fn app_menu_groups(&self) -> Vec<topbar::AppMenu<Msg>> {
+        let item = |entry: &app_menu_model::Entry| {
+            let binding = app_menu_model::binding(entry, &self.settings.current.shortcuts)
+                .filter(|value| app_menu_model::valid_binding(value));
+            let on_press = self
+                .app_menu_message(entry.action)
+                .map(|message| Msg::AppMenuAction(Box::new(message)));
+            crate::app_menu::Item::Entry(crate::app_menu::Entry {
+                label: entry.label.to_owned(),
+                description: None,
+                leading: None,
+                selected: false,
+                danger: false,
+                shortcut: binding.map(ToOwned::to_owned),
+                requires_credits: false,
+                submenu: false,
+                on_press,
+            })
+        };
         ["GSH", "Arquivo", "Exibir", "Janela"]
             .into_iter()
-            .map(|title| topbar::AppMenu {
-                items: app_menu_model::ENTRIES
-                    .iter()
-                    .filter(|entry| entry.group == title)
-                    .map(|entry| {
-                        let binding =
-                            app_menu_model::binding(entry, &self.settings.current.shortcuts)
-                                .filter(|value| app_menu_model::valid_binding(value));
-                        let on_press = self
-                            .app_menu_message(entry.action)
-                            .map(|message| Msg::AppMenuAction(Box::new(message)));
-                        let item = crate::app_menu::Entry {
-                            label: entry.label.to_owned(),
-                            description: None,
-                            leading: None,
-                            selected: false,
-                            danger: false,
-                            shortcut: binding.map(ToOwned::to_owned),
-                            requires_credits: false,
-                            on_press,
-                        };
-                        crate::app_menu::Item::Entry(item)
-                    })
-                    .collect(),
+            .map(|title| {
+                let mut items: Vec<crate::app_menu::Item<Msg>> = Vec::new();
+                let mut opened: Vec<&'static str> = Vec::new();
+                for entry in app_menu_model::ENTRIES.iter().filter(|e| e.group == title) {
+                    match entry.submenu {
+                        None => items.push(item(entry)),
+                        // o submenu nasce no lugar do primeiro item dele e leva todos os do mesmo nome
+                        Some(name) if !opened.contains(&name) => {
+                            opened.push(name);
+                            items.push(crate::app_menu::Item::Submenu(crate::app_menu::Submenu {
+                                label: name.to_owned(),
+                                items: app_menu_model::ENTRIES
+                                    .iter()
+                                    .filter(|e| e.group == title && e.submenu == Some(name))
+                                    .map(item)
+                                    .collect(),
+                                open: self.app_submenu == Some(name),
+                                on_open: Msg::OpenAppSubmenu(name),
+                                on_close: Msg::CloseAppSubmenu,
+                            }));
+                        }
+                        Some(_) => {}
+                    }
+                }
+                topbar::AppMenu { items }
             })
             .collect()
     }
@@ -9642,6 +9826,10 @@ impl Shell {
             app_menu_model::Action::ActualSize => Some(Msg::Settings(
                 settings::Message::InterfaceSizeChanged("14".to_owned()),
             )),
+            app_menu_model::Action::FocusPane(movement) => self
+                .panes
+                .neighbor(self.panes.focused(), movement)
+                .map(Msg::FocusPane),
             app_menu_model::Action::SelectTab(index) => Some(Msg::SelectTab(usize::from(index))),
             app_menu_model::Action::SelectLastTab => Some(Msg::SelectTab(
                 self.panes.focused_model().tabs().len().saturating_sub(1),
@@ -9837,17 +10025,7 @@ impl Shell {
             ));
         }
 
-        let mut root = column![top].width(Fill).height(Fill);
-        if self.pending_window_close.is_some() {
-            root = root.push(
-                row![
-                    iced::widget::text(labels::EDITOR_CONFIRM_WINDOW).color(theme::palette().warn),
-                    iced::widget::button(labels::EDITOR_DISCARD).on_press(Msg::ConfirmWindowClose),
-                    iced::widget::button(labels::EDITOR_CANCEL).on_press(Msg::CancelWindowClose),
-                ]
-                .spacing(12),
-            );
-        }
+        let root = column![top].width(Fill).height(Fill);
         let base = container(root.push(body))
             .width(Fill)
             .height(Fill)
@@ -9977,7 +10155,21 @@ impl Shell {
             .pending_close_query
             .and_then(|id| self.queries.get(&id).map(|query| (id, query.title())))
         {
-            Some((id, title)) => stack![layered, close_query_dialog(id, &title)].into(),
+            Some((id, title)) => stack![
+                layered,
+                close_dirty_dialog(&title, move |choice| Msg::CloseQuery(id, choice))
+            ]
+            .into(),
+            None => layered,
+        };
+        let layered: Element<'_, Msg> = match self.pending_close_file.as_ref() {
+            Some(pending) => {
+                let name = pending
+                    .path
+                    .file_name()
+                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+                stack![layered, close_dirty_dialog(&name, Msg::CloseFile)].into()
+            }
             None => layered,
         };
         let layered: Element<'_, Msg> = match self.harness.name_dialog() {
@@ -10260,7 +10452,10 @@ impl Shell {
 }
 
 /// `showCloseDirtyDialog`: descartar, cancelar ou salvar e fechar.
-fn close_query_dialog(id: QueryId, title: &str) -> Element<'static, Msg> {
+fn close_dirty_dialog(
+    title: &str,
+    on_choice: impl Fn(CloseChoice) -> Msg,
+) -> Element<'static, Msg> {
     use pane_close_dialog::{action, ButtonKind};
     let heading = iced::widget::text(labels::UNSAVED_CHANGES_TITLE)
         .font(theme::FONT_TITLE)
@@ -10277,17 +10472,17 @@ fn close_query_dialog(id: QueryId, title: &str) -> Element<'static, Msg> {
         action(
             labels::UNSAVED_DONT_SAVE,
             ButtonKind::Danger,
-            Some(Msg::CloseQuery(id, CloseChoice::DontSave))
+            Some(on_choice(CloseChoice::DontSave))
         ),
         action(
             labels::DIALOG_CANCEL,
             ButtonKind::Outline,
-            Some(Msg::CloseQuery(id, CloseChoice::Cancel))
+            Some(on_choice(CloseChoice::Cancel))
         ),
         action(
             labels::UNSAVED_SAVE_AND_CLOSE,
             ButtonKind::Primary,
-            Some(Msg::CloseQuery(id, CloseChoice::SaveAndClose))
+            Some(on_choice(CloseChoice::SaveAndClose))
         ),
     ]
     .spacing(theme::DIALOG_ACTIONS_GAP)
@@ -10297,7 +10492,7 @@ fn close_query_dialog(id: QueryId, title: &str) -> Element<'static, Msg> {
         message.into(),
         actions.into(),
         None,
-        Msg::CloseQuery(id, CloseChoice::Cancel),
+        on_choice(CloseChoice::Cancel),
         Msg::Noop,
     )
 }
@@ -10338,11 +10533,19 @@ fn main() -> iced::Result {
 }
 
 #[cfg(test)]
+mod app_menu_panes_shell_tests;
+#[cfg(test)]
 mod db_interaction_tests;
+#[cfg(test)]
+mod dirty_close_shell_tests;
 #[cfg(test)]
 mod localsend_popup_tests;
 #[cfg(test)]
 mod tab_menu_shell_tests;
+#[cfg(test)]
+mod tab_status_shell_tests;
+#[cfg(test)]
+mod tab_title_shell_tests;
 #[cfg(test)]
 mod telemetry_interaction_tests;
 
@@ -10533,9 +10736,11 @@ mod tests {
             tab_list_open: None,
             tab_menu: None,
             tab_rename: None,
+            tab_anim_ms: 0,
             pending_close_tabs: None,
             last_tab_click: None,
             app_menu_open: false,
+            app_submenu: None,
             tab_drag_source: None,
             tab_drag_target: None,
             tab_drag_origin: None,
@@ -10565,7 +10770,7 @@ mod tests {
             editors: BTreeMap::new(),
             #[cfg(target_os = "linux")]
             lsp: lsp_runtime::Pool::default(),
-            pending_window_close: None,
+            pending_close_file: None,
             workspaces,
             channel_editor: None,
             channel_popup_open: false,
@@ -12363,26 +12568,6 @@ mod tests {
         assert_eq!(shell.panes.focused_model().tabs().len(), 2);
     }
 
-    #[test]
-    fn janela_suja_pede_confirmacao_e_perda_de_foco_cancela() {
-        use iced::widget::text_editor::{Action, Edit};
-        let mut shell = test_shell();
-        let path = std::env::temp_dir().join(format!("gsh-window-editor-{}", std::process::id()));
-        std::fs::write(&path, "original").unwrap();
-        let _ = shell.update(Msg::Files(FilesMsg::SelectFile(path.clone())));
-        let _ = shell.update(Msg::Editor(
-            path.clone(),
-            editor_pane::EditorMsg::Action(Action::Edit(Edit::Insert('x'))),
-        ));
-        let id = iced::window::Id::unique();
-        let _ = shell.update(Msg::WindowCloseRequested(id));
-        assert_eq!(shell.pending_window_close, Some(id));
-        let _ = shell.update(Msg::WindowUnfocused);
-        assert!(shell.pending_window_close.is_none());
-        assert!(shell.editors.get(&path).unwrap().state.buffer.is_dirty());
-        let _ = std::fs::remove_file(path);
-    }
-
     #[cfg(unix)]
     #[test]
     fn alias_de_arquivo_abre_uma_unica_aba() {
@@ -12398,33 +12583,6 @@ mod tests {
         assert_eq!(shell.editors.len(), 1);
         assert_eq!(shell.panes.focused_model().tabs().len(), 2);
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn editor_confirma_fechamento_e_preserva_arquivo_sem_salvar() {
-        use iced::widget::text_editor::{Action, Edit};
-        let mut shell = test_shell();
-        let path = std::env::temp_dir().join(format!("gsh-shell-editor-{}", std::process::id()));
-        std::fs::write(&path, "original\n").expect("arquivo de teste");
-        let _ = shell.update(Msg::Files(FilesMsg::SelectFile(path.clone())));
-        let _ = shell.update(Msg::Editor(
-            path.clone(),
-            editor_pane::EditorMsg::Action(Action::Edit(Edit::Insert('x'))),
-        ));
-        assert!(shell.editors.get(&path).unwrap().state.buffer.is_dirty());
-        let _ = shell.update(Msg::CloseTab(1));
-        assert_eq!(shell.panes.focused_model().tabs().len(), 2);
-        assert!(matches!(
-            shell.editors.get(&path).unwrap().state.notice,
-            Some(editor_state::EditorNotice::ConfirmClose)
-        ));
-        let _ = shell.update(Msg::SelectTab(0));
-        let _ = shell.update(Msg::CloseTab(1));
-        assert!(shell.editors.contains_key(&path));
-        let _ = shell.update(Msg::CloseTab(1));
-        assert!(!shell.editors.contains_key(&path));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original\n");
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]

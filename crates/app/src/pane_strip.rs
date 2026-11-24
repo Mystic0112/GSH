@@ -152,6 +152,9 @@ where
     let title = callbacks.terminal_title.clone();
     let drop_target = callbacks.drop_target;
     let drag_source = callbacks.drag_source;
+    let show_tooltip = callbacks.show_tooltips;
+    let indicators = callbacks.tab_indicators.clone();
+    let anim_ms = callbacks.anim_ms;
     let make_tabs = move || {
         let mut tabs_row = row![].height(Fill).align_y(Alignment::Center);
         for (idx, tab) in tab_model.tabs().iter().enumerate() {
@@ -177,6 +180,9 @@ where
             let tab_view = view_tab(
                 tab,
                 crate::pane_tab::TabPresentation {
+                    show_tooltip,
+                    indicator: indicators.get(idx).copied().flatten(),
+                    anim_ms,
                     title: tab_title,
                     active: active_idx == Some(idx),
                     focused,
