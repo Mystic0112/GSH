@@ -66,6 +66,38 @@ O inventário detalhado, item por item, está em [`docs/parity-checklist.md`](do
 
 ---
 
+## 🖼️ A fazenda
+
+<div align="center">
+  <img src="docs/screenshots/fazenda.png" alt="Fazenda de agentes do GSH" width="820"/>
+  <br/>
+  <sub>Cada canteiro é um projeto, cada gorila é um agente. Verde trabalhando, <b>amarelo precisa de você</b>, azul parado. A barrinha em cima é o contexto da conversa.</sub>
+</div>
+
+> 📌 **As imagens desta página são do GSH Desktop (Flutter)**, o app de referência. O GSH em Rust segue o mesmo visual, mas ainda está em construção e terá capturas próprias quando a paridade fechar.
+
+---
+
+## 📸 Telas
+
+<details>
+<summary><b>Clique para ver mais telas</b></summary>
+
+<br/>
+
+| Tela | |
+| --- | --- |
+| **Chat** — estilo Claude Desktop: permissões em cartão, diffs, plano, modelo e uso | ![Chat](docs/screenshots/chat.png) |
+| **Escritório** — o mesmo, em versão escritório (monitor aceso = trabalhando) | ![Escritório](docs/screenshots/escritorio.png) |
+| **Fazenda do time** — a fazenda dos colegas ao lado da sua, na rede do escritório | ![Time](docs/screenshots/time-fazenda.png) |
+| **Escritório do time** — um prédio só, uma sala por pessoa | ![Time escritório](docs/screenshots/time-escritorio.png) |
+| **Harness** — tudo que o agente carrega no projeto, com avisos e custo por turno | ![Harness](docs/screenshots/harness.png) |
+| **Contexto** — quanto da conversa cada agente já usou | ![Contexto](docs/screenshots/contexto.png) |
+
+</details>
+
+---
+
 ## 🤔 Por que o GSH?
 
 Quem trabalha com vários agentes ao mesmo tempo perde o fio: qual terminal está esperando permissão, qual travou, qual já terminou, quanto tudo isso está custando. O GSH junta tudo num lugar só:
