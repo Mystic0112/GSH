@@ -28,7 +28,7 @@ _Usa o `claude` (e o `codex`, o `agy`) da sua máquina, com o seu login. **Nenhu
 
 O GSH é a **reescrita em Rust** do [GSH Desktop](https://github.com/Mystic0112/GSH-Desktop) (Flutter). A regra é paridade: muda a stack, não o produto. O comportamento e a aparência saem do app Flutter, e o que ainda falta está em [`docs/parity-checklist.md`](docs/parity-checklist.md) e em [`docs/auditoria-paridade/`](docs/auditoria-paridade/).
 
-> **🚧 Em construção.** O GSH em Rust ainda **não substitui** o GSH Desktop em Flutter. Boa parte do que está descrito abaixo já roda no Linux, mas nem tudo foi validado no uso diário, e o que está em [🗺️ O que vem por aí](#️-o-que-vem-por-aí) **ainda não existe**. Pode quebrar, mudar e perder recurso entre versões.
+> **🚧 Em construção.** O GSH em Rust ainda **não substitui** o GSH Desktop em Flutter. Boa parte do que está descrito abaixo já roda no Linux, mas nem tudo foi validado no uso diário, e o que está em [O que vem por aí](#o-que-vem-por-aí) **ainda não existe**. Pode quebrar, mudar e perder recurso entre versões.
 
 Linux primeiro. Windows e macOS ficam para depois da paridade em Linux.
 
@@ -36,7 +36,7 @@ Linux primeiro. Windows e macOS ficam para depois da paridade em Linux.
 
 Workspaces, panes e abas · terminal local com hooks e status de turno · chat nativo · árvore de arquivos, editor e viewers · git · bancos · terminal remoto por SSH com o `gsh-server` · LocalSend e time na LAN · harness · telemetria · automações agendadas · manter acordado.
 
-### 🗺️ O que vem por aí
+### O que vem por aí
 
 Promessas, não recursos. Nada desta lista está pronto:
 
